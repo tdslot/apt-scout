@@ -12,7 +12,12 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # Single required status check: gates on all jobs below.
   check:
     name: check
     runs-on: ubuntu-latest
@@ -26,3 +31,41 @@ jobs:
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
       - run: cargo build --release --locked
+
+  deny:
+    name: deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  musl:
+    name: musl-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --release --locked --target x86_64-unknown-linux-musl
+      - name: Binary is static
+        run: |
+          file target/x86_64-unknown-linux-musl/release/apt-scout | grep -E 'statically linked|static-pie linked'
+
+  docs:
+    name: docs-and-conventions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: ripgrep
+      - name: Non-English text guard (project text must be English)
+        run: |
+          # Lithuanian letters as Unicode escapes so this file does not match itself.
+          if rg -n --glob '*.{md,rs,toml,yml}' '[\x{0104}\x{0105}\x{010C}\x{010D}\x{0116}-\x{0119}\x{012E}\x{012F}\x{0160}\x{0161}\x{016A}\x{016B}\x{0172}\x{0173}\x{017D}\x{017E}]' .; then
+            echo "Found Lithuanian characters. All project artifacts must be English only (see AGENTS.md)." >&2
+            exit 1
+          fi
