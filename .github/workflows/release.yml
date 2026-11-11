@@ -1,8 +1,9 @@
 name: Release
 
+# Runs when develop is merged into main. Releases only if Cargo.toml version has no tag yet.
 on:
   push:
-    tags: ["v*.*.*"]
+    branches: [main]
 
 permissions:
   contents: write
@@ -16,31 +17,38 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Read version
+        id: v
+        run: |
+          version="$(sed -n -E '0,/^version = "(.*)"/s//\1/p' Cargo.toml)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1; then
+            echo "Tag v$version exists; nothing to release."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.v.outputs.skip != 'true'
         with:
           targets: x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
-      - name: Check tag matches Cargo.toml version
+        if: steps.v.outputs.skip != 'true'
+      - name: Build, package, publish
+        if: steps.v.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.v.outputs.version }}
         run: |
-          v="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys;print(json.load(sys.stdin)["packages"][0]["version"])')"
-          if [ "v$v" != "$GITHUB_REF_NAME" ]; then
-            echo "Tag $GITHUB_REF_NAME does not match Cargo.toml version v$v. Bump the version in Cargo.toml or retag." >&2
-            exit 1
-          fi
-      - run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - run: cargo test --locked
-      - run: cargo build --release --locked --target "$TARGET"
-      - run: cargo install cargo-deb --locked
-      - name: Package
-        run: |
-          name="apt-scout-${GITHUB_REF_NAME}-${TARGET}"
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          cargo install cargo-deb --locked
+          cargo test --locked
+          cargo build --release --locked --target "$TARGET"
+          name="apt-scout-v${VERSION}-${TARGET}"
           mkdir -p "dist/$name"
           cp "target/$TARGET/release/apt-scout" LICENSE-MIT LICENSE-APACHE README.md "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           rm -rf "dist/$name"
           cargo deb --no-build --target "$TARGET" --output dist/
           (cd dist && sha256sum * > SHA256SUMS)
-      - name: Publish GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
+          awk -v v="## $VERSION " 'index($0,v)==1{f=1;next} /^## /{f=0} f' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "Release v$VERSION" > notes.md
+          gh release create "v$VERSION" dist/* --target "$GITHUB_SHA" --title "v$VERSION" --notes-file notes.md
