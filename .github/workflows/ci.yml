@@ -26,7 +26,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Detect documentation-only changes
+      - name: Detect Rust and build configuration changes
         id: diff
         env:
           EVENT: ${{ github.event_name }}
@@ -38,7 +38,7 @@ jobs:
           import subprocess
           from pathlib import PurePosixPath
 
-          # Manual runs, initial pushes and unknown paths run full CI.
+          # Manual runs and initial pushes run full CI.
           base = os.environ.get('BASE', '')
           code = True
           if os.environ['EVENT'] != 'workflow_dispatch' and base and set(base) != {'0'}:
@@ -46,10 +46,21 @@ jobs:
                   'git', 'diff', '--name-only', '--no-renames', '-z',
                   base, os.environ['HEAD'], '--',
               ]).decode().split('\0')
-              code = any(path and PurePosixPath(path).suffix != '.md' for path in paths)
+              build_files = {
+                  'Cargo.toml', 'Cargo.lock', 'rust-toolchain',
+                  'rust-toolchain.toml', 'rustfmt.toml', '.rustfmt.toml',
+                  'clippy.toml', '.clippy.toml', 'deny.toml',
+              }
+              code = any(
+                  path and (
+                      PurePosixPath(path).suffix == '.rs'
+                      or PurePosixPath(path).name in build_files
+                      or path.startswith(('.cargo/', '.github/workflows/', '.github/scripts/'))
+                  ) for path in paths
+              )
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'code={str(code).lower()}\n')
-          print('Full CI required.' if code else 'Markdown-only change: builds skipped.')
+          print('Full CI required.' if code else 'No Rust or build configuration changes: builds skipped.')
 
   check:
     name: check
