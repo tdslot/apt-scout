@@ -98,6 +98,7 @@ When the user requests a durable behavior change, record it here or in the relev
 - Repo: https://github.com/tdslot/apt-scout (public, `tdslot`); license MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`)
 - Branches: `develop` collects work, `main` = last release. Feature branches `feat/*`, `fix/*`, `chore/*` -> PR into `develop` (squash). Never push directly to `main` or `develop`.
 - Release flow (no manual tagging): run workflow `Prepare release` with version X.Y.Z -> PR `release/vX.Y.Z` into `develop` (bumps `Cargo.toml`, writes `CHANGELOG.md` from Conventional Commits via `.github/scripts/changelog.sh`) -> merge -> workflow `Release PR` opens `develop` -> `main` PR (merge commit) -> merge -> workflow `Release` builds musl binary, `.tar.gz`, `.deb`, `SHA256SUMS`, tags `vX.Y.Z`, publishes GitHub Release
+- Code review (mandatory before merging any PR): run the `reviewer` subagent on the PR diff (`gh pr diff <N>`) and address or answer every finding in the PR; use `oracle` for design or spec questions. Kilo Code Review (GitHub app) also comments on PRs but is not a required check
 - `.github/`: `workflows/{ci,prepare-release,release-pr,release}.yml`, `scripts/changelog.sh`, PR and issue templates; required status check is `check` from `ci.yml`
 - Git guard: this repo needs `git config nep.repo-kind personal` and identity `tdslot <tdslot@gmail.com>` (`git-id personal`)
 - Dev workflow (Rust style, branching, commits, PRs, CI, releases): project skill `apt-scout-dev-workflow`; follow it for every change
