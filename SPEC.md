@@ -16,6 +16,8 @@ Single command, no subcommands: `apt-scout [flags]`
 | Flag | Meaning |
 | --- | --- |
 | `--country <CC>` | ISO 3166 alpha-2 override. Always wins over detection. |
+| `--refresh` | Ignore the geo, mirror list and AS caches for this run (and rewrite them). |
+| `--no-geo` | No geolocation lookups at all. Requires `--country`; AS preference is skipped. Offline-friendly for the server lookup. |
 | `--top <N>` | Show N best mirrors (default 5). |
 | `--https-only` | Only consider https mirrors. |
 | `--apply` | Write the best mirror into apt sources. Root needed for the write step only. |
@@ -32,11 +34,17 @@ Behavior by mode:
 ## Pipeline
 
 1. **Detect distro** from `/etc/os-release`. Read codename (`VERSION_CODENAME`, or `UBUNTU_CODENAME` for derivatives).
-2. **Detect location** of the server (country and AS), first source that answers wins, all HTTPS:
-   1. `https://ifconfig.co/json` (`country_iso`, `asn`, `asn_org`). The operator asks for at most 1 automated request per minute, which one run satisfies; results are cached (see below) so repeated runs do not hit it.
+2. **Detect location** of the server (country and AS), first source that answers wins, all HTTPS. Skipped with `--no-geo`.
+   1. `https://ifconfig.co/json` (`country_iso`, `asn`, `asn_org`). The operator asks for at most 1 automated request per minute; one run makes one request and results are cached, so this is respected.
    2. `https://ipinfo.io/json` (`country`, `org` = `AS<number> <name>`).
    3. `https://www.cloudflare.com/cdn-cgi/trace` (`loc=<CC>`; country only, no AS).
-   `--country` skips country detection but AS is still looked up when a source gives it. Cache the result in `~/.cache/apt-scout/geo.json` for 24 h (a VPN or move changes the answer, so `--refresh` ignores the cache). If every source fails: country unknown -> use the worldwide list, AS unknown -> no AS preference; print which sources failed and why. Validate answers (country matches `^[A-Z]{2}$`, AS matches `^AS[0-9]+`) and never trust a malformed value. Each source: timeout 5 s, 1 retry. Do not use `ip-api.com` for the server lookup (HTTP only; free tier is non-commercial).
+   - No retries: any failure (timeout, non-200 including 429, malformed body) falls through to the next source. Timeout 5 s per request covering the whole request, response body capped at 64 KiB, worst case 15 s. Print which sources failed and why.
+   - Validation: country is uppercased and must match `^[A-Z]{2}$`; `XX` (unknown) and `T1` (Tor) from Cloudflare are treated as unknown. The same rule applies to `--country`.
+   - AS normalization: every source's value becomes canonical `AS<number>`. Take the first whitespace-delimited token of `org`/`as`, prefix bare integers with `AS`, validate `^AS[0-9]{1,10}$`, compare numerically. The name is optional. Empty or malformed means unknown. For a prefix with several origin ASNs the first listed is used; this is approximate.
+   - `--country` overrides the country only; AS is still looked up unless `--no-geo`.
+   - Cache: `~/.cache/apt-scout/geo.json`, valid 24 h, stores only country and AS (never the IP). `--refresh` ignores it.
+   - If every source fails: country unknown -> use the worldwide list; AS unknown -> no AS preference.
+   - Privacy: these services learn the server's public IP, and `ip-api.com` (step 5) learns the candidate mirrors' IPs. Document this in the README. `--no-geo --country <CC>` avoids server lookups. Do not use `ip-api.com` for the server lookup (HTTP only; free tier is non-commercial).
 3. **Load mirror list**, first success wins, source shown in output:
    1. `http://mirrors.ubuntu.com/<CC>.txt` (plain text, one URL per line)
    2. Launchpad `https://launchpad.net/ubuntu/+archivemirrors` (HTML, parsed against a saved fixture; format must be verified before the parser is written)
@@ -45,7 +53,7 @@ Behavior by mode:
    If every source fails but the current apt mirror works, offer to probe only the current mirror instead of aborting.
    Each network source: timeout 10 s, 2 retries, response validated (non-empty, well-formed `http(s)://` URLs). Invalid response counts as failure.
 4. **Filter**: mirrors in detected country. If fewer than 5, top up with nearest by region then worldwide. Cap at 30 candidates. `--https-only` drops http.
-5. **Resolve AS** of candidates (informational, never a reason to fail the run): resolve hostname -> IP. Primary: one `POST http://ip-api.com/batch?fields=query,as,countryCode` for up to 100 IPs (free tier: non-commercial, HTTP only, rate limited; honor `X-Rl`/`X-Ttl` response headers and stop when `X-Rl` is 0). Fallback when the batch call fails or is rate limited: `https://stat.ripe.net/data/prefix-overview/data.json?resource=<ip>` per IP, in parallel with a small cap (4 at a time), reading `data.asns[0].asn`. Cache results on disk with the mirror list. CDN-backed mirrors can resolve to different AS per query; AS is approximate. Resolve both A and AAAA; probe with the address family the machine can actually use, and never fail the run because IPv6 is broken.
+5. **Resolve AS** of candidates (informational, never a reason to fail the run): resolve hostname -> IP. Primary: one `POST http://ip-api.com/batch?fields=query,as,countryCode` for up to 100 IPs (free tier: non-commercial, HTTP only, rate limited; honor `X-Rl`/`X-Ttl` response headers and stop when `X-Rl` is 0). Fallback when the batch call fails or is rate limited: `https://stat.ripe.net/data/prefix-overview/data.json?resource=<ip>` per IP, in parallel with a small cap (4 at a time), reading `data.asns[0].asn`. Normalize AS as in step 2. Cache results on disk with the mirror list (`--refresh` ignores the cache). CDN-backed mirrors can resolve to different AS per query; AS is approximate. Resolve both A and AAAA; probe with the address family the machine can actually use, and never fail the run because IPv6 is broken.
 6. **Fetch reference** once, before probing: from `http://archive.ubuntu.com/ubuntu/dists/<codename>{,-updates,-security}/InRelease` get the `Date:` of each pocket. This is the freshness baseline.
 7. **Probe** each candidate in parallel (`std::thread`): fetch the same three `InRelease` files from `<mirror>/dists/...` and parse `Date:`. Measure connect latency. Measure throughput on a larger sample (`Range: bytes=0-1048575` of `main/binary-<arch>/Packages.xz`), because a few KB of `InRelease` only measures TCP slow start. Redirects: follow at most 3, re-validate the final host and scheme; report mirrors that redirect to another host.
 8. **Reject** unreachable mirrors, non-200 responses, and out-of-date mirrors. Freshness pockets: `<codename>` and `<codename>-updates` decide rejection; `<codename>-security` lag is shown for information only, because `security.ubuntu.com` is left untouched. A mirror is out of date if a deciding pocket's `Date` is older than the reference by more than `MAX_LAG`. `MAX_LAG` is a named constant; its initial value (1 hour) is a guess and must be tuned from measured lags. `Date` is the signing time, not the sync time, so a small lag is normal. Missing deciding pocket or unparsable `Date` rejects. If the reference is unreachable, use the newest `Date` among candidates as baseline and print a warning. Output shows lag per pocket. Freshness also guards against replay of old indexes; apt still verifies signatures.
