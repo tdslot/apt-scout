@@ -32,7 +32,11 @@ Behavior by mode:
 ## Pipeline
 
 1. **Detect distro** from `/etc/os-release`. Read codename (`VERSION_CODENAME`, or `UBUNTU_CODENAME` for derivatives).
-2. **Detect location**: `GET http://ip-api.com/json/?fields=status,countryCode,as,query` (free tier is HTTP only). `--country` skips the lookup for country; AS is still looked up if possible. On failure: country unknown -> use the worldwide list; AS unknown -> skip AS preference.
+2. **Detect location** of the server (country and AS), first source that answers wins, all HTTPS:
+   1. `https://ifconfig.co/json` (`country_iso`, `asn`, `asn_org`). The operator asks for at most 1 automated request per minute, which one run satisfies; results are cached (see below) so repeated runs do not hit it.
+   2. `https://ipinfo.io/json` (`country`, `org` = `AS<number> <name>`).
+   3. `https://www.cloudflare.com/cdn-cgi/trace` (`loc=<CC>`; country only, no AS).
+   `--country` skips country detection but AS is still looked up when a source gives it. Cache the result in `~/.cache/apt-scout/geo.json` for 24 h (a VPN or move changes the answer, so `--refresh` ignores the cache). If every source fails: country unknown -> use the worldwide list, AS unknown -> no AS preference; print which sources failed and why. Validate answers (country matches `^[A-Z]{2}$`, AS matches `^AS[0-9]+`) and never trust a malformed value. Each source: timeout 5 s, 1 retry. Do not use `ip-api.com` for the server lookup (HTTP only; free tier is non-commercial).
 3. **Load mirror list**, first success wins, source shown in output:
    1. `http://mirrors.ubuntu.com/<CC>.txt` (plain text, one URL per line)
    2. Launchpad `https://launchpad.net/ubuntu/+archivemirrors` (HTML, parsed against a saved fixture; format must be verified before the parser is written)
@@ -41,7 +45,7 @@ Behavior by mode:
    If every source fails but the current apt mirror works, offer to probe only the current mirror instead of aborting.
    Each network source: timeout 10 s, 2 retries, response validated (non-empty, well-formed `http(s)://` URLs). Invalid response counts as failure.
 4. **Filter**: mirrors in detected country. If fewer than 5, top up with nearest by region then worldwide. Cap at 30 candidates. `--https-only` drops http.
-5. **Resolve AS** of candidates: resolve hostname -> IP, `POST http://ip-api.com/batch` (<=100 per request; free tier is rate limited, respect the `X-Rl`/`X-Ttl` response headers). CDN-backed mirrors can resolve to different AS per query; AS is approximate and informational. Resolve both A and AAAA; probe with the address family the machine can actually use, and never fail the run because IPv6 is broken. Cache results on disk with the mirror list.
+5. **Resolve AS** of candidates (informational, never a reason to fail the run): resolve hostname -> IP. Primary: one `POST http://ip-api.com/batch?fields=query,as,countryCode` for up to 100 IPs (free tier: non-commercial, HTTP only, rate limited; honor `X-Rl`/`X-Ttl` response headers and stop when `X-Rl` is 0). Fallback when the batch call fails or is rate limited: `https://stat.ripe.net/data/prefix-overview/data.json?resource=<ip>` per IP, in parallel with a small cap (4 at a time), reading `data.asns[0].asn`. Cache results on disk with the mirror list. CDN-backed mirrors can resolve to different AS per query; AS is approximate. Resolve both A and AAAA; probe with the address family the machine can actually use, and never fail the run because IPv6 is broken.
 6. **Fetch reference** once, before probing: from `http://archive.ubuntu.com/ubuntu/dists/<codename>{,-updates,-security}/InRelease` get the `Date:` of each pocket. This is the freshness baseline.
 7. **Probe** each candidate in parallel (`std::thread`): fetch the same three `InRelease` files from `<mirror>/dists/...` and parse `Date:`. Measure connect latency. Measure throughput on a larger sample (`Range: bytes=0-1048575` of `main/binary-<arch>/Packages.xz`), because a few KB of `InRelease` only measures TCP slow start. Redirects: follow at most 3, re-validate the final host and scheme; report mirrors that redirect to another host.
 8. **Reject** unreachable mirrors, non-200 responses, and out-of-date mirrors. Freshness pockets: `<codename>` and `<codename>-updates` decide rejection; `<codename>-security` lag is shown for information only, because `security.ubuntu.com` is left untouched. A mirror is out of date if a deciding pocket's `Date` is older than the reference by more than `MAX_LAG`. `MAX_LAG` is a named constant; its initial value (1 hour) is a guess and must be tuned from measured lags. `Date` is the signing time, not the sync time, so a small lag is normal. Missing deciding pocket or unparsable `Date` rejects. If the reference is unreachable, use the newest `Date` among candidates as baseline and print a warning. Output shows lag per pocket. Freshness also guards against replay of old indexes; apt still verifies signatures.
@@ -118,7 +122,7 @@ Principle: the program solves its own problems when safe, and otherwise says exa
 - Suggested layout: `main.rs`, `error.rs`, `distro.rs`, `geo.rs`, `mirrors.rs`, `probe.rs`, `fresh.rs`, `rank.rs`, `sources.rs` (pure string in/out), `apply.rs`, `tui/`. Keep `sources`, `rank`, `fresh` pure; HTTP is injected as a function so tests use canned responses.
 - Test fixtures: Ubuntu 22.04 `sources.list`, 24.04 `ubuntu.sources`, multi-URI stanza, `Enabled: no`, comments, `deb-src`, arm64 ports, `InRelease`, mirror list HTML and text, corrupt cache. Round-trip test (rewrite then restore equals original bytes), tempdir test for atomic write and failed-backup abort, `ratatui` `TestBackend` for TUI snapshots.
 - Parsing and ranking are pure functions, unit-tested on fixtures; no live network in tests.
-- Security note: `ip-api.com` is HTTP only, so its answer influences ranking only and is never trusted for anything else.
+- Security note: server geolocation uses HTTPS sources; mirror AS lookups may use HTTP (`ip-api.com` batch), so AS data influences ranking only and is never trusted for anything else. All geolocation results are validated and untrusted.
 
 ## Out of scope (v1)
 
