@@ -101,7 +101,9 @@ When the user requests a durable behavior change, record it here or in the relev
 - Code review (mandatory before merging any PR): run the `reviewer` subagent on the PR diff (`gh pr diff <N>`) and address or answer every finding in the PR; use `oracle` for design or spec questions. Kilo Code Review (GitHub app) also comments on PRs but is not a required check
 - `.github/`: `workflows/{ci,prepare-release,release-pr,release}.yml`, `scripts/changelog.sh`, PR and issue templates; required status check is `check` from `ci.yml`
 - Git guard: this repo needs `git config nep.repo-kind personal` and identity `tdslot <tdslot@gmail.com>` (`git-id personal`)
-- Dev workflow (Rust style, branching, commits, PRs, CI, releases): project skill `apt-scout-dev-workflow`; follow it for every change
+- Rust rules: no `unwrap()`/`expect()` outside tests; errors carry context (see `SPEC.md` Errors and self-healing); `unsafe` only with a `// SAFETY:` comment; std over new dependencies; `rustls`, never OpenSSL; pure logic separate from IO; tests use fixtures, never live network
+- Commits: Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`, `feat!:` breaking); the changelog is generated from subjects
+- Agent-local skill `apt-scout-dev-workflow` (outside the repo, in the agent's project memory) mirrors these rules; the repo files are authoritative
 - Verification: `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (no tests yet)
 
 ## Child DOX Index
