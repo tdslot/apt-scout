@@ -4,7 +4,7 @@
 set -euo pipefail
 version=${1:?usage: changelog.sh <version>}
 # Tags sit on main merge commits, which are not ancestors of develop, so describe cannot find them.
-prev=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+prev=$(git tag -l 'v*' --sort=-v:refname | sed -n 1p)
 log=$(git log --no-merges --pretty='%s' ${prev:+"$prev..HEAD"})
 
 body=""
