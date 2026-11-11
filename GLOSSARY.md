@@ -12,7 +12,9 @@
 
 **Freshness**: A mirror is fresh when its lag is within `MAX_LAG` for the `<codename>` and `<codename>-updates` pockets. `-security` lag is informational. Stale mirrors are rejected.
 
-**Server AS**: The autonomous system of the machine running apt-scout, as reported by the geolocation lookup.
+**Server AS**: The autonomous system of the machine running apt-scout, as reported by the first geolocation source that answers.
+
+**Geo source**: One of the HTTPS services (`ifconfig.co`, `ipinfo.io`, Cloudflare trace) tried in order to learn the server's country and AS.
 
 **AS match**: A candidate whose AS equals the server AS. Wins ties within a speed band; it never overrides a clearly faster mirror.
 
