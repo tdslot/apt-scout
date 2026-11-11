@@ -35,16 +35,15 @@ jobs:
       - uses: taiki-e/install-action@v2
         if: steps.v.outputs.skip != 'true'
         with:
-          tool: cargo-deb
+          tool: cargo-deb,cross
       - name: Build, package, publish
         if: steps.v.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.v.outputs.version }}
         run: |
-          sudo apt-get update && sudo apt-get install -y musl-tools
           cargo test --locked
-          cargo build --release --locked --target "$TARGET"
+          cross build --release --locked --target "$TARGET"
           name="apt-scout-v${VERSION}-${TARGET}"
           mkdir -p "dist/$name"
           cp "target/$TARGET/release/apt-scout" LICENSE-MIT LICENSE-APACHE README.md "dist/$name/"
