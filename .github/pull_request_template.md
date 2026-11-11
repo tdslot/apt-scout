@@ -14,5 +14,9 @@
 
 - [ ] `cargo fmt --all` and `cargo clippy --all-targets -- -D warnings` pass
 - [ ] `cargo test` passes
-- [ ] `SPEC.md` / `GLOSSARY.md` / `AGENTS.md` updated if behavior or structure changed
+- [ ] Docs updated in this PR (`AGENTS.md`, `SPEC.md`, `GLOSSARY.md`, `README.md`) or `Docs: no change needed, because ...` stated below
+
+## Docs
+
+<!-- Which docs changed, or why none needed -->
 - [ ] Commit messages follow Conventional Commits
