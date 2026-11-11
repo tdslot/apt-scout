@@ -1,0 +1,19 @@
+[package]
+name = "apt-scout"
+version = "0.1.0"
+edition = "2024"
+description = "Find the fastest, freshest nearby Ubuntu mirror and update apt sources"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/tdslot/apt-scout"
+readme = "README.md"
+
+[dependencies]
+
+[profile.release]
+lto = true
+strip = true
+
+[package.metadata.deb]
+section = "admin"
+priority = "optional"
+assets = [["target/x86_64-unknown-linux-musl/release/apt-scout", "usr/bin/", "755"]]

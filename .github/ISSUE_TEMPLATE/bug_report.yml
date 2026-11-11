@@ -1,0 +1,15 @@
+name: Bug report
+description: Something does not work as specified
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes: {label: What happened, description: Include the exact command and full output}
+    validations: {required: true}
+  - type: textarea
+    id: expected
+    attributes: {label: Expected behavior}
+    validations: {required: true}
+  - type: input
+    id: env
+    attributes: {label: Distro, description: "Output of: cat /etc/os-release | head -3; apt-scout --version"}
