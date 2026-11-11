@@ -14,10 +14,10 @@ env:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Single required status check: gates on all jobs below.
+  # Required status checks (see ruleset): check, deny, musl-build, docs-and-conventions, pr-title.
   check:
     name: check
     runs-on: ubuntu-latest
@@ -50,9 +50,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y musl-tools
       - run: cargo build --release --locked --target x86_64-unknown-linux-musl
-      - name: Binary is static
+      - name: Binary has no dynamic dependencies
         run: |
-          file target/x86_64-unknown-linux-musl/release/apt-scout | grep -E 'statically linked|static-pie linked'
+          bin=target/x86_64-unknown-linux-musl/release/apt-scout
+          file "$bin"
+          if readelf -d "$bin" 2>/dev/null | rg -q NEEDED; then
+            echo "$bin links shared libraries; it must be fully static." >&2
+            readelf -d "$bin" >&2
+            exit 1
+          fi
 
   docs:
     name: docs-and-conventions
@@ -65,7 +71,9 @@ jobs:
       - name: Non-English text guard (project text must be English)
         run: |
           # Lithuanian letters as Unicode escapes so this file does not match itself.
-          if rg -n --glob '*.{md,rs,toml,yml}' '[\x{0104}\x{0105}\x{010C}\x{010D}\x{0116}-\x{0119}\x{012E}\x{012F}\x{0160}\x{0161}\x{016A}\x{016B}\x{0172}\x{0173}\x{017D}\x{017E}]' .; then
-            echo "Found Lithuanian characters. All project artifacts must be English only (see AGENTS.md)." >&2
-            exit 1
-          fi
+          # rg exit codes: 0 = match (fail), 1 = no match (pass), 2 = error (fail).
+          rc=0
+          rg -n --hidden --glob '!.git' --glob '*.{md,rs,toml,yml}' '[\x{0104}\x{0105}\x{010C}\x{010D}\x{0116}-\x{0119}\x{012E}\x{012F}\x{0160}\x{0161}\x{016A}\x{016B}\x{0172}\x{0173}\x{017D}\x{017E}]' . || rc=$?
+          if [ "$rc" -eq 1 ]; then exit 0; fi
+          [ "$rc" -eq 0 ] && echo "Found Lithuanian characters. All project artifacts must be English only (see AGENTS.md)." >&2
+          exit 1
