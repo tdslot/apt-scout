@@ -4,6 +4,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use crate::digest::sha256;
 use crate::fresh::Probed;
 use crate::verify::VerifiedDate;
 
@@ -12,6 +13,15 @@ const MAX_WRITES: usize = 32;
 const MAX_FILE_BYTES: usize = 1024 * 1024;
 /// The one file a plan may create: a stock install has no source for the security suite.
 const SECURITY_SOURCES: &str = "system-security.sources";
+
+/// The distribution family a plan is for. Creating the security source repairs a Pop!_OS install;
+/// Ubuntu's archive already ships that source, so a plan that creates it there was built for the
+/// wrong system.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Platform {
+    Ubuntu,
+    PopOs,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
@@ -88,6 +98,9 @@ pub struct FileState {
 pub struct PlannedWrite {
     pub target: Target,
     pub new_bytes: Vec<u8>,
+    /// The SHA-256 of `new_bytes`. It travels with the bytes, so `validate` can refuse a write
+    /// whose proof was issued for one content and whose bytes are another.
+    pub digest: [u8; 32],
     pub original: Option<FileState>,
     pub create_new: bool,
 }
@@ -96,17 +109,24 @@ pub struct PlannedWrite {
 pub struct Plan {
     selected_uri: String,
     proof: VerifiedDate,
+    platform: Platform,
     writes: Vec<PlannedWrite>,
 }
 
 impl Plan {
     /// Both halves of the proposal come from `probed` (its URL and its `verified_updates`), so a
-    /// URI and a `VerifiedDate` from two different probes cannot be paired by the caller.
-    pub fn for_apply(probed: &Probed, writes: Vec<PlannedWrite>) -> Result<Plan, PlanError> {
+    /// URI and a `VerifiedDate` from two different probes cannot be paired by the caller. The
+    /// platform comes from the caller because the create rule is the only rule that needs it.
+    pub fn for_apply(
+        probed: &Probed,
+        platform: Platform,
+        writes: Vec<PlannedWrite>,
+    ) -> Result<Plan, PlanError> {
         let proof = probed.verified_updates().ok_or(PlanError::NoProof)?;
         let plan = Plan {
             selected_uri: probed.url.clone(),
             proof,
+            platform,
             writes,
         };
         plan.validate()?;
@@ -122,10 +142,17 @@ impl Plan {
             if self.writes[..i].iter().any(|prev| prev.target == w.target) {
                 return Err(PlanError::DuplicateTarget(target()));
             }
+            // The bytes are what reaches the disk, so they must be the bytes the digest recorded.
+            if sha256(&w.new_bytes) != w.digest {
+                return Err(PlanError::BytesMismatch(target()));
+            }
             match (w.create_new, &w.target, &w.original) {
                 (true, Target::SourcesList, _) => return Err(PlanError::CreateNewOnList),
                 (true, Target::SourcesListD(_), Some(_)) => {
                     return Err(PlanError::CreateNewWithOriginal(target()));
+                }
+                (true, Target::SourcesListD(_), None) if self.platform != Platform::PopOs => {
+                    return Err(PlanError::CreateNewWrongPlatform(target()));
                 }
                 (true, Target::SourcesListD(n), None) if n.0 != SECURITY_SOURCES => {
                     return Err(PlanError::CreateNewName(target()));
@@ -169,8 +196,10 @@ pub enum PlanError {
     NoProof,
     WriteCount(usize),
     DuplicateTarget(String),
+    BytesMismatch(String),
     CreateNewOnList,
     CreateNewName(String),
+    CreateNewWrongPlatform(String),
     CreateNewWithOriginal(String),
     ReplaceMissingOriginal(String),
     FileTooLarge(String),
@@ -189,8 +218,17 @@ impl fmt::Display for PlanError {
             PlanError::NoProof => write!(f, "proof rule: the mirror is not verified"),
             PlanError::WriteCount(n) => write!(f, "write count rule: 1..={MAX_WRITES}, not {n}"),
             PlanError::DuplicateTarget(t) => write!(f, "duplicate rule: {t} appears twice"),
+            PlanError::BytesMismatch(t) => {
+                write!(
+                    f,
+                    "digest rule: the bytes of {t} do not match the recorded digest"
+                )
+            }
             PlanError::CreateNewOnList => write!(f, "create_new rule: never sources.list"),
             PlanError::CreateNewName(t) => write!(f, "create_new rule: {t} may not be created"),
+            PlanError::CreateNewWrongPlatform(t) => {
+                write!(f, "create_new rule: {t} may only be created on Pop!_OS")
+            }
             PlanError::CreateNewWithOriginal(t) => write!(f, "create_new rule: {t} exists"),
             PlanError::ReplaceMissingOriginal(t) => write!(f, "replace rule: {t} has no original"),
             PlanError::FileTooLarge(t) => write!(f, "size rule: {t} over {MAX_FILE_BYTES} bytes"),
@@ -204,6 +242,7 @@ impl fmt::Display for PlanError {
 #[rustfmt::skip]
 mod tests {
     use super::*;
+    use crate::digest::sha256;
     use crate::fresh::{self, SignedDate};
     use crate::verify::SignatureStatus;
 
@@ -232,12 +271,18 @@ mod tests {
     }
 
     fn w(target: &str, create_new: bool, original: Option<FileState>) -> PlannedWrite {
-        PlannedWrite { target: Target::parse(target).unwrap(), new_bytes: b"new\n".to_vec(), original, create_new }
+        let new_bytes = b"new\n".to_vec();
+        let digest = sha256(&new_bytes);
+        PlannedWrite { target: Target::parse(target).unwrap(), new_bytes, digest, original, create_new }
+    }
+
+    fn plan(platform: Platform, writes: Vec<PlannedWrite>) -> Plan {
+        let selected_uri = "https://m.example/ubuntu".to_string();
+        Plan { selected_uri, proof: proof(), platform, writes }
     }
 
     fn bad(writes: Vec<PlannedWrite>) -> Option<PlanError> {
-        let selected_uri = "https://m.example/ubuntu".to_string();
-        Plan { selected_uri, proof: proof(), writes }.validate().err()
+        plan(Platform::PopOs, writes).validate().err()
     }
 
     #[test]
@@ -271,22 +316,52 @@ mod tests {
         assert_eq!(bad(vec![w(LIST, false, None)]), Some(PlanError::ReplaceMissingOriginal(LIST.into())));
         let mut huge = w(LIST, false, old());
         huge.new_bytes = vec![b'x'; MAX_FILE_BYTES + 1];
+        huge.digest = sha256(&huge.new_bytes);
         assert_eq!(bad(vec![huge]), Some(PlanError::FileTooLarge(LIST.to_string())));
         for uri in ["", "ftp://m.example/ubuntu"] {
             let one = vec![w(LIST, false, old())];
-            let plan = Plan { selected_uri: uri.to_string(), proof: proof(), writes: one };
+            let plan = Plan { selected_uri: uri.to_string(), proof: proof(), writes: one, platform: Platform::PopOs };
             assert_eq!(plan.validate(), Err(PlanError::SelectedUri(uri.to_string())));
         }
-        let ok = Plan { selected_uri: "https://m.example/ubuntu".to_string(), proof: proof(), writes: vec![w(LIST, false, old())] };
+        let ok = Plan { selected_uri: "https://m.example/ubuntu".to_string(), proof: proof(), writes: vec![w(LIST, false, old())], platform: Platform::PopOs };
         assert!(ok.validate().is_ok());
         assert!(!ok.is_empty());
+    }
+
+    #[test]
+    fn validate_refuses_bytes_that_do_not_match_their_digest() {
+        let at = LIST.to_string();
+        // (a) a digest that belongs to some other bytes.
+        let mut other = w(LIST, false, old());
+        other.digest = sha256(b"some other content\n");
+        assert_eq!(bad(vec![other]), Some(PlanError::BytesMismatch(at.clone())));
+        // (b) no digest at all.
+        let mut zeroed = w(LIST, false, old());
+        zeroed.digest = [0; 32];
+        assert_eq!(bad(vec![zeroed]), Some(PlanError::BytesMismatch(at.clone())));
+        // (c) the abuse path: a write whose proof and digest are good for A's bytes, then the
+        // bytes swapped for B's while A's digest is kept.
+        let mut swapped = w(LIST, false, old());
+        assert_eq!(bad(vec![swapped.clone()]), None);
+        swapped.new_bytes = b"tampered\n".to_vec();
+        assert_eq!(bad(vec![swapped]), Some(PlanError::BytesMismatch(at)));
+    }
+
+    #[test]
+    fn create_is_refused_off_pop_os() {
+        let writes = || vec![w(SECURITY, true, None)];
+        let probe = probe("https://m.example/ubuntu", RFC_A);
+        let ubuntu = Plan::for_apply(&probe, Platform::Ubuntu, writes());
+        assert_eq!(ubuntu, Err(PlanError::CreateNewWrongPlatform(SECURITY.to_string())));
+        let pop = Plan::for_apply(&probe, Platform::PopOs, writes());
+        assert_eq!(pop.map(|p| p.writes().len()), Ok(1));
     }
 
     #[test]
     fn for_apply_binds_the_uri_to_its_own_proof() {
         let first = probe("https://a.example/ubuntu", RFC_A);
         let second = probe("https://b.example/ubuntu", RFC_B);
-        let plan = Plan::for_apply(&first, vec![w(LIST, false, old())]).unwrap();
+        let plan = Plan::for_apply(&first, Platform::PopOs, vec![w(LIST, false, old())]).unwrap();
         assert_eq!(plan.selected_uri(), "https://a.example/ubuntu");
         assert_ne!(plan.selected_uri(), second.url);
         assert_eq!(plan.proof().seconds(), fresh::parse_date(RFC_A).unwrap());
@@ -294,7 +369,7 @@ mod tests {
         assert_eq!(plan.writes().len(), 1);
         let unavailable = SignatureStatus::Unavailable("no gpgv".to_string());
         let unverified = Probed { signature: unavailable, ..probe("https://a.example/ubuntu", RFC_A) };
-        assert_eq!(Plan::for_apply(&unverified, vec![]), Err(PlanError::NoProof));
+        assert_eq!(Plan::for_apply(&unverified, Platform::PopOs, vec![]), Err(PlanError::NoProof));
         let unsigned = Probed { signed_updates_date: None, ..probe("https://a.example/ubuntu", RFC_A) };
-        assert_eq!(Plan::for_apply(&unsigned, vec![]), Err(PlanError::NoProof));    }
+        assert_eq!(Plan::for_apply(&unsigned, Platform::PopOs, vec![]), Err(PlanError::NoProof));    }
 }
