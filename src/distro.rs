@@ -18,11 +18,12 @@ impl Distro {
     }
 }
 
+// ponytail: no shell escapes (\" \$) or `export`; fine for ID and codename values. Add if a distro needs it.
 pub fn parse(text: &str) -> Distro {
     let get = |key: &str| {
         text.lines()
             .filter_map(|l| l.split_once('='))
-            .find(|(k, _)| k.trim() == key)
+            .rfind(|(k, _)| k.trim() == key) // last assignment wins
             .map(|(_, v)| v.trim().trim_matches(|c| c == '"' || c == '\'').to_string())
             .filter(|v| !v.is_empty())
     };
@@ -35,16 +36,17 @@ pub fn parse(text: &str) -> Distro {
     }
 }
 
-pub fn detect() -> Result<Distro, String> {
+/// Returns the parsed distro and the file it was read from.
+pub fn detect() -> Result<(Distro, &'static str), String> {
     let mut tried = Vec::new();
     for path in PATHS {
         match fs::read_to_string(path) {
-            Ok(text) => return Ok(parse(&text)),
+            Ok(text) => return Ok((parse(&text), path)),
             Err(e) => tried.push(format!("{path}: {e}")),
         }
     }
     Err(format!(
-        "Cannot read os-release ({}). apt-scout needs a Linux system with /etc/os-release; pass --distro and --codename to override.",
+        "Cannot read os-release ({}). apt-scout reads /etc/os-release (or /usr/lib/os-release) to find the Ubuntu codename; run it on an Ubuntu-based Linux system.",
         tried.join("; ")
     ))
 }
@@ -85,6 +87,17 @@ mod tests {
         let d = parse("ID=debian\nVERSION_CODENAME=bookworm\n");
         assert!(!d.is_ubuntu_family());
         assert_eq!(d.codename.as_deref(), Some("bookworm"));
+    }
+
+    #[test]
+    fn last_assignment_wins() {
+        assert_eq!(parse("ID=a\nID=ubuntu\n").id, "ubuntu");
+        assert_eq!(
+            parse("UBUNTU_CODENAME=noble\nUBUNTU_CODENAME=\nVERSION_CODENAME=jammy\n")
+                .codename
+                .as_deref(),
+            Some("jammy")
+        );
     }
 
     #[test]

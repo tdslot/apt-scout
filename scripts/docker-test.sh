@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run apt-scout in real Ubuntu images (20.04 - 26.04), offline. Same script locally and in CI.
+# Run apt-scout in real Ubuntu images (20.04 - 26.04), offline. Local only: CI does not run it.
 # Usage: scripts/docker-test.sh [ubuntu-version ...]
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -10,7 +10,7 @@ platform=linux/amd64
 
 # Build a static binary inside a Linux container.
 docker run --rm --platform "$platform" -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/src/target/docker rust:1 \
-  sh -c "rustup target add $target >/dev/null 2>&1 && cargo build --release --locked --target $target"
+  sh -c "rustup target add $target >/dev/null && cargo build --release --locked --target $target"
 bin=target/docker/$target/release/apt-scout
 
 # Pull every image first so `docker run` prints only the program's output (a fresh runner would
@@ -30,7 +30,7 @@ matrix="20.04 ubuntu focal
 status=0
 ran=0
 while read -r v id codename; do
-  if [ $# -gt 0 ] && ! printf '%s\n' "$@" | grep -qx "$v"; then continue; fi
+  if [ $# -gt 0 ]; then case " $* " in *" $v "*) ;; *) continue ;; esac; fi
   ran=$((ran + 1))
   got=$(run "ubuntu:$v" /apt-scout 2>&1) || true
   if [ "$got" = "$id $codename" ]; then echo "PASS ubuntu:$v -> $got"; else echo "FAIL ubuntu:$v -> '$got' (want '$id $codename')"; status=1; fi

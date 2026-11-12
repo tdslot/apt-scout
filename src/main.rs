@@ -3,8 +3,8 @@ mod distro;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let d = match distro::detect() {
-        Ok(d) => d,
+    let (d, source) = match distro::detect() {
+        Ok(found) => found,
         Err(e) => {
             eprintln!("error: {e}");
             return ExitCode::from(1);
@@ -12,8 +12,9 @@ fn main() -> ExitCode {
     };
     if !d.is_ubuntu_family() {
         eprintln!(
-            "error: unsupported distribution '{}'. apt-scout supports Ubuntu and derivatives (ID or ID_LIKE contains 'ubuntu').",
-            d.id
+            "error: unsupported distribution (ID='{}', ID_LIKE='{}' in {source}). apt-scout supports Ubuntu and derivatives: ID or ID_LIKE must contain 'ubuntu'.",
+            d.id,
+            d.id_like.join(" ")
         );
         return ExitCode::from(4);
     }
