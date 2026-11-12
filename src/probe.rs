@@ -1,6 +1,6 @@
-//! Probe one mirror (SPEC.md, Pipeline step 7): freshness from the head of `-updates`/`-security`
-//! InRelease, time to first byte, and throughput on a ranged sample. Uses `Fetch`, so it is
-//! testable.
+//! Probe one mirror (SPEC.md, Pipeline step 7): freshness and OpenPGP status from the full
+//! `-updates` `InRelease`, the head of `-security` for the informational date, time to first byte,
+//! and throughput on a ranged sample. Uses `Fetch`, so it is testable.
 
 use std::fmt;
 
@@ -10,6 +10,8 @@ use crate::verify::{self, SignatureStatus};
 
 /// Bounded full download; verification has a lower 512 KiB processing limit.
 const INRELEASE_BYTES: u64 = 2 * 1024 * 1024;
+/// `-security` is informational, so only the head is read (`Date:` sits in the first lines).
+const HEAD_BYTES: u64 = 4096;
 const SAMPLE_BYTES: u64 = 1_048_576;
 /// Smaller bodies are not a usable throughput sample (the real file is several MB).
 const MIN_SAMPLE: u64 = 64 * 1024;
@@ -59,22 +61,36 @@ pub struct Reference {
     pub security: Option<i64>,
 }
 
-type DateProbe = (i64, u64, String, SignatureStatus);
+fn inrelease_url(base: &str, suite: &str) -> String {
+    format!("{}/dists/{suite}/InRelease", base.trim_end_matches('/'))
+}
 
-fn date_of(net: &dyn Fetch, base: &str, suite: &str) -> Result<DateProbe, String> {
-    let url = format!("{}/dists/{suite}/InRelease", base.trim_end_matches('/'));
+/// The deciding pocket: the whole file is fetched and its OpenPGP signature is checked. Returns the
+/// `Date`, the request's time to first byte, the final URL and the signature status.
+fn date_of_verified(
+    net: &dyn Fetch,
+    base: &str,
+    suite: &str,
+) -> Result<(i64, u64, String, SignatureStatus), String> {
+    let url = inrelease_url(base, suite);
     let got = net
         .get(&url, INRELEASE_BYTES, None)
         .map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&got.body);
     let date = fresh::release_date(&text).map_err(|e| format!("{url}: {e}"))?;
     let signature = verify::verify_inrelease(&got.body);
-    Ok((
-        date,
-        got.ttfb.as_millis() as u64,
-        got.final_url,
-        signature,
-    ))
+    Ok((date, got.ttfb.as_millis() as u64, got.final_url, signature))
+}
+
+/// The informational `-security` pocket (SPEC step 8): only `Date:` is used, so a ranged read of the
+/// head is enough. Its signature is deliberately not checked — nothing may consume it.
+fn date_of_cheap(net: &dyn Fetch, base: &str, suite: &str) -> Result<i64, String> {
+    let url = inrelease_url(base, suite);
+    let got = net
+        .get(&url, HEAD_BYTES, Some((0, HEAD_BYTES - 1)))
+        .map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&got.body);
+    fresh::release_date(&text).map_err(|e| format!("{url}: {e}"))
 }
 
 #[derive(Debug, PartialEq)]
@@ -98,10 +114,7 @@ pub fn fetch_reference(
     base: &str,
     codename: &str,
 ) -> Result<Reference, ReferenceError> {
-    let url = format!(
-        "{}/dists/{codename}-updates/InRelease",
-        base.trim_end_matches('/')
-    );
+    let url = inrelease_url(base, &format!("{codename}-updates"));
     let got = net.get(&url, INRELEASE_BYTES, None).map_err(|e| match e {
         // Only the deciding pocket decides whether the release left the archive.
         HttpError::Status(404, u) => ReferenceError::NotFound(u),
@@ -110,9 +123,7 @@ pub fn fetch_reference(
     let updates = fresh::release_date(&String::from_utf8_lossy(&got.body))
         .map_err(|e| ReferenceError::Other(format!("{url}: {e}")))?;
     let updates_signature = verify::verify_inrelease(&got.body);
-    let security = date_of(net, base, &format!("{codename}-security"))
-        .ok()
-        .map(|(d, _, _, _)| d);
+    let security = date_of_cheap(net, base, &format!("{codename}-security")).ok();
     Ok(Reference {
         updates,
         updates_signature,
@@ -128,10 +139,9 @@ pub fn probe(
 ) -> Result<Outcome, ProbeError> {
     let base = mirror.trim_end_matches('/');
     let (updates, latency_ms, updates_final, updates_signature) =
-        date_of(net, base, &format!("{codename}-updates")).map_err(ProbeError::BadUpdates)?;
-    let security_date = date_of(net, base, &format!("{codename}-security"))
-        .ok()
-        .map(|(d, _, _, _)| d);
+        date_of_verified(net, base, &format!("{codename}-updates"))
+            .map_err(ProbeError::BadUpdates)?;
+    let security_date = date_of_cheap(net, base, &format!("{codename}-security")).ok();
 
     let sample_url = format!("{base}/dists/{codename}/main/binary-{arch}/Packages.xz");
     let sample = net
