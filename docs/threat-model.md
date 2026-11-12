@@ -1,10 +1,10 @@
 # D6e — Privilege boundary threat model and privilege-escalation decision
 
-Status: **rulings decided; D6e NOT closed.** The rulings in section 7 are decided and human-approved, the design gaps the first review left open are ruled in section 8, and the `SPEC.md` deltas they require are applied except where Appendix A marks an item `PENDING`. D6e stays open only until the independent security review of this record returns PASS. This is the privilege-boundary decision record for apt-scout: the threat model, the self-reexec ruling, the write validation that gates D9, and the state of every `SPEC.md` delta the rulings require. The CLI ruling of 2026-11-12 removed the two-step plan split from the product: the plan is internal, one process writes, and section 5 records the validation that replaces the cross-process handoff.
+Status: **rulings decided; D6e NOT closed.** The rulings in section 7 are decided and human-approved, the design gaps the first review left open are ruled in section 8, and the `SPEC.md` deltas they require are applied except where Appendix A marks an item `PENDING`. D6e stays open only until the independent security review of this record returns PASS. This is the privilege-boundary decision record for apt-scout: the threat model, the self-reexec ruling, the write validation that gates D9, and the state of every `SPEC.md` delta the rulings require. The CLI ruling of 2026-11-12 removed the two-step plan split from the product: the plan is internal, one process writes, and section 5 records the validation that stands in its place.
 Base: `origin/develop` with `8bbfa72` (D6f, PR #29) merged into `docs/d6e-threat-model`; the `path:line` citations were re-checked at `8fd9d70`, the D6f ones at `8bbfa72`, and citations elsewhere may have aged since. Roadmap item: D6e (blocks D9, D10, D11, D12, and every later write).
 Authority: `ROADMAP.md` D6e/D6f/D9–D12, `SPEC.md` "Privilege boundary and threat model", "Apply", "Pipeline", "Testing", "TUI", and `AGENTS.md:108` (`Privilege-security gates`).
 
-This document records four things: what may cross into a privileged phase, that the program never obtains privilege for itself, which tests must exist before D9 can merge, and what a write may trust about an `InRelease`. Section 7 is the decision record, section 8 records the three gaps the first review left open together with the ruling that closed each, and Appendix A states whether each `SPEC.md` delta is applied and, where it is not, who owns it. A superseded ruling is replaced in place, never annotated.
+This document records four things: what the process that may write as root is allowed to touch, that the program never obtains privilege for itself, which tests must exist before D9 can merge, and what a write may trust about an `InRelease`. Section 7 is the decision record, section 8 records the three gaps the first review left open together with the ruling that closed each, and Appendix A states whether each `SPEC.md` delta is applied and, where it is not, who owns it. A superseded ruling is replaced in place, never annotated.
 
 ---
 
@@ -12,7 +12,7 @@ This document records four things: what may cross into a privileged phase, that 
 
 Read for this document: `AGENTS.md` (whole file; `:108` `Privilege-security gates`), `ROADMAP.md` (whole file), `SPEC.md` (whole file, 192 lines), `GLOSSARY.md`, `src/verify.rs` (1–350), `src/http.rs` (1–250), `src/probe.rs` (1–180), `src/fresh.rs` (78–120), `src/sources.rs` (1–60, 380–520, 795–815), `src/main.rs` (1–120, 215–340, 485–585), `src/mirrors.rs` (245–300), `Cargo.toml`.
 
-Facts that constrain the handoff. Each is the current code at this base, not a plan:
+Facts that constrain the write. Each is the current code at this base, not a plan:
 
 1. **There is no write path.** No `fs::write`, `File::create`, `rename`, or `set_permissions` exists in any non-test code path. The only files the program creates are the verification temp directory and temp file (`src/verify.rs:129–149`) and it removes both.
 2. **No root check exists.** `geteuid`/`getuid` is not called anywhere; exit code 3 ("not root", `SPEC.md` Non-functional, exit codes) is unimplemented. `main` maps only the codes `run()` returns (`src/main.rs:572–580`; codes 1/2/4 at `src/main.rs:96–121`).
@@ -35,7 +35,7 @@ Facts that constrain the handoff. Each is the current code at this base, not a p
 | `/var/log` output or the terminal | Root writes to a terminal that the unprivileged user may share; terminal escape sequences printed as root execute in the user's terminal context, not in root's | Print the diff, confirmation, and result | Output only via `println!` (`src/main.rs:311–340`); no TUI |
 | The user's environment (`PATH`, `HOME`, `TMPDIR`, `XDG_*`, `http_proxy`) | A root process that resolves a command or a path through the environment executes attacker-chosen code | Must be cleared to a fixed minimum | Only `TMPDIR` is consumed (`src/verify.rs:54`); `PATH`/`HOME` never read |
 | The user's own apt sources being *read* as root | Whatever root reads becomes what root writes back; a local user who can write a file under `/etc/apt` chooses its content | Re-read and compare against the plan | Read by name with `std::fs::read` (`src/sources.rs:492`) |
-| `/var/cache`/`~/.cache/apt-scout/mirrors.json`, `/usr/bin/gpgv`, the keyring | Cache and verifier inputs decide ranking and verification | Root must not read or write any of them | Cache unimplemented; `gpgv` runs unprivileged today (`src/probe.rs:84`) |
+| `/var/cache`/`~/.cache/apt-scout/mirrors.json`, `/usr/bin/gpgv`, the keyring | Cache and verifier inputs decide ranking and verification | Root must not read or write any of them | Cache unimplemented; `gpgv` runs as the invoking uid today (`src/probe.rs:84`) |
 
 ## 2. Attack surface of the write
 
@@ -51,7 +51,7 @@ Every value below reaches the one process that writes as root, because discovery
 | A6 | `InRelease` `Date` | `src/fresh.rs:103–143` (strict in-region parse, tolerant display parse), surfaced as `signed_updates_date` / `updates_date` (`src/fresh.rs:155–190`) | The mirror: a `Date` outside the signed region is display-only; one inside it is covered by the archive key | Yes — decides which mirror is written, and only the in-region value may be used for a write (3.9) |
 | A7 | Backup manifest on disk | No code | Whoever can write inside the backup directory | Yes — drives `--restore` |
 | A8 | File metadata and symlinks under `/etc/apt` | `src/sources.rs:383–466` (symlink refusals), owner/mode never read | A local user who can create entries in `/etc/apt/sources.list.d` (root-owned 0755 by default, so only root, unless the administrator relaxed it) | Yes — decides which paths root opens |
-| A9 | The plan/selection from an unprivileged phase | Does not exist | — | No — removed 2026-11-12: no plan crosses a process boundary (B6, 7.2) |
+| A9 | A plan or selection handed in from another process | Does not exist | — | No — removed 2026-11-12: no plan crosses a process boundary (B6, 7.2) |
 | A10 | Terminal input | No TUI (`Cargo.toml`) | The user, and anything that can inject bytes into the TTY | Future (D13) — the confirm keystroke only |
 | A11 | A hostile local user writing where the program reads | `TMPDIR` (`src/verify.rs:54`), pre-created `/var/backups/apt-scout`, pre-created `system-security.sources` | Any local user | Yes |
 
@@ -138,7 +138,7 @@ Missing, and required before D9:
 
 ### B6 — No boundary crossing (removed)
 
-The plan handed from an unprivileged phase to root, which this entry used to describe, was removed on 2026-11-12 with the CLI split: no plan, file, or stdin message crosses a process boundary, so there is no producer of untrusted plan bytes to defend against. The checks that remain are listed in section 5. See 7.2.
+The plan handed from one process to a root process, which this entry used to describe, was removed on 2026-11-12 with the CLI ruling: no plan, file, or stdin message crosses a process boundary, so there is no producer of untrusted plan bytes to defend against. The checks that remain are listed in section 5. See 7.2.
 
 ### B7 — Terminal input (TUI, D13+)
 
@@ -147,7 +147,7 @@ Existing: no TUI, no `ratatui` dependency (`Cargo.toml`), so the surface does no
 What the design imposes now so D13 does not have to revisit it:
 - A keystroke is authorization for exactly one thing: the confirm step. It never carries data.
 - Custom mirror URLs typed in the TUI (`SPEC.md` Apply, Custom URLs) are input A4: they are validated and probed before the plan is built and reach it only through B4's re-validation.
-- Nothing that root prints may contain unescaped mirror-controlled bytes. A mirror's URL, `Origin`, `Label`, or error text can contain `ESC`; printing it as root into a shared terminal is a control-sequence injection into the user's terminal. The privileged phase must render untrusted strings with control characters replaced. Nothing does this today (`src/main.rs:311–340` prints URLs raw) — accepted while the program is unprivileged and root never runs.
+- Nothing that root prints may contain unescaped mirror-controlled bytes. A mirror's URL, `Origin`, `Label`, or error text can contain `ESC`; printing it as root into a shared terminal is a control-sequence injection into the user's terminal. The root run must render untrusted strings with control characters replaced. Nothing does this today (`src/main.rs:311–340` prints URLs raw): the mitigation belongs to D13, and the exposure until then is a read-only table printed by a root run that writes nothing.
 
 ### B8 — A hostile local user writing where the program reads
 
@@ -197,7 +197,7 @@ A process cannot obtain privilege for itself, so "self-reexec" is shorthand for 
 2. install a setuid-root bit — the binary becomes a local privilege-escalation candidate by definition. Any local user can run the write phase. The only thing standing between them and root file writes is the program's own validation of an input that the same local user supplies.
 3. ask the user to run the second phase as root — the mechanism the user's own `sudo` provides, with no privilege manufactured by the program. This is the ruling (7.1).
 
-Mechanism 3 is the ruling (7.1); mechanisms 1 and 2 are the rejected forms analysed in 4.3 and 4.4. The question D6e answered is what the second, root-only invocation is allowed to contain, and the answer is section 5: a plan, and nothing else. That answer governed a two-process design that the user later removed (7.2). The one-shot modes — `sudo apt-scout`, `sudo apt-scout --tui`, `sudo apt-scout --restore` — are also mechanism 3, because the user's own `sudo` supplies the privilege, but they parse untrusted input in the root process, and `SPEC.md` CLI and Privilege boundary state plainly that they are not equally hardened with the split.
+Mechanism 3 is the ruling (7.1); mechanisms 1 and 2 are the rejected forms analysed in 4.3 and 4.4. The question D6e answered is what the second, root-only invocation is allowed to contain, and the answer is section 5: a plan, and nothing else. That answer governed a two-process design that the user later removed (7.2). The one-shot modes — `sudo apt-scout`, `sudo apt-scout --tui`, `sudo apt-scout --restore` — are also mechanism 3, because the user's own `sudo` supplies the privilege, but they parse untrusted input in the root process, and `SPEC.md` CLI and Privilege boundary state that cost plainly instead of presenting the one-shot run as isolated.
 
 ### 4.2 The ruling — no self-reexec: refuse and print the exact command
 
@@ -335,7 +335,7 @@ State of every delta the rulings in sections 7 and 8 require. APPLIED names the 
 9. **APPLIED — `SPEC.md` "Apply", new file-creation bullet; "Errors and self-healing", the self-heal prohibition.** Added to Apply: "`/etc/apt/sources.list.d/system-security.sources` is created with `create_new` and mode 0600, and `EEXIST` aborts the whole apply with nothing written. A planned write that creates a file is accepted only when the platform is Pop!_OS and the target is exactly `sources.list.d/system-security.sources`; a plan that creates any other file, or replaces a file that does not exist, aborts before the first open." The Errors and self-healing prohibition ("never create files in `/etc/apt` that did not exist") was reworded so that it is about self-healing only and names that one planned creation, and the Apply bullet carrying ruling 8's intent now states the constraint in the place a coder reads. Carried by 7.8; gated by S17 and S3.
 
 10. **APPLIED — `SPEC.md` "Apply", bullet 1 and the `--restore` bullet; "Errors and self-healing", the Docker test list.** G1: a restore builds the manifest path itself from the backup id; the restore run re-reads the manifest, checks it is a root-owned regular file of mode 0600 and not a symlink, and only then validates the targets it names, refusing the restore when a record's digest, mode or owner disagrees with the backup copy it names. The plan-shaped half of this item — a manifest digest arriving inside a cross-process plan, and the restore-side producer refusal — is removed by the CLI ruling of 2026-11-12 (7.2); the manifest re-derivation and the disagreement refusal survive in-process (section 5). The Docker list gains a restore whose manifest is stale, partial, or names a path outside `/etc/apt`.
-11. **APPLIED — `SPEC.md` "Apply", bullet 1; "Privilege boundary and threat model", new bullet.** G2: every target's new content carries a digest the root run recomputes, plus the manifest digest for a restore, and a plan whose digests do not match is refused; the privilege-boundary bullet states that the guarantee is content binding, not producer identity, because a process running as the invoking uid can invoke the root run itself. S15's second half is restated in section 6 to match.
+11. **APPLIED — `SPEC.md` "Apply", bullet 1; "Privilege boundary and threat model", new bullet.** G2: every target's new content carries a digest the root run recomputes, and a plan whose digests do not match is refused; the privilege-boundary bullet states that the guarantee is content binding, not producer identity, because a process running as the invoking uid can invoke the root run itself. S15's second half is restated in section 6 to match.
 12. **APPLIED — `SPEC.md` "Privilege boundary and threat model", new bullet.** G3: the root run is one binary, a mode of the same executable; a separate privileged artifact is out of scope for v1, and splitting it would be a new product decision rather than a threshold.
 
 ---
@@ -345,6 +345,6 @@ State of every delta the rulings in sections 7 and 8 require. APPLIED names the 
 Recorded so nothing here is dropped silently; none of these is an open decision.
 
 - The throughput sample is attacker-controlled (`src/probe.rs:153–156`) and can decide the ranking. Accepted: it cannot authorize package installation, and `SPEC.md` Pipeline step 9 already calls throughput relative. Owner: D9, with no SPEC delta.
-- Root printing an unescaped mirror URL or error string into a terminal (B7) is only a hazard once a privileged phase prints anything. The mitigation belongs to D13, not D9.
+- Root printing an unescaped mirror URL or error string into a terminal (B7) is only a hazard once root prints anything. The mitigation belongs to D13, not D9.
 - `reader.join()` is unbounded after the timeout kill in the verifier (`src/verify.rs:212–232`), and the oversized-body case reports `Unavailable` rather than `Invalid`. Both stay in D6f's P2 list; neither changes what a write may trust.
 - `--list` is accepted and ignored (`src/main.rs:44`); that is a CLI conformance gap for D11, not a security issue.
