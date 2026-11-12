@@ -1,5 +1,6 @@
 //! Probe one mirror (SPEC.md, Pipeline step 7): freshness from the head of `-updates`/`-security`
-//! InRelease, connect latency, and throughput on a ranged sample. Uses `Fetch`, so it is testable.
+//! InRelease, time to first byte, and throughput on a ranged sample. Uses `Fetch`, so it is
+//! testable.
 
 use std::fmt;
 
@@ -24,7 +25,8 @@ pub struct Outcome {
     pub updates_signature: SignatureStatus,
     /// Informational only (SPEC step 8): `None` when the mirror has no `-security` InRelease.
     pub security_date: Option<i64>,
-    /// Time of the first request: DNS, TCP, TLS and one round trip (not pure connect latency).
+    /// Time to first byte of the deciding `-updates` request: DNS, TCP, TLS and one round trip,
+    /// measured before any body byte arrives (SPEC step 7). Not a download time.
     pub latency_ms: u64,
     pub throughput_bps: u64,
     /// Set when the mirror answered from a different host than the one listed (SPEC step 7).
@@ -69,7 +71,7 @@ fn date_of(net: &dyn Fetch, base: &str, suite: &str) -> Result<DateProbe, String
     let signature = verify::verify_inrelease(&got.body);
     Ok((
         date,
-        got.elapsed.as_millis() as u64,
+        got.ttfb.as_millis() as u64,
         got.final_url,
         signature,
     ))
