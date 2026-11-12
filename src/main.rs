@@ -259,8 +259,6 @@ fn run() -> Result<(), (u8, String)> {
         };
     let mut probed: Vec<fresh::Probed> = Vec::new();
     let mut notes: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    let mut signatures: std::collections::HashMap<String, verify::SignatureStatus> =
-        std::collections::HashMap::new();
     for (m, r) in results {
         match r {
             Ok(o) => {
@@ -280,7 +278,6 @@ fn run() -> Result<(), (u8, String)> {
                 if !o.updates_signature.is_verified() {
                     note.push_str(&format!(" signature {}", o.updates_signature));
                 }
-                signatures.insert(o.url.clone(), o.updates_signature.clone());
                 if !note.is_empty() {
                     notes.insert(o.url.clone(), note);
                 }
@@ -292,11 +289,14 @@ fn run() -> Result<(), (u8, String)> {
                 } else {
                     probed.push(fresh::Probed {
                         url: o.url,
+                        updates_date: o.updates_date,
+                        signed_updates_date: o.signed_updates_date,
                         lag_secs: lag,
                         throughput_bps: o.throughput_bps,
                         latency_ms: o.latency_ms,
                         same_as: server_asn.is_some()
                             && mirror_asn.get(&m.url) == server_asn.as_ref(),
+                        signature: o.updates_signature.clone(),
                     });
                 }
             }
@@ -335,10 +335,7 @@ fn run() -> Result<(), (u8, String)> {
             r.url,
             mirror_asn.unwrap_or("unknown"),
             as_status(server_asn.as_deref(), mirror_asn),
-            signatures
-                .get(&r.url)
-                .map(signature_label)
-                .unwrap_or("unknown"),
+            signature_label(&r.signature),
             r.lag_secs / 60,
             r.throughput_bps as f64 / 1e6,
             r.latency_ms

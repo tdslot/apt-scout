@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use crate::verify::{self, SignatureStatus};
+
 /// Stale mirrors are rejected when `-updates` lags the reference by more than this (SPEC step 8).
 pub const MAX_LAG_SECS: i64 = 24 * 3600;
 
@@ -154,10 +156,26 @@ pub fn is_stale(lag_secs: i64) -> bool {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Probed {
     pub url: String,
+    /// The mirror's `-updates` `InRelease` `Date` as displayed and used for lag/ranking; kept as an
+    /// absolute date because a trusted value is a date, not a lag.
+    pub updates_date: i64,
+    /// `Some` only when `updates_date` came from inside the cleartext-signed region.
+    pub signed_updates_date: Option<SignedDate>,
     pub lag_secs: i64,
     pub throughput_bps: u64,
     pub latency_ms: u64,
     pub same_as: bool,
+    /// Verification result of this mirror's deciding `-updates` InRelease (SPEC step 8).
+    pub signature: SignatureStatus,
+}
+
+impl Probed {
+    /// The trusted date of this mirror: `None` when either half of the proof is missing, including
+    /// when the displayed date sits outside the signed region.
+    #[cfg_attr(not(test), allow(dead_code))] // production consumer is D9; D6f asserts it in tests
+    pub fn verified_updates(&self) -> Option<verify::VerifiedDate> {
+        self.signature.verified_date(self.signed_updates_date?)
+    }
 }
 
 /// Rank: lag ascending (equal `Date` forms a group), then within a group throughput descending and
@@ -345,11 +363,42 @@ mod tests {
     fn p(url: &str, lag: i64, mbps: u64, ms: u64, same_as: bool) -> Probed {
         Probed {
             url: url.into(),
+            updates_date: 1_794_457_418,
+            signed_updates_date: Some(signed("Thu, 12 Nov 2026  4:23:38 UTC")),
             lag_secs: lag,
             throughput_bps: mbps * 1_000_000,
             latency_ms: ms,
             same_as,
+            signature: SignatureStatus::Invalid("test".into()),
         }
+    }
+
+    /// The same mirror with a `Verified` signature, so only the status differs from `p()`.
+    fn pv(url: &str) -> Probed {
+        Probed {
+            signature: SignatureStatus::Verified,
+            ..p(url, 0, 100, 10, false)
+        }
+    }
+
+    #[test]
+    fn probed_verified_updates_requires_verified() {
+        assert_eq!(
+            p("http://a.example/ubuntu", 0, 10, 10, false).verified_updates(),
+            None
+        );
+        assert_eq!(
+            pv("http://a.example/ubuntu")
+                .verified_updates()
+                .map(|d| d.seconds()),
+            Some(1_794_457_418)
+        );
+        // a verified status around a date from outside the signed region yields nothing either:
+        let outside = Probed {
+            signed_updates_date: None,
+            ..pv("http://b.example/ubuntu")
+        };
+        assert_eq!(outside.verified_updates(), None);
     }
 
     fn urls(v: &[Probed]) -> Vec<&str> {
