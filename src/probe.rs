@@ -17,12 +17,21 @@ const SAMPLE_BYTES: u64 = 1_048_576;
 /// Smaller bodies are not a usable throughput sample (the real file is several MB).
 const MIN_SAMPLE: u64 = 64 * 1024;
 
+/// Both `Date`s of one `-updates` `InRelease`: the tolerant one ranking uses, and the signed one a
+/// write may trust (SPEC step 8, ruling 4).
+struct PocketDate {
+    shown: i64,
+    signed: Option<fresh::SignedDate>,
+}
+
 #[derive(Debug, PartialEq)]
 pub struct Outcome {
     pub url: String,
-    /// The mirror's `-updates` InRelease `Date` (Unix seconds). Lag is computed by the caller against
-    /// the reference, or against the newest candidate when the reference is unreachable.
+    /// The `-updates` `InRelease` `Date` used for lag, ranking and display (tolerant parse).
     pub updates_date: i64,
+    /// `Some` only when that `Date` came from inside the cleartext-signed region; the only date a
+    /// write may trust (SPEC step 8).
+    pub signed_updates_date: Option<fresh::SignedDate>,
     /// OpenPGP status of the deciding `-updates` InRelease. Ranking can use unverified dates, but
     /// write decisions must require `Verified`.
     pub updates_signature: SignatureStatus,
@@ -34,6 +43,14 @@ pub struct Outcome {
     pub throughput_bps: u64,
     /// Set when the mirror answered from a different host than the one listed (SPEC step 7).
     pub redirected_to: Option<String>,
+}
+
+impl Outcome {
+    /// The only form of a mirror date a write may use (SPEC: Freshness trust boundary).
+    pub fn verified_updates(&self) -> Option<verify::VerifiedDate> {
+        self.updates_signature
+            .verified_date(self.signed_updates_date?)
+    }
 }
 
 #[derive(Debug)]
@@ -56,10 +73,22 @@ impl fmt::Display for ProbeError {
 
 /// Reference `Date`s from the canonical archive, fetched once before probing.
 pub struct Reference {
+    /// The `-updates` reference `Date` used for lag and display (tolerant parse).
     pub updates: i64,
+    /// `Some` only when it came from inside the cleartext-signed region.
+    pub signed_updates_date: Option<fresh::SignedDate>,
     pub updates_signature: SignatureStatus,
     /// `None` when the archive has no readable `-security` InRelease; it is informational only.
     pub security: Option<i64>,
+}
+
+impl Reference {
+    /// The only form of the freshness baseline a write may use; `None` when the reference is not
+    /// `Verified` *or* its `Date` did not come from the signed region.
+    pub fn verified_updates(&self) -> Option<verify::VerifiedDate> {
+        self.updates_signature
+            .verified_date(self.signed_updates_date?)
+    }
 }
 
 fn inrelease_url(base: &str, suite: &str) -> String {
@@ -67,21 +96,27 @@ fn inrelease_url(base: &str, suite: &str) -> String {
 }
 
 /// The deciding pocket: the whole file is fetched under the verification cap and its OpenPGP
-/// signature is checked. Returns the `Date`, the request's time to first byte, the final URL and
-/// the signature status.
+/// signature is checked. Returns both dates (tolerant for ranking, strict for a write), the
+/// request's time to first byte, the final URL and the signature status.
 fn date_of_verified(
     net: &dyn Fetch,
     base: &str,
     suite: &str,
-) -> Result<(i64, u64, String, SignatureStatus), String> {
+) -> Result<(PocketDate, u64, String, SignatureStatus), String> {
     let url = inrelease_url(base, suite);
     let got = net
         .get(&url, INRELEASE_BYTES, None)
         .map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&got.body);
-    let date = fresh::release_date(&text).map_err(|e| format!("{url}: {e}"))?;
+    let shown = fresh::release_date_tolerant(&text).map_err(|e| format!("{url}: {e}"))?;
+    let signed = fresh::release_date(&text).ok();
     let signature = verify::verify_inrelease(&got.body);
-    Ok((date, got.ttfb.as_millis() as u64, got.final_url, signature))
+    Ok((
+        PocketDate { shown, signed },
+        got.ttfb.as_millis() as u64,
+        got.final_url,
+        signature,
+    ))
 }
 
 /// The informational `-security` pocket (SPEC step 8): only `Date:` is used, so a ranged read of the
@@ -92,7 +127,7 @@ fn date_of_cheap(net: &dyn Fetch, base: &str, suite: &str) -> Result<i64, String
         .get(&url, HEAD_BYTES, Some((0, HEAD_BYTES - 1)))
         .map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&got.body);
-    fresh::release_date(&text).map_err(|e| format!("{url}: {e}"))
+    fresh::release_date_tolerant(&text).map_err(|e| format!("{url}: {e}"))
 }
 
 #[derive(Debug, PartialEq)]
@@ -122,12 +157,15 @@ pub fn fetch_reference(
         HttpError::Status(404, u) => ReferenceError::NotFound(u),
         other => ReferenceError::Other(other.to_string()),
     })?;
-    let updates = fresh::release_date(&String::from_utf8_lossy(&got.body))
+    let text = String::from_utf8_lossy(&got.body);
+    let updates = fresh::release_date_tolerant(&text)
         .map_err(|e| ReferenceError::Other(format!("{url}: {e}")))?;
+    let signed_updates_date = fresh::release_date(&text).ok();
     let updates_signature = verify::verify_inrelease(&got.body);
     let security = date_of_cheap(net, base, &format!("{codename}-security")).ok();
     Ok(Reference {
         updates,
+        signed_updates_date,
         updates_signature,
         security,
     })
@@ -162,7 +200,8 @@ pub fn probe(
 
     Ok(Outcome {
         url: base.to_string(),
-        updates_date: updates,
+        updates_date: updates.shown,
+        signed_updates_date: updates.signed,
         updates_signature,
         security_date,
         redirected_to: other_host(base, &updates_final),
@@ -265,6 +304,8 @@ mod tests {
     const M_UPD: &str = "http://m.example/ubuntu/dists/noble-updates/InRelease";
     const M_SEC: &str = "http://m.example/ubuntu/dists/noble-security/InRelease";
     const M_SAMPLE: &str = "http://m.example/ubuntu/dists/noble/main/binary-amd64/Packages.xz";
+    const ARCH_UPD: &str = "http://archive.ubuntu.com/ubuntu/dists/noble-updates/InRelease";
+    const ARCH_SEC: &str = "http://archive.ubuntu.com/ubuntu/dists/noble-security/InRelease";
 
     fn recording() -> Recording {
         Recording::new(vec![
@@ -276,41 +317,24 @@ mod tests {
 
     fn reference() -> Reference {
         Reference {
-            updates: fresh::release_date(UPD).unwrap(),
+            updates: fresh::release_date_tolerant(UPD).unwrap(),
+            signed_updates_date: fresh::release_date(UPD).ok(),
             updates_signature: SignatureStatus::Invalid("test fixture is unsigned".into()),
-            security: Some(fresh::release_date(SEC).unwrap()),
+            security: Some(fresh::release_date_tolerant(SEC).unwrap()),
         }
     }
 
     #[test]
     fn reference_survives_a_broken_security_pocket() {
-        let c = Canned(vec![
-            (
-                "http://archive.ubuntu.com/ubuntu/dists/noble-updates/InRelease",
-                Ok(UPD.as_bytes()),
-            ),
-            (
-                "http://archive.ubuntu.com/ubuntu/dists/noble-security/InRelease",
-                Err(500),
-            ),
-        ]);
+        let c = Canned(vec![(ARCH_UPD, Ok(UPD.as_bytes())), (ARCH_SEC, Err(500))]);
         let r = fetch_reference(&c, "http://archive.ubuntu.com/ubuntu", "noble").unwrap();
         assert_eq!(r.security, None);
-        assert_eq!(r.updates, fresh::release_date(UPD).unwrap());
+        assert_eq!(r.updates, fresh::release_date_tolerant(UPD).unwrap());
     }
 
     #[test]
     fn missing_security_pocket_is_not_a_removed_release() {
-        let c = Canned(vec![
-            (
-                "http://archive.ubuntu.com/ubuntu/dists/noble-updates/InRelease",
-                Ok(UPD.as_bytes()),
-            ),
-            (
-                "http://archive.ubuntu.com/ubuntu/dists/noble-security/InRelease",
-                Err(404),
-            ),
-        ]);
+        let c = Canned(vec![(ARCH_UPD, Ok(UPD.as_bytes())), (ARCH_SEC, Err(404))]);
         assert!(fetch_reference(&c, "http://archive.ubuntu.com/ubuntu", "noble").is_ok());
     }
 
@@ -338,17 +362,11 @@ mod tests {
     #[test]
     fn reference_from_archive() {
         let c = Canned(vec![
-            (
-                "http://archive.ubuntu.com/ubuntu/dists/noble-updates/InRelease",
-                Ok(UPD.as_bytes()),
-            ),
-            (
-                "http://archive.ubuntu.com/ubuntu/dists/noble-security/InRelease",
-                Ok(SEC.as_bytes()),
-            ),
+            (ARCH_UPD, Ok(UPD.as_bytes())),
+            (ARCH_SEC, Ok(SEC.as_bytes())),
         ]);
         let r = fetch_reference(&c, "http://archive.ubuntu.com/ubuntu/", "noble").unwrap();
-        assert_eq!(r.updates, fresh::release_date(UPD).unwrap());
+        assert_eq!(r.updates, fresh::release_date_tolerant(UPD).unwrap());
     }
 
     #[test]
@@ -569,5 +587,115 @@ mod tests {
             panic!("expected BadUpdates, got {e}");
         };
         assert!(msg.contains("524288"), "{msg}");
+    }
+
+    #[test]
+    fn unsigned_inrelease_is_not_reported_verified() {
+        let o = probe(&recording(), "http://m.example/ubuntu/", "noble", "amd64").unwrap();
+        assert!(
+            !o.updates_signature.is_verified(),
+            "probe must not report an unsigned body as verified, got {}",
+            o.updates_signature
+        );
+        assert!(o.verified_updates().is_none());
+    }
+
+    #[test]
+    fn unsigned_reference_is_not_reported_verified() {
+        let c = Canned(vec![
+            (ARCH_UPD, Ok(UPD.as_bytes())),
+            (ARCH_SEC, Ok(SEC.as_bytes())),
+        ]);
+        let r = fetch_reference(&c, "http://archive.ubuntu.com/ubuntu", "noble").unwrap();
+        assert!(
+            !r.updates_signature.is_verified(),
+            "fetch_reference must keep the verifier's verdict, got {}",
+            r.updates_signature
+        );
+        assert!(r.verified_updates().is_none());
+    }
+
+    /// Ruling 4, read half: a prefixed `-updates` body is still ranked, and exposes no trusted date even
+    /// when `gpgv` accepts the prefix (it does: `verify::tests::gpgv_accepts_a_prefixed_body`).
+    #[test]
+    fn prefixed_body_stays_rankable_and_untrusted() {
+        let signed_body = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/signed/noble-updates-InRelease"),
+        )
+        .unwrap();
+        let mut prefixed = b"Date: Thu, 1 Jan 2099 00:00:00 UTC\n".to_vec();
+        prefixed.extend_from_slice(&signed_body);
+        let body: &'static [u8] = Box::leak(prefixed.into_boxed_slice());
+        let c = Canned(vec![
+            (M_UPD, Ok(body)),
+            (M_SEC, Ok(SEC.as_bytes())),
+            (M_SAMPLE, Ok(XZ_OK)),
+        ]);
+        let o = probe(&c, "http://m.example/ubuntu", "noble", "amd64")
+            .expect("a prefixed body must stay rankable in read-only mode");
+        assert_eq!(
+            o.updates_date,
+            fresh::parse_date("Thu, 1 Jan 2099 00:00:00 UTC").unwrap()
+        );
+        assert_eq!(
+            o.signed_updates_date, None,
+            "the Date is outside the signed region"
+        );
+        assert!(
+            o.verified_updates().is_none(),
+            "a Date gpgv never signed must not be trusted"
+        );
+    }
+
+    /// Ruling 4, reference half: the run keeps its baseline when the canonical body carries a prefix,
+    /// and still refuses to make that baseline trusted.
+    #[test]
+    fn prefixed_reference_keeps_read_only_tolerance() {
+        let mut prefixed = b"Date: Thu, 1 Jan 2099 00:00:00 UTC\n".to_vec();
+        prefixed.extend_from_slice(UPD.as_bytes());
+        let body: &'static [u8] = Box::leak(prefixed.into_boxed_slice());
+        let c = Canned(vec![(ARCH_UPD, Ok(body)), (ARCH_SEC, Ok(SEC.as_bytes()))]);
+        let r = fetch_reference(&c, "http://archive.ubuntu.com/ubuntu", "noble").unwrap();
+        assert_eq!(
+            r.updates,
+            fresh::parse_date("Thu, 1 Jan 2099 00:00:00 UTC").unwrap()
+        );
+        assert_eq!(r.signed_updates_date, None);
+        assert!(r.verified_updates().is_none());
+    }
+
+    #[test]
+    fn signed_inrelease_is_reported_verified() {
+        // Needs the production paths (/usr/bin/gpgv, ubuntu-archive-keyring.gpg); skipped on hosts without
+        // them. Docker case 13 proves the same path against the real archive.
+        if !std::path::Path::new(verify::GPGV).is_file()
+            || !std::path::Path::new(verify::UBUNTU_KEYRING).is_file()
+        {
+            return;
+        }
+        let signed_body = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/signed/noble-updates-InRelease"),
+        )
+        .unwrap();
+        let body: &'static [u8] = Box::leak(signed_body.into_boxed_slice());
+        let c = Canned(vec![
+            (M_UPD, Ok(body)),
+            (M_SEC, Ok(SEC.as_bytes())),
+            (M_SAMPLE, Ok(XZ_OK)),
+        ]);
+        let o = probe(&c, "http://m.example/ubuntu", "noble", "amd64").unwrap();
+        assert_eq!(
+            o.updates_signature,
+            SignatureStatus::Verified,
+            "{}",
+            o.updates_signature
+        );
+        assert!(o.signed_updates_date.is_some());
+        assert_eq!(
+            o.verified_updates().map(|d| d.seconds()),
+            Some(o.updates_date)
+        );
     }
 }

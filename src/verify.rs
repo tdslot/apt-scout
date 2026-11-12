@@ -12,6 +12,8 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::fresh;
+
 pub const GPGV: &str = "/usr/bin/gpgv";
 pub const UBUNTU_KEYRING: &str = "/usr/share/keyrings/ubuntu-archive-keyring.gpg";
 /// Maximum `InRelease` accepted for verification. `probe` uses it as its download cap, so a body
@@ -43,6 +45,26 @@ impl fmt::Display for SignatureStatus {
             SignatureStatus::Invalid(why) => write!(f, "invalid ({why})"),
             SignatureStatus::Unavailable(why) => write!(f, "unavailable ({why})"),
         }
+    }
+}
+
+/// A freshness `Date` that came out of an `InRelease` whose signature is `Verified`.
+/// The field is private, and the only constructor needs both halves of the proof: a `Verified`
+/// status and a `fresh::SignedDate`, which only the strict parser inside `fresh` builds. So a write
+/// path can take `VerifiedDate` and cannot be handed a date from outside the signed region.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerifiedDate(fresh::SignedDate);
+
+impl VerifiedDate {
+    pub fn seconds(self) -> i64 {
+        self.0.seconds()
+    }
+}
+
+impl SignatureStatus {
+    /// The date is usable as a trusted freshness value only when this status is `Verified`.
+    pub fn verified_date(&self, date: fresh::SignedDate) -> Option<VerifiedDate> {
+        self.is_verified().then_some(VerifiedDate(date))
     }
 }
 
@@ -446,5 +468,44 @@ mod tests {
         let keyring = Path::new("/definitely/not/keyring.gpg");
         let status = verify_inrelease_with(b"-----BEGIN PGP SIGNED MESSAGE-----\n", gpgv, keyring);
         assert!(matches!(status, SignatureStatus::Unavailable(_)));
+    }
+
+    #[test]
+    fn verified_date_requires_a_verified_status() {
+        // The strict parse refuses a prefixed body, so no `SignedDate` exists to gate on at all:
+        let forged = "Date: Thu, 1 Jan 2099 00:00:00 UTC\n-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nOrigin: Ubuntu\nDate: Thu, 12 Nov 2026  4:23:38 UTC\n";
+        assert!(fresh::release_date(forged).is_err());
+        let signed = fresh::release_date("-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nDate: Thu, 12 Nov 2026  4:23:38 UTC\n").unwrap();
+        assert_eq!(
+            SignatureStatus::Verified
+                .verified_date(signed)
+                .map(|d| d.seconds()),
+            Some(1_794_457_418)
+        );
+        assert!(
+            SignatureStatus::Invalid("bad".into())
+                .verified_date(signed)
+                .is_none()
+        );
+        assert!(
+            SignatureStatus::Unavailable("missing".into())
+                .verified_date(signed)
+                .is_none()
+        );
+    }
+
+    /// Why the parser, not `gpgv`, has to enforce the signed region (P1-1): `gpgv` exits 0 on a
+    /// prefixed body, so verification alone reports `Verified` for data whose prefix it never signed.
+    #[test]
+    fn gpgv_accepts_a_prefixed_body() {
+        let Some(gpgv) = test_gpgv() else { return }; // existing helper: skips without a local gpgv
+        let keyring = fixture("ubuntu-archive-keyring.gpg");
+        let good = std::fs::read(fixture("noble-updates-InRelease")).unwrap();
+        let mut prefixed = b"Date: Thu, 1 Jan 2099 00:00:00 UTC\n".to_vec();
+        prefixed.extend_from_slice(&good);
+        assert_eq!(
+            verify_inrelease_with(&prefixed, &gpgv, &keyring),
+            SignatureStatus::Verified
+        );
     }
 }

@@ -88,13 +88,23 @@ if [ "$rc" = 0 ] && [[ "$got" == *"APT source inventory (read-only)"* ]] && [[ "
 
 # 11. Live: missing gpgv keeps ranking read-only usable but marks signatures unavailable.
 rc=0; got=$(run bridge ubuntu:24.04 sh -c 'mv /usr/bin/gpgv /usr/bin/gpgv.disabled 2>/dev/null || true; /apt-scout --no-geo --country LT --top 2' 2>&1) || rc=$?
-if [ "$rc" = 0 ] && [[ "$got" == *"signature"* ]] && [[ "$got" == *"unavailable"* ]] && [[ "$got" == *" 1  http"* ]]; then pass "missing gpgv -> unavailable signatures, ranking still works"; else fail "missing gpgv -> exit $rc: $(echo "$got" | head -8)"; fi
+if [ "$rc" = 0 ] && [[ "$got" == *"unavailable ("* ]] && [[ "$got" == *" 1  http"* ]]; then pass "missing gpgv -> unavailable signatures, ranking still works"; else fail "missing gpgv -> exit $rc: $(echo "$got" | head -8)"; fi
 
 # 12. Live (needs internet): real Launchpad + real mirrors, every supported Ubuntu release.
 #    Checks shape, not specific mirrors: a ranked table with at least one fresh mirror.
 for v in 20.04 22.04 24.04 26.04; do
   if [ $# -gt 0 ]; then case " $* " in *" $v "*) ;; *) continue ;; esac; fi
   rc=0; got=$(run bridge "ubuntu:$v" /apt-scout --country LT --top 3 2>&1) || rc=$?
-  if [ "$rc" = 0 ] && [[ "$got" == *"country Lithuania"* ]] && [[ "$got" == *"APT source inventory (read-only)"* ]] && [[ "$got" == *"source file: /etc/apt/"* ]] && [[ "$got" == *"signature"* ]] && [[ "$got" == *" 1  http"* ]]; then pass "ubuntu:$v live LT -> source inventory and ranked table"; else fail "ubuntu:$v live LT -> exit $rc: $(echo "$got" | head -6)"; fi
+  if [ "$rc" = 0 ] && [[ "$got" == *"country Lithuania"* ]] && [[ "$got" == *"APT source inventory (read-only)"* ]] && [[ "$got" == *"source file: /etc/apt/"* ]] && [[ "$got" == *" 1  http"* ]]; then pass "ubuntu:$v live LT -> source inventory and ranked table"; else fail "ubuntu:$v live LT -> exit $rc: $(echo "$got" | head -6)"; fi
 done
+
+# 13. Live: a real verified row. The base images have no ubuntu-keyring, so install the two
+#     dependencies the .deb declares before asserting the positive path. Exit 9 means that install
+#     failed, not that apt-scout is broken.
+rc=0; got=$(run bridge ubuntu:24.04 sh -c 'apt-get update -qq >/dev/null 2>&1; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gpgv ubuntu-keyring >/dev/null 2>&1 || { echo DEPENDENCY_INSTALL_FAILED; exit 9; }; /apt-scout --no-geo --country LT --top 3' 2>&1) || rc=$?
+if [ "$rc" = 0 ] && [[ "$got" == *"Reference InRelease signature: verified"* ]] && printf '%s\n' "$got" | grep -qE 'verified +[0-9]+m'; then
+  pass "live LT -> reference and at least one mirror verified"
+else
+  fail "live LT verified row -> exit $rc: $(echo "$got" | head -12)"
+fi
 exit $status
