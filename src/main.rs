@@ -6,6 +6,7 @@ mod fresh;
 mod geo;
 mod http;
 mod mirrors;
+mod plan;
 mod probe;
 pub mod sources;
 mod verify;
