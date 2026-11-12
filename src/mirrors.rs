@@ -1,6 +1,4 @@
 //! Mirror lists (see SPEC.md, Pipeline step 3): parsers are pure and tested on saved fixtures.
-// ponytail: not called by main yet; remove this allow when the pipeline uses the module.
-#![allow(dead_code)]
 
 use std::fmt;
 

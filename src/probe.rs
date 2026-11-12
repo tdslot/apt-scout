@@ -1,6 +1,5 @@
 //! Probe one mirror (SPEC.md, Pipeline step 7): freshness from the head of `-updates`/`-security`
 //! InRelease, connect latency, and throughput on a ranged sample. Uses `Fetch`, so it is testable.
-#![allow(dead_code)] // ponytail: not called by main yet; remove this allow when the pipeline uses it.
 
 use std::fmt;
 
@@ -16,13 +15,16 @@ const MIN_SAMPLE: u64 = 64 * 1024;
 #[derive(Debug, PartialEq)]
 pub struct Outcome {
     pub url: String,
-    /// Reference minus mirror `-updates` Date, clamped to 0.
-    pub updates_lag_secs: i64,
+    /// The mirror's `-updates` InRelease `Date` (Unix seconds). Lag is computed by the caller against
+    /// the reference, or against the newest candidate when the reference is unreachable.
+    pub updates_date: i64,
     /// Informational only (SPEC step 8): `None` when the mirror has no `-security` InRelease.
-    pub security_lag_secs: Option<i64>,
+    pub security_date: Option<i64>,
     /// Time of the first request: DNS, TCP, TLS and one round trip (not pure connect latency).
     pub latency_ms: u64,
     pub throughput_bps: u64,
+    /// Set when the mirror answered from a different host than the one listed (SPEC step 7).
+    pub redirected_to: Option<String>,
 }
 
 #[derive(Debug)]
@@ -49,14 +51,14 @@ pub struct Reference {
     pub security: i64,
 }
 
-fn date_of(net: &dyn Fetch, base: &str, suite: &str) -> Result<(i64, u64), String> {
+fn date_of(net: &dyn Fetch, base: &str, suite: &str) -> Result<(i64, u64, String), String> {
     let url = format!("{}/dists/{suite}/InRelease", base.trim_end_matches('/'));
     let got = net
         .get(&url, HEAD_BYTES, Some((0, HEAD_BYTES - 1)))
         .map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&got.body);
     let date = fresh::release_date(&text).map_err(|e| format!("{url}: {e}"))?;
-    Ok((date, got.elapsed.as_millis() as u64))
+    Ok((date, got.elapsed.as_millis() as u64, got.final_url))
 }
 
 #[derive(Debug, PartialEq)]
@@ -102,14 +104,13 @@ pub fn probe(
     mirror: &str,
     codename: &str,
     arch: &str,
-    reference: &Reference,
 ) -> Result<Outcome, ProbeError> {
     let base = mirror.trim_end_matches('/');
-    let (updates, latency_ms) =
+    let (updates, latency_ms, updates_final) =
         date_of(net, base, &format!("{codename}-updates")).map_err(ProbeError::BadUpdates)?;
-    let security_lag_secs = date_of(net, base, &format!("{codename}-security"))
+    let security_date = date_of(net, base, &format!("{codename}-security"))
         .ok()
-        .map(|(d, _)| fresh::lag(reference.security, d));
+        .map(|(d, _, _)| d);
 
     let sample_url = format!("{base}/dists/{codename}/main/binary-{arch}/Packages.xz");
     let sample = net
@@ -128,11 +129,27 @@ pub fn probe(
 
     Ok(Outcome {
         url: base.to_string(),
-        updates_lag_secs: fresh::lag(reference.updates, updates),
-        security_lag_secs,
+        updates_date: updates,
+        security_date,
+        redirected_to: other_host(base, &updates_final),
         latency_ms,
         throughput_bps,
     })
+}
+
+/// `Some(host)` when `final_url` is on a different host than the listed mirror `base`.
+fn other_host(base: &str, final_url: &str) -> Option<String> {
+    let host = |u: &str| {
+        u.split_once("://")
+            .map(|(_, r)| r)
+            .unwrap_or(u)
+            .split(['/', ':'])
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+    };
+    let (a, b) = (host(base), host(final_url));
+    (a != b).then_some(b)
 }
 
 #[cfg(test)]
@@ -215,16 +232,12 @@ mod tests {
                 Ok(XZ_OK),
             ),
         ]);
-        let o = probe(
-            &c,
-            "http://m.example/ubuntu/",
-            "noble",
-            "amd64",
-            &reference(),
-        )
-        .unwrap();
-        assert_eq!(o.updates_lag_secs, 0);
-        assert_eq!(o.security_lag_secs, Some(0));
+        let o = probe(&c, "http://m.example/ubuntu/", "noble", "amd64").unwrap();
+        assert_eq!(fresh::lag(reference().updates, o.updates_date), 0);
+        assert_eq!(
+            o.security_date.map(|d| fresh::lag(reference().security, d)),
+            Some(0)
+        );
         assert_eq!(o.url, "http://m.example/ubuntu");
         assert!(o.throughput_bps > 0);
     }
@@ -245,16 +258,10 @@ mod tests {
                 Ok(XZ_OK),
             ),
         ]);
-        let o = probe(
-            &c,
-            "http://m.example/ubuntu",
-            "noble",
-            "amd64",
-            &reference(),
-        )
-        .unwrap();
-        assert_eq!(o.updates_lag_secs, 6 * 3600 + 17 * 60 + 5); // 04:23:38 - 22:06:33 the day before
-        assert!(!fresh::is_stale(o.updates_lag_secs));
+        let o = probe(&c, "http://m.example/ubuntu", "noble", "amd64").unwrap();
+        let lag = fresh::lag(reference().updates, o.updates_date);
+        assert_eq!(lag, 6 * 3600 + 17 * 60 + 5); // 04:23:38 - 22:06:33 the day before
+        assert!(!fresh::is_stale(lag));
     }
 
     #[test]
@@ -273,15 +280,23 @@ mod tests {
                 Ok(XZ_OK),
             ),
         ]);
-        let o = probe(
-            &c,
-            "http://m.example/ubuntu",
-            "noble",
-            "amd64",
-            &reference(),
-        )
-        .unwrap();
-        assert_eq!(o.security_lag_secs, None);
+        let o = probe(&c, "http://m.example/ubuntu", "noble", "amd64").unwrap();
+        assert_eq!(o.security_date, None);
+    }
+
+    #[test]
+    fn redirect_to_another_host_is_reported() {
+        assert_eq!(
+            other_host("http://a.example/ubuntu", "http://b.example/ubuntu/dists/x"),
+            Some("b.example".to_string())
+        );
+        assert_eq!(
+            other_host(
+                "http://A.example/ubuntu",
+                "https://a.example/ubuntu/dists/x"
+            ),
+            None
+        );
     }
 
     #[test]
@@ -300,14 +315,7 @@ mod tests {
                 Ok(b"<html>404 not found</html>"),
             ),
         ]);
-        let e = probe(
-            &c,
-            "http://m.example/ubuntu",
-            "noble",
-            "amd64",
-            &reference(),
-        )
-        .unwrap_err();
+        let e = probe(&c, "http://m.example/ubuntu", "noble", "amd64").unwrap_err();
         assert!(matches!(e, ProbeError::BadSample(_)), "{e}");
         assert!(e.to_string().contains("did not return an xz file"), "{e}");
     }
@@ -329,13 +337,7 @@ mod tests {
             ),
         ]);
         assert!(matches!(
-            probe(
-                &c,
-                "http://m.example/ubuntu",
-                "noble",
-                "amd64",
-                &reference()
-            ),
+            probe(&c, "http://m.example/ubuntu", "noble", "amd64",),
             Err(ProbeError::BadSample(_))
         ));
     }
@@ -347,13 +349,7 @@ mod tests {
             Err(404),
         )]);
         assert!(matches!(
-            probe(
-                &c,
-                "http://m.example/ubuntu",
-                "noble",
-                "amd64",
-                &reference()
-            ),
+            probe(&c, "http://m.example/ubuntu", "noble", "amd64",),
             Err(ProbeError::BadUpdates(_))
         ));
     }
@@ -364,14 +360,7 @@ mod tests {
             "http://m.example/ubuntu/dists/noble-updates/InRelease",
             Ok(b"<html>not a release</html>"),
         )]);
-        let e = probe(
-            &c,
-            "http://m.example/ubuntu",
-            "noble",
-            "amd64",
-            &reference(),
-        )
-        .unwrap_err();
+        let e = probe(&c, "http://m.example/ubuntu", "noble", "amd64").unwrap_err();
         assert!(e.to_string().contains("no 'Date:' header"), "{e}");
     }
 
@@ -388,13 +377,7 @@ mod tests {
             ),
         ]);
         assert!(matches!(
-            probe(
-                &c,
-                "http://m.example/ubuntu",
-                "noble",
-                "amd64",
-                &reference()
-            ),
+            probe(&c, "http://m.example/ubuntu", "noble", "amd64",),
             Err(ProbeError::Unreachable(_))
         ));
     }

@@ -1,5 +1,4 @@
 //! The only module that talks to the network (SPEC.md: HTTP is injected so tests use canned answers).
-#![allow(dead_code)] // ponytail: not called by main yet; remove this allow when the pipeline uses it.
 
 use std::fmt;
 use std::io::Read;
@@ -44,7 +43,6 @@ impl fmt::Display for HttpError {
 #[derive(Debug)]
 pub struct Fetched {
     pub body: Vec<u8>,
-    pub status: u16,
     pub elapsed: Duration,
     pub final_url: String,
 }
@@ -210,7 +208,6 @@ impl Fetch for Net {
             }
             return Ok(Fetched {
                 body,
-                status,
                 elapsed: began.elapsed(),
                 final_url: url,
             });
@@ -232,7 +229,6 @@ impl Fetch for Canned {
         match self.0.iter().find(|(u, _)| *u == url) {
             Some((_, Ok(body))) => Ok(Fetched {
                 body: body.to_vec(),
-                status: 200,
                 elapsed: Duration::from_millis(5),
                 final_url: url.into(),
             }),

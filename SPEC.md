@@ -163,7 +163,9 @@ Principle: the program solves its own problems when safe, and otherwise says exa
 
 ## Implementation status
 
-Implemented and tested: os-release detection (Ubuntu family, codename), Launchpad and `mirrors.ubuntu.com` list parsing, candidate URL hygiene, `-updates`/`-security` InRelease dates, lag, ranking, per-mirror probing, and a read-only `--country <CC> [--top N] [--https-only] [--list]` run. Not yet implemented: geolocation and AS (`--country` is required), disk cache, `mirrors.ubuntu.com` fallback wiring, apply/backup/restore, TUI.
+Implemented and tested: os-release detection (Ubuntu family, codename), architecture check (`dpkg`, amd64/i386 only), Launchpad and `mirrors.ubuntu.com` list parsing with the SPEC fallback order, candidate URL hygiene (including a resolver that drops private addresses), `-updates`/`-security` InRelease dates, lag, ranking, per-mirror probing with an xz sample check, reference fallback and exit 4 when the release left the archive, and a read-only `--country <CC> [--top N] [--https-only] [--list]` run.
+
+Not yet implemented: geolocation and AS (`--country` is required, so no AS tie-break), disk cache and built-in snapshot, `--refresh`/`--no-geo`, apply/backup/restore, TUI. Probing runs all candidates in parallel, so their bandwidth shares the link and throughput numbers are relative.
 
 ## Out of scope (v1)
 

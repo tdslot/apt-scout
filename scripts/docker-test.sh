@@ -68,7 +68,7 @@ rc=0; got=$(run none ubuntu:24.04 /apt-scout --bogus 2>&1) || rc=$?
 
 # 6. Offline: a network failure names the URL and the cause and exits 1 (no panic, no hang).
 rc=0; got=$(run none ubuntu:24.04 /apt-scout --country LT 2>&1) || rc=$?
-if [ "$rc" = 1 ] && [[ "$got" == *"cannot load the mirror list"* ]] && [[ "$got" == *"launchpad.net"* ]]; then pass "no network -> clear error, exit 1"; else fail "no network -> exit $rc: $got"; fi
+if [ "$rc" = 1 ] && [[ "$got" == *"no mirror list is available"* ]] && [[ "$got" == *"launchpad.net"* ]] && [[ "$got" == *"mirrors.ubuntu.com/LT.txt"* ]]; then pass "no network -> clear error, exit 1"; else fail "no network -> exit $rc: $got"; fi
 
 # 7. Live (needs internet): real Launchpad + real mirrors, every supported Ubuntu release.
 #    Checks shape, not specific mirrors: a ranked table with at least one fresh mirror.
