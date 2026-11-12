@@ -81,6 +81,8 @@ When the user requests a durable behavior change, record it here or in the relev
 - Chat language: agent talks to the user in Lithuanian; project artifacts stay English
 - Language: all project artifacts are English only: AGENTS.md, skills, rules, specs, docs, code comments, commit messages, PR text, CLI output, error messages
 - Spec-driven development (SDD) allowed: keep a single English `SPEC.md` at the repo root if behavior needs a spec; code follows the spec
+- Default model for this agent and every subagent it launches: `deepseek/deepseek-flash` (user preference: DeepSeek V4.1 Flash). Pass it with `model:` on delegation so it does not drift; change it only on an explicit request.
+- Delivery team lives in the repo, not in the global config: `.pi/agents/` holds `apt-scout-lead` (owns the ROADMAP loop and merges), `apt-scout-architect` (owns SPEC/ROADMAP/plans), `apt-scout-coder` (the only code writer), `apt-scout-reviewer` (independent code review) and `apt-scout-security` (trust-boundary audit). Edit them here. The lead is the only agent that merges into `develop`, and only through a PR with green checks plus a review and security verdict.
 
 ## Project
 
