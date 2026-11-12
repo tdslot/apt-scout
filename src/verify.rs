@@ -82,6 +82,8 @@ fn verify_inrelease_with(data: &[u8], gpgv: &Path, keyring: &Path) -> SignatureS
     verify_inrelease_with_timeout(data, gpgv, keyring, GPGV_TIMEOUT)
 }
 
+/// Verify with explicit tool and keyring paths. The private directory is also gpgv's homedir, so no
+/// user GnuPG configuration or default keyring can influence the result.
 fn verify_inrelease_with_timeout(
     data: &[u8],
     gpgv: &Path,
@@ -136,7 +138,7 @@ fn verify_inrelease_with_timeout(
     let mut file = match options.open(&path) {
         Ok(file) => file,
         Err(e) => {
-            let _ = std::fs::remove_dir(&directory);
+            let _ = std::fs::remove_dir_all(&directory);
             return SignatureStatus::Unavailable(format!(
                 "cannot create verification temp file: {e}"
             ));
@@ -145,7 +147,7 @@ fn verify_inrelease_with_timeout(
     if let Err(e) = file.write_all(data).and_then(|_| file.sync_all()) {
         drop(file);
         let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_dir(&directory);
+        let _ = std::fs::remove_dir_all(&directory);
         return SignatureStatus::Unavailable(format!("cannot write verification temp file: {e}"));
     }
     drop(file);
@@ -155,6 +157,8 @@ fn verify_inrelease_with_timeout(
         .env("LC_ALL", "C")
         .arg("--status-fd")
         .arg("1")
+        .arg("--homedir")
+        .arg(&directory)
         .arg("--keyring")
         .arg(keyring)
         .arg(&path)
@@ -166,7 +170,7 @@ fn verify_inrelease_with_timeout(
         Ok(child) => child,
         Err(e) => {
             let _ = std::fs::remove_file(&path);
-            let _ = std::fs::remove_dir(&directory);
+            let _ = std::fs::remove_dir_all(&directory);
             return SignatureStatus::Unavailable(format!("cannot run {}: {e}", gpgv.display()));
         }
     };
@@ -174,7 +178,7 @@ fn verify_inrelease_with_timeout(
         let _ = child.kill();
         let _ = child.wait();
         let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_dir(&directory);
+        let _ = std::fs::remove_dir_all(&directory);
         return SignatureStatus::Unavailable("gpgv status pipe is unavailable".into());
     };
     let reader = match thread::Builder::new().spawn(move || {
@@ -196,7 +200,7 @@ fn verify_inrelease_with_timeout(
             let _ = child.kill();
             let _ = child.wait();
             let _ = std::fs::remove_file(&path);
-            let _ = std::fs::remove_dir(&directory);
+            let _ = std::fs::remove_dir_all(&directory);
             return SignatureStatus::Unavailable(format!("cannot read gpgv status output: {e}"));
         }
     };
@@ -210,7 +214,7 @@ fn verify_inrelease_with_timeout(
                 let _ = child.wait();
                 let _ = reader.join();
                 let _ = std::fs::remove_file(&path);
-                let _ = std::fs::remove_dir(&directory);
+                let _ = std::fs::remove_dir_all(&directory);
                 return SignatureStatus::Unavailable(format!(
                     "{} exceeded the {} second verification timeout",
                     gpgv.display(),
@@ -222,14 +226,14 @@ fn verify_inrelease_with_timeout(
                 let _ = child.wait();
                 let _ = reader.join();
                 let _ = std::fs::remove_file(&path);
-                let _ = std::fs::remove_dir(&directory);
+                let _ = std::fs::remove_dir_all(&directory);
                 return SignatureStatus::Unavailable(format!("cannot wait for gpgv: {e}"));
             }
         }
     };
     let output = reader.join();
     let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_dir(&directory);
+    let _ = std::fs::remove_dir_all(&directory);
     let output = match output {
         Ok(Ok(output)) if output.len() <= MAX_STATUS_BYTES as usize => output,
         Ok(Ok(_)) => {
@@ -344,23 +348,29 @@ mod tests {
         assert!(!status.is_verified());
     }
 
+    /// Write an executable fake `gpgv` script and a dummy keyring into a private temp directory.
     #[cfg(unix)]
-    #[test]
-    fn oversized_status_output_is_bounded_and_unavailable() {
+    fn fake_gpgv(tag: &str, script: &str) -> (PathBuf, PathBuf, PathBuf) {
         use std::os::unix::fs::PermissionsExt;
 
         let temp =
-            std::env::temp_dir().join(format!("apt-scout-test-output-{}", std::process::id()));
+            std::env::temp_dir().join(format!("apt-scout-test-{tag}-{}", std::process::id()));
         std::fs::create_dir(&temp).unwrap();
-        let fake_gpgv = temp.join("gpgv");
-        std::fs::write(
-            &fake_gpgv,
-            b"#!/bin/sh\ni=0\nwhile [ $i -lt 1100 ]; do printf '%1024s\\n' ''; i=$((i+1)); done\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&fake_gpgv, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let gpgv = temp.join("gpgv");
+        std::fs::write(&gpgv, script).unwrap();
+        std::fs::set_permissions(&gpgv, std::fs::Permissions::from_mode(0o700)).unwrap();
         let keyring = temp.join("keyring.gpg");
         std::fs::write(&keyring, b"test").unwrap();
+        (temp, gpgv, keyring)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn oversized_status_output_is_bounded_and_unavailable() {
+        let (temp, fake_gpgv, keyring) = fake_gpgv(
+            "output",
+            "#!/bin/sh\ni=0\nwhile [ $i -lt 1100 ]; do printf '%1024s\\n' ''; i=$((i+1)); done\n",
+        );
 
         let status = verify_inrelease_with_timeout(
             b"signed data",
@@ -377,15 +387,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_hung_verifier_is_killed_and_reported_unavailable() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let temp = std::env::temp_dir().join(format!("apt-scout-test-hang-{}", std::process::id()));
-        std::fs::create_dir(&temp).unwrap();
-        let fake_gpgv = temp.join("gpgv");
-        std::fs::write(&fake_gpgv, b"#!/bin/sh\nwhile :; do :; done\n").unwrap();
-        std::fs::set_permissions(&fake_gpgv, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let keyring = temp.join("keyring.gpg");
-        std::fs::write(&keyring, b"test").unwrap();
+        let (temp, fake_gpgv, keyring) = fake_gpgv("hang", "#!/bin/sh\nwhile :; do :; done\n");
 
         let started = Instant::now();
         let status = verify_inrelease_with_timeout(
@@ -396,6 +398,45 @@ mod tests {
         );
         assert!(matches!(status, SignatureStatus::Unavailable(_)));
         assert!(started.elapsed() < Duration::from_secs(2));
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_good_status_stream_is_verified() {
+        let (temp, gpgv, keyring) = fake_gpgv(
+            "goodsigs",
+            "#!/bin/sh\nprintf '%s\\n' '[GNUPG:] GOODSIG 1234 Ubuntu Archive Automatic Signing Key' '[GNUPG:] VALIDSIG 1234 5678'\nexit 0\n",
+        );
+        let status =
+            verify_inrelease_with_timeout(b"signed data", &gpgv, &keyring, Duration::from_secs(5));
+        assert_eq!(status, SignatureStatus::Verified);
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn errsig_with_a_zero_exit_is_invalid() {
+        let (temp, gpgv, keyring) = fake_gpgv(
+            "errsig",
+            "#!/bin/sh\nprintf '%s\\n' '[GNUPG:] ERRSIG 1234 1 8 00 1 1234 0'\nexit 0\n",
+        );
+        let status =
+            verify_inrelease_with_timeout(b"signed data", &gpgv, &keyring, Duration::from_secs(5));
+        assert!(matches!(status, SignatureStatus::Invalid(_)), "{status}");
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn good_lines_with_a_nonzero_exit_are_invalid() {
+        let (temp, gpgv, keyring) = fake_gpgv(
+            "exit1",
+            "#!/bin/sh\nprintf '%s\\n' '[GNUPG:] GOODSIG 1234 Ubuntu Archive Automatic Signing Key' '[GNUPG:] VALIDSIG 1234 5678'\nexit 1\n",
+        );
+        let status =
+            verify_inrelease_with_timeout(b"signed data", &gpgv, &keyring, Duration::from_secs(5));
+        assert!(matches!(status, SignatureStatus::Invalid(_)), "{status}");
         std::fs::remove_dir_all(temp).unwrap();
     }
 
