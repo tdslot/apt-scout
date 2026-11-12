@@ -131,7 +131,7 @@ pub fn parse_legacy(
             entries.push(invalid(file, i + 1, Format::Legacy, "missing URI".into()));
             continue;
         };
-        let Some(suite) = words.next() else {
+        let Some(suite) = words.next().filter(|w| !w.starts_with('#')) else {
             entries.push(invalid(file, i + 1, Format::Legacy, "missing suite".into()));
             continue;
         };
@@ -579,17 +579,19 @@ mod tests {
     #[test]
     fn legacy_reports_malformed_and_third_party_sources() {
         let e = parse_legacy(
-            "deb\ndeb http://example.org/ubuntu noble main\ndeb http://archive.ubuntu.com:bad/ubuntu noble main\ndeb https://archive.ubuntu.com:99999/ubuntu noble main\ndeb https://user@archive.ubuntu.com/ubuntu noble main\n",
+            "deb\ndeb http://archive.ubuntu.com/ubuntu # missing suite\ndeb http://example.org/ubuntu noble main\ndeb http://archive.ubuntu.com:bad/ubuntu noble main\ndeb https://archive.ubuntu.com:99999/ubuntu noble main\ndeb https://user@archive.ubuntu.com/ubuntu noble main\n",
             Path::new("x.list"),
             HOSTS,
             false,
         );
         assert!(e[0].issue.as_deref().unwrap().contains("missing URI"));
-        assert!(!e[1].rewritable[0]);
-        assert!(e[1].issue.as_deref().unwrap().contains("not an official"));
+        assert!(e[1].issue.as_deref().unwrap().contains("missing suite"));
+        assert!(e[1].uris.is_empty());
         assert!(!e[2].rewritable[0]);
+        assert!(e[2].issue.as_deref().unwrap().contains("not an official"));
         assert!(!e[3].rewritable[0]);
         assert!(!e[4].rewritable[0]);
+        assert!(!e[5].rewritable[0]);
         let old = parse_legacy(
             "deb mirror://mirrors.ubuntu.com/mirrors.txt noble main\n",
             Path::new("old.list"),
