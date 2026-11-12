@@ -65,7 +65,7 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, and D8 PR #23
 
 - [ ] **D18 — BLOCKED by D17.** Add custom URL (`Insert`) validation and isolated probe flow. [SPEC: TUI, Apply]
 - [ ] **D19 — BLOCKED by D18.** Add current-run candidate removal (`Delete`) and confirmation. [SPEC: TUI]
-- [ ] **D20 — BLOCKED by D19.** Write and package the comprehensive Linux man page at `man/apt-scout.1`, with `man apt-scout`, all implemented options/modes, security/privacy, files/errors/exit status, and practical examples/recipes. Include it in `.deb` as `/usr/share/man/man1/apt-scout.1` and in the release `.tar.gz`; validate formatting and query it in an Ubuntu container. [SPEC: CLI, Testing]
+- [ ] **D20 — BLOCKED by D19.** Write and package the comprehensive Linux man page at `man/apt-scout.1`, with `man apt-scout`, all implemented options/modes, security/privacy, files/errors/exit status, and practical examples/recipes. Include it in `.deb` as `/usr/share/man/man1/apt-scout.1` and in the release `.tar.gz` with tarball installation instructions; validate formatting and query it in an Ubuntu container. [SPEC: CLI, Testing]
 - [ ] **D21 — BLOCKED by D20 and D16.** Re-run laptop visual inspection and Ubuntu Docker tests; Oracle final audit against original goal and all of `SPEC.md`.
 
 ## Change log
