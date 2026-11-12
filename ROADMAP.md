@@ -22,27 +22,31 @@ Deliver a safe Ubuntu-family CLI that discovers and ranks mirrors, lets the user
 
 ## Milestone 1 — Read-only discovery and ranking
 
-**Status: IMPLEMENTED; AUDIT REQUIRED** — feature work merged through PRs #13–#16, but the new formal Oracle milestone audit is still outstanding.
+**Status: IMPLEMENTED; AUDIT FINDINGS IN PROGRESS** — feature work merged through PRs #13–#16. Oracle audit completed. Execute D6a first, then D6b in an isolated worktree; D7 follows D6a. D6c blocks all apt writes.
 
 - [x] D1. Detect Ubuntu family, release codename, and supported architecture. [SPEC: Scope, Pipeline 1]
 - [x] D2. Parse and validate Launchpad mirror candidates, with `mirrors.ubuntu.com` fallback. [SPEC: Pipeline 3–4]
 - [x] D3. Probe mirrors, measure freshness/speed, rank, and expose read-only CLI. [SPEC: Pipeline 6–9]
 - [x] D4. Detect country/AS optionally; support `--no-geo`; add bounded, validated Team Cymru AS lookups and AS tie-break. [SPEC: Pipeline 2, 5]
 - [x] D5. Add local Docker runtime coverage and CI checks. [SPEC: Testing]
-- [ ] **D6 — READY.** Run the first formal Oracle audit against the original goal, `SPEC.md`, delivered code, tests, and real-system evidence; record accepted gaps in `SPEC.md` and revise the next milestone backlog. [SPEC: all]
+- [x] D6. Formal Oracle audit completed. Accepted requirements recorded in SPEC and tasks D6a–D6c. [SPEC: Pipeline preflight, Pipeline 9, Security note, Apply testing]
+- [ ] **D6a — IN PROGRESS (`fix/preflight-validation`).** Reorder preflight so invalid/unknown `--country` and unsupported architecture fail before geo, HTTP, or DNS; add regression coverage proving no network access. [SPEC: Pipeline preflight]
+- [ ] **D6b — BLOCKED by D6a; then READY in isolated worktree.** Show mirror AS and same/different/unknown AS status in CLI output; test known and unavailable AS cases. [SPEC: Pipeline 9]
+- [ ] **D6c — BLOCKED by D7 and D8.** Decide keyring/signature implementation and add fail-closed `InRelease` signature checks before any apply decision. No apt write task may start before D6c is implemented. [SPEC: Security note, Apply]
 
-Merged PRs: #13, #14, #15, #16. Latest local evidence: 77 unit tests, fmt, Clippy `-D warnings`, `cargo deny check`, and Docker matrix 15/15 passed before PR #16 merge; PR #16 required CI and final review passed. Formal milestone audit has not run yet.
+
+Merged PRs: #13, #14, #15, #16. Latest evidence before PR #16 merge: 77 unit tests, fmt, Clippy `-D warnings`, `cargo deny check`, Docker 15/15; PR #16 required CI and final review passed. Oracle audit run 2026-11-12; see D6a–D6c.
 
 ## Milestone 2 — Apt source discovery, apply, backup, restore
 
-**Status: BLOCKED** — wait for D6 Oracle audit; D7 remains the first planned implementation task unless the audit changes scope or order.
+**Status: BLOCKED by D6a** — read-only source inventory/parsing may begin after preflight fix; apt writes remain separately blocked by D6c.
 
-- [ ] **D7 — BLOCKED by D6.** Build source-file inventory and pure parsers for legacy `.list` and deb822 `.sources`; identify official Ubuntu archive URI tokens only, including Pop!_OS rules. Show inspected/ignored entries. [SPEC: Apply, no-rewritable-URI rule]
+- [ ] **D7 — BLOCKED by D6a (read-only only).** Build source-file inventory and pure parsers for legacy `.list` and deb822 `.sources`; identify official Ubuntu archive URI tokens only, including Pop!_OS rules. Show inspected/ignored entries. [SPEC: Apply, no-rewritable-URI rule]
 - [ ] **D8 — BLOCKED by D7.** Implement pure URI rewrite with byte-preserving behavior for comments, options, non-target repositories, disabled stanzas, and security suites. Add fixture and round-trip tests. [SPEC: Apply]
-- [ ] **D9 — BLOCKED by D8.** Implement safe backup manifest and atomic apply: no symlink following, preserve owner/mode, fsync, abort before writes on any backup failure. [SPEC: Apply]
+- [ ] **D9 — BLOCKED by D8 and D6c.** Implement safe backup manifest and atomic apply: no symlink following, preserve owner/mode, fsync, abort before writes on any backup failure. [SPEC: Apply]
 - [ ] **D10 — BLOCKED by D9.** Implement validated `--restore` from newest backup; test malformed manifests, path traversal, missing files, and rollback behavior. [SPEC: Apply]
-- [ ] **D11 — BLOCKED by D10.** Add CLI dry-run diff and explicit root/confirmation behavior; Docker-test actual source rewrite and restore in Ubuntu images. [SPEC: CLI, Apply, Testing]
-- [ ] **D12 — BLOCKED by D11.** Oracle milestone audit; reconcile gaps in `SPEC.md`; update roadmap.
+- [ ] **D11 — BLOCKED by D10 and D6c.** Add CLI dry-run diff and explicit root/confirmation behavior; Docker-test actual source rewrite and restore in Ubuntu images. [SPEC: CLI, Apply, Testing]
+- [ ] **D12 — BLOCKED by D6a, D6b, D7–D11.** Oracle milestone audit; reconcile gaps in `SPEC.md`; update roadmap.
 
 ## Milestone 3 — TUI core and laptop inspection
 
@@ -64,4 +68,4 @@ Merged PRs: #13, #14, #15, #16. Latest local evidence: 77 unit tests, fmt, Clipp
 
 ## Change log
 
-- 2026-11-12: Milestone 1 recorded complete from merged PRs #13–#16. Milestone 2 is next; no apply/write behavior is implemented yet.
+- 2026-11-12: PR #17 established this roadmap and cycle. Formal Milestone 1 Oracle audit found preflight ordering and AS output gaps, plus the unsigned-InRelease write trust boundary. Manager decision: finish D6a, then D6b in an isolated worktree; D7 starts after D6a and is read-only. D6c blocks all apt writes. All apt-write tests must run in disposable Ubuntu containers with isolated `/etc/apt`; never mount the host path.

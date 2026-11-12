@@ -80,6 +80,26 @@ fn validate_geo_args(args: &Args) -> Result<(), String> {
     if args.no_geo && args.country.is_none() {
         return Err("--no-geo needs --country <CC>, because nothing else can tell which country you are in. Example: --no-geo --country LT".to_string());
     }
+    if let Some(country) = args.country.as_deref()
+        && countries::launchpad_name(country).is_none()
+    {
+        return Err(format!(
+            "unknown country code '{country}'; Launchpad lists mirrors in 82 countries, for example LT, NO, DE, GB, US"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_preflight(args: &Args, arch: &str) -> Result<(), (u8, String)> {
+    validate_geo_args(args).map_err(|e| (2, e))?;
+    if !matches!(arch, "amd64" | "i386") {
+        return Err((
+            4,
+            format!(
+                "architecture '{arch}' uses ports.ubuntu.com, which has no mirrors to choose from; apt-scout supports amd64 and i386 only."
+            ),
+        ));
+    }
     Ok(())
 }
 
@@ -99,7 +119,8 @@ fn run() -> Result<(), (u8, String)> {
     let codename = d.codename.ok_or_else(|| {
         (1, format!("{source} contains neither UBUNTU_CODENAME nor VERSION_CODENAME, so the Ubuntu release cannot be determined. Check that the distribution's os-release file is intact; report this error with its ID and codename fields at https://github.com/tdslot/apt-scout/issues."))
     })?;
-    validate_geo_args(&args).map_err(|e| (2, e))?;
+    let arch = architecture()?;
+    validate_preflight(&args, &arch)?;
     let net = Net::new();
     // Geolocation is optional (SPEC.md, Resilience): failures are reported and the run continues.
     let mut geo = geo::Geo::default();
@@ -132,7 +153,6 @@ fn run() -> Result<(), (u8, String)> {
             format!("unknown country code '{country}'; Launchpad lists mirrors in 82 countries, for example LT, NO, DE, GB, US"),
         )
     })?;
-    let arch = architecture()?;
 
     let (mut cands, list_source) = load_candidates(&net, &country, country_name, args.https_only)?;
     // Different list sources can name the same mirror twice (with and without a trailing slash).
@@ -484,6 +504,27 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
     use crate::http::Canned;
+
+    #[test]
+    fn preflight_rejects_unknown_country_and_architecture_before_network() {
+        let unknown = parse_args_from(["--country", "ZZ"].into_iter().map(str::to_string)).unwrap();
+        let (code, msg) = validate_preflight(&unknown, "amd64").unwrap_err();
+        assert_eq!(code, 2);
+        assert!(msg.contains("unknown country code 'ZZ'"));
+
+        let unsupported =
+            parse_args_from(["--country", "LT"].into_iter().map(str::to_string)).unwrap();
+        let (code, msg) = validate_preflight(&unsupported, "arm64").unwrap_err();
+        assert_eq!(code, 4);
+        assert!(msg.contains("architecture 'arm64'"));
+    }
+
+    #[test]
+    fn preflight_accepts_supported_country_and_architecture() {
+        let args = parse_args_from(["--country", "LT"].into_iter().map(str::to_string)).unwrap();
+        assert!(validate_preflight(&args, "amd64").is_ok());
+        assert!(validate_preflight(&args, "i386").is_ok());
+    }
 
     #[test]
     fn no_geo_requires_country() {
