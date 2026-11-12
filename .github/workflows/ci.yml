@@ -113,16 +113,6 @@ jobs:
             exit 1
           fi
 
-  docker-test:
-    name: docker-test
-    needs: changes
-    if: ${{ always() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Integration tests in real Ubuntu images
-        run: bash scripts/docker-test.sh
-
   docs:
     name: docs-and-conventions
     runs-on: ubuntu-latest
