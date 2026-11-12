@@ -85,7 +85,7 @@ When the user requests a durable behavior change, record it here or in the relev
 ## Project
 
 - `apt-scout`: Rust binary crate (edition 2024), no dependencies yet
-- Purpose: standalone Rust CLI (no Python/runtime deps) doing what `nala fetch` does, for Pop!_OS/Ubuntu without installing nala
+- Purpose: standalone Rust CLI (no Python/runtime deps) doing what `nala fetch` does, for Ubuntu and derivatives (Pop!_OS, Mint) without installing nala
 - Flow: detect server country and AS (optional; never fatal) -> fetch Launchpad mirror list (https://launchpad.net/ubuntu/+archivemirrors) -> filter by country -> probe latency/speed -> rewrite apt sources (`/etc/apt/sources.list` or `/etc/apt/sources.list.d/*.sources`) to fastest mirror
 - Constraints: backup apt sources before write; root needed only for write; prefer rustls over openssl; static/musl-friendly
 - Reference: https://github.com/volitank/nala (`nala fetch`)
