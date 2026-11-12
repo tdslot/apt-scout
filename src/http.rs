@@ -43,7 +43,11 @@ impl fmt::Display for HttpError {
 #[derive(Debug)]
 pub struct Fetched {
     pub body: Vec<u8>,
+    /// Whole call: DNS, TCP, TLS, request, redirects and body read. Use it for throughput only.
     pub elapsed: Duration,
+    /// Headers of the final hop: DNS, TCP, TLS and one round trip, before any body byte is read.
+    /// Redirect hops are excluded; on a reused connection this is close to one round trip.
+    pub ttfb: Duration,
     pub final_url: String,
 }
 
@@ -163,9 +167,11 @@ impl Fetch for Net {
             if let Some((from, to)) = range {
                 req = req.header("Range", format!("bytes={from}-{to}"));
             }
+            let hop_began = Instant::now();
             let mut resp = req
                 .call()
                 .map_err(|e| HttpError::Transport(e.to_string(), url.clone()))?;
+            let ttfb = hop_began.elapsed();
             let status = resp.status().as_u16();
             if (300..400).contains(&status) {
                 let loc = resp
@@ -209,6 +215,7 @@ impl Fetch for Net {
             return Ok(Fetched {
                 body,
                 elapsed: began.elapsed(),
+                ttfb,
                 final_url: url,
             });
         }
@@ -230,6 +237,7 @@ impl Fetch for Canned {
             Some((_, Ok(body))) => Ok(Fetched {
                 body: body.to_vec(),
                 elapsed: Duration::from_millis(5),
+                ttfb: Duration::from_millis(5),
                 final_url: url.into(),
             }),
             Some((_, Err(code))) => Err(HttpError::Status(*code, url.into())),

@@ -86,11 +86,15 @@ if [ "$rc" = 1 ] && [[ "$got" == *"no mirror list is available"* ]] && [[ "$got"
 rc=0; got=$(run bridge ubuntu:24.04 sh -c 'rm -f /etc/apt/sources.list; rm -rf /etc/apt/sources.list.d; mkdir -p /etc/apt/sources.list.d; printf "deb https://packages.example.org/ubuntu noble main\\n" > /etc/apt/sources.list.d/third-party.list; /apt-scout --no-geo --country LT' 2>&1) || rc=$?
 if [ "$rc" = 0 ] && [[ "$got" == *"APT source inventory (read-only)"* ]] && [[ "$got" == *"not an official Ubuntu archive"* ]] && [[ "$got" == *"No official Ubuntu apt source URI can be changed"* ]] && [[ "$got" != *"baseline"* ]] && [[ "$got" != *"ranked"* ]]; then pass "third-party-only apt sources -> stop before probes"; else fail "third-party-only sources -> exit $rc: $(echo "$got" | head -8)"; fi
 
-# 11. Live (needs internet): real Launchpad + real mirrors, every supported Ubuntu release.
+# 11. Live: missing gpgv keeps ranking read-only usable but marks signatures unavailable.
+rc=0; got=$(run bridge ubuntu:24.04 sh -c 'mv /usr/bin/gpgv /usr/bin/gpgv.disabled 2>/dev/null || true; /apt-scout --no-geo --country LT --top 2' 2>&1) || rc=$?
+if [ "$rc" = 0 ] && [[ "$got" == *"signature"* ]] && [[ "$got" == *"unavailable"* ]] && [[ "$got" == *" 1  http"* ]]; then pass "missing gpgv -> unavailable signatures, ranking still works"; else fail "missing gpgv -> exit $rc: $(echo "$got" | head -8)"; fi
+
+# 12. Live (needs internet): real Launchpad + real mirrors, every supported Ubuntu release.
 #    Checks shape, not specific mirrors: a ranked table with at least one fresh mirror.
 for v in 20.04 22.04 24.04 26.04; do
   if [ $# -gt 0 ]; then case " $* " in *" $v "*) ;; *) continue ;; esac; fi
   rc=0; got=$(run bridge "ubuntu:$v" /apt-scout --country LT --top 3 2>&1) || rc=$?
-  if [ "$rc" = 0 ] && [[ "$got" == *"country Lithuania"* ]] && [[ "$got" == *"APT source inventory (read-only)"* ]] && [[ "$got" == *"source file: /etc/apt/"* ]] && [[ "$got" == *" 1  http"* ]]; then pass "ubuntu:$v live LT -> source inventory and ranked table"; else fail "ubuntu:$v live LT -> exit $rc: $(echo "$got" | head -6)"; fi
+  if [ "$rc" = 0 ] && [[ "$got" == *"country Lithuania"* ]] && [[ "$got" == *"APT source inventory (read-only)"* ]] && [[ "$got" == *"source file: /etc/apt/"* ]] && [[ "$got" == *"signature"* ]] && [[ "$got" == *" 1  http"* ]]; then pass "ubuntu:$v live LT -> source inventory and ranked table"; else fail "ubuntu:$v live LT -> exit $rc: $(echo "$got" | head -6)"; fi
 done
 exit $status
