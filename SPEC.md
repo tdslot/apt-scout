@@ -112,7 +112,7 @@ Third-party services change formats, add limits or become paid. The program must
 - Geolocation and AS are optional accelerators. If every source fails or returns something invalid, the run continues with the worldwide mirror list and ranks by measured freshness and speed. The failure is shown with the source name and reason; it is never silent and never fatal.
 - Core data comes from sources the project depends on anyway: the Ubuntu archive (`InRelease`), Launchpad mirror list, DNS. No account, key or paid tier is needed anywhere.
 - Parsers reject unexpected shapes instead of guessing, and report which field was missing.
-- Weekly contract check (GitHub Actions `schedule`, not a required check): fetch each live source once, check that the fields the parser needs are still present, and open an issue only after two consecutive failures (runner IPs can be rate limited by individual services). Scheduled workflows on public repos are disabled after 60 days without repository activity; the check is advisory.
+- Weekly contract check (`.github/workflows/source-contract.yml` runs `.github/scripts/check-sources.sh`; the script can be run locally; not a required check): fetch each live source once, check that the fields the parser needs are still present, and open an issue only after two consecutive failures (runner IPs can be rate limited by individual services). Scheduled workflows on public repos are disabled after 60 days without repository activity; the check is advisory.
 
 ## Errors and self-healing
 
