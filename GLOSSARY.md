@@ -12,6 +12,12 @@
 
 **Freshness**: A mirror is fresh when its `<codename>-updates` lag is within `MAX_LAG` (24 hours). The release pocket is not compared and `-security` lag is informational. Stale mirrors are rejected; lagging but fresh mirrors rank lower.
 
+**verified** (signature status): The `<codename>-updates` `InRelease` carries a good OpenPGP signature from the Ubuntu archive keyring. The only status a write may trust.
+
+**invalid** (signature status): The `InRelease` was readable but is unsigned, altered, or signed by an unknown key.
+
+**unavailable** (signature status): Verification could not run: `gpgv` or the keyring is missing, the file is over the size limit, or the check timed out or failed to execute. Ranking still works; a write does not.
+
 **Server AS**: The autonomous system of the machine running apt-scout, as reported by the first geolocation source that answers.
 
 **Geo source**: One of the sources tried in order to learn the server's country (Canonical geoip, `ifconfig.co`, `ipinfo.io`, Cloudflare trace) or AS (Team Cymru DNS, RIPEstat).
