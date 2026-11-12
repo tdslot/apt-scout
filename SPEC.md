@@ -4,7 +4,8 @@ Standalone Rust CLI. Picks the fastest, fresh, nearby Ubuntu archive mirror and 
 
 ## Scope (v1)
 
-- Ubuntu and derivatives (Pop!_OS, Mint), detected from `/etc/os-release` `ID` / `ID_LIKE`.
+- Ubuntu and derivatives, detected from `/etc/os-release` `ID` / `ID_LIKE`. The codename is `UBUNTU_CODENAME` when present, otherwise `VERSION_CODENAME`: Linux Mint reports `VERSION_CODENAME=wilma` but apt uses Ubuntu's `noble`.
+- Pop!_OS (`ID=pop`) uses System76's `apt.pop-os.org/ubuntu`, not `archive.ubuntu.com`. v1 recognises `ID=pop` in step 1, before any network work, and exits 4 with a message that names the System76 archive and explains that Pop!_OS sources are not rewritten. Rewriting Pop!_OS sources is out of scope until it can be verified on a real installation.
 - Debian: out of scope (different mirror list). Unsupported distro -> exit with clear error.
 - Only official Ubuntu archive URIs are rewritten. `security.ubuntu.com`, PPAs, third-party repos are never touched.
 - Architectures `amd64` and `i386` only (from `dpkg --print-architecture`). Other architectures (arm64, ...) use `ports.ubuntu.com`, which has no mirror choice: print an explanation and make no changes.
@@ -33,18 +34,18 @@ Behavior by mode:
 
 ## Pipeline
 
-1. **Detect distro** from `/etc/os-release`. Read codename (`VERSION_CODENAME`, or `UBUNTU_CODENAME` for derivatives).
-2. **Detect location** of the server (country and AS), first source that answers wins, all HTTPS. Skipped with `--no-geo`.
-   1. `https://ifconfig.co/json` (`country_iso`, `asn`, `asn_org`). The operator asks for at most 1 automated request per minute; one run makes one request and results are cached, so this is respected.
-   2. `https://ipinfo.io/json` (`country`, `org` = `AS<number> <name>`).
-   3. `https://www.cloudflare.com/cdn-cgi/trace` (`loc=<CC>`; country only, no AS).
-   - No retries: any failure (timeout, non-200 including 429, malformed body) falls through to the next source. Timeout 5 s per request covering the whole request, response body capped at 64 KiB, worst case 15 s. Print which sources failed and why.
-   - Validation: country is uppercased and must match `^[A-Z]{2}$`; `XX` (unknown) and `T1` (Tor) from Cloudflare are treated as unknown. The same rule applies to `--country`.
-   - AS normalization: every source's value becomes canonical `AS<number>`. Take the first whitespace-delimited token of `org`/`as`, prefix bare integers with `AS`, validate `^AS[0-9]{1,10}$`, compare numerically. The name is optional. Empty or malformed means unknown. For a prefix with several origin ASNs the first listed is used; this is approximate.
+1. **Detect distro** from `/etc/os-release`. Read the codename: `UBUNTU_CODENAME` when present, otherwise `VERSION_CODENAME` (Linux Mint reports `VERSION_CODENAME=wilma`, but apt uses `noble`).
+2. **Detect location** of the server (country, then AS), skipped with `--no-geo`. Every source is optional: if all fail, the run continues with the worldwide mirror list and live probing (see Resilience). Sources are tried in order and the first valid answer wins; web sources use HTTPS except Canonical's endpoint noted below; AS comes from DNS.
+   1. Country: Canonical `http://geoip.ubuntu.com/lookup` (XML, field `CountryCode`; the same endpoint the Ubuntu installer uses; plain HTTP, so treat the answer as untrusted and validate it). Fallbacks: `https://ifconfig.co/json` (`country_iso`, operator asks for at most 1 automated request per minute), `https://ipinfo.io/json` (`country`), `https://www.cloudflare.com/cdn-cgi/trace` (`loc=<CC>`).
+   2. AS of the server: Team Cymru DNS, TXT query for `<reversed-ip>.origin.asn.cymru.com` (IPv6: `<nibble-reversed-ip>.origin6.asn.cymru.com`; answer `AS | prefix | CC | registry | date`; the `CC` is the registry country, not a location, so it is never used as the server country). No web API and no HTTP: plain DNS through the system resolver. Fallback: `https://stat.ripe.net/data/prefix-overview/data.json?resource=<ip>` (`data.asns[0].asn`), then ifconfig.co/ipinfo `asn`/`org` if already fetched.
+   - To query Cymru the server's public IP is needed: take it from whichever HTTP source answered (geoip, ifconfig.co, ipinfo, Cloudflare `ip=`). If none answered, AS is unknown.
+   - No retries: any failure (timeout, non-200 including 429, malformed body, DNS error) falls through to the next source. Timeout 5 s per request covering the whole request, response body capped at 64 KiB, worst case about 30 s (six sources). Print which sources failed and why.
+   - Validation: country is uppercased and must match `^[A-Z]{2}$`; `XX` (unknown), `T1` (Tor) and `Unknown` are treated as unknown. The same rule applies to `--country`.
+   - AS normalization: every source's value becomes canonical `AS<number>`. Take the first whitespace-delimited token of `org`/`as`, prefix bare integers with `AS`, validate `^AS[0-9]{1,10}$`, compare numerically. Empty or malformed means unknown. For a prefix with several origin ASNs the first listed is used; this is approximate.
    - `--country` overrides the country only; AS is still looked up unless `--no-geo`.
    - Cache: `~/.cache/apt-scout/geo.json`, valid 24 h, stores only country and AS (never the IP). `--refresh` ignores it.
-   - If every source fails: country unknown -> use the worldwide list; AS unknown -> no AS preference.
-   - Privacy: these services learn the server's public IP, and `ip-api.com` (step 5) learns the candidate mirrors' IPs. Document this in the README. `--no-geo --country <CC>` avoids server lookups. Do not use `ip-api.com` for the server lookup (HTTP only; free tier is non-commercial).
+   - Privacy: the web services learn the server's public IP; the DNS resolver and Team Cymru receive it inside a DNS query; step 5 also sends up to 30 candidate mirror IPs to the resolver, Cymru and RIPEstat. Document this in the README. `--no-geo` skips step 2 and step 5 entirely (no server AS to compare against); with `--no-geo` only `--country` and live probing remain.
+   - `--country` replaces only the country answer; the chain still runs to learn the public IP for the AS lookup unless `--no-geo`.
 3. **Load mirror list**, first success wins, source shown in output:
    1. Launchpad `https://launchpad.net/ubuntu/+archivemirrors` (HTML, ~316 KB, ~560 mirrors in ~80 countries). Measured structure: a `<tr class="head">` row with `<th colspan="2">Country</th>` starts each country; each mirror row has a `/ubuntu/+mirror/<id>` link, one `<a href>` per protocol (`https`, `http`, `ftp`, `rsync`; only `http(s)` are used), a speed (`10 Gbps`), and a status `<span class="distromirrorstatus{UP|UNKNOWN|...}">`. Launchpad's own status (`UP` = up to date) is used as a hint, never as proof of freshness. Measured: 82 country sections, 562 mirror rows, only `UP` and `UNKNOWN` statuses seen, speeds from `128 Kbps` to `100 Gbps`, and 2 rows with only `ftp`/`rsync` links (skip them, they cannot be probed over HTTP). The parser must tolerate missing protocols and unknown statuses, and is tested against a saved fixture of this page.
    2. `http://mirrors.ubuntu.com/<CC>.txt` (plain text, one URL per line, already ordered by geographic proximity, ~6 URLs, no speed or status). Used when Launchpad fails or returns no mirror for the country.
@@ -53,7 +54,7 @@ Behavior by mode:
    If every source fails but the current apt mirror works, offer to probe only the current mirror instead of aborting.
    Each network source: timeout 10 s, 2 retries, response validated (non-empty, at least one well-formed `http(s)://` URL; for Launchpad, at least one country section). Invalid response counts as failure.
 4. **Filter**: mirrors in detected country. If fewer than 5, top up with nearest by region then worldwide. Cap at 30 candidates. `--https-only` drops http.
-5. **Resolve AS** of candidates (informational, never a reason to fail the run): resolve hostname -> IP. Primary: one `POST http://ip-api.com/batch?fields=query,as,countryCode` for up to 100 IPs (free tier: non-commercial, HTTP only, rate limited; honor `X-Rl`/`X-Ttl` response headers and stop when `X-Rl` is 0). Fallback when the batch call fails or is rate limited: `https://stat.ripe.net/data/prefix-overview/data.json?resource=<ip>` per IP, in parallel with a small cap (4 at a time), reading `data.asns[0].asn`. Normalize AS as in step 2. Cache results on disk with the mirror list (`--refresh` ignores the cache). CDN-backed mirrors can resolve to different AS per query; AS is approximate. Resolve both A and AAAA; probe with the address family the machine can actually use, and never fail the run because IPv6 is broken.
+5. **Resolve AS** of candidates (skipped with `--no-geo`; informational, never a reason to fail the run): resolve each hostname to an IP, then Team Cymru DNS TXT per IP (parallel, cap 8 at a time), normalized as in step 2. Fallback per IP: RIPEstat `prefix-overview`. Cymru client: hand-rolled raw UDP query (about 80 lines; std has no TXT API and an async resolver crate contradicts the no-async rule). Read nameservers from `/etc/resolv.conf` (up to 3; the systemd-resolved stub `127.0.0.53` and Docker's `127.0.0.11` handle TXT), use an absolute name with a trailing dot (no search-domain expansion), connect the UDP socket, use a random ID, ignore replies with a mismatched ID, `QR` bit or question, cap compression-pointer depth, treat NXDOMAIN as AS unknown, and treat the `TC` (truncated) bit as failure that falls through to RIPEstat (no TCP fallback). Missing `resolv.conf` means AS unknown. No HTTP batch API and no rate-limited free tier is required. Cache results on disk with the mirror list (`--refresh` ignores the cache). CDN-backed mirrors can resolve to different AS per query; AS is approximate. Resolve both A and AAAA; probe with the address family the machine can actually use, and never fail the run because IPv6 is broken.
 6. **Fetch reference** once, before probing: from `http://archive.ubuntu.com/ubuntu/dists/<codename>-updates/InRelease` and `<codename>-security/InRelease` get the `Date:` of each pocket. This is the freshness baseline. The `<codename>` release pocket is not compared: its `Date` is the release date (for example `noble` shows April 2024) and never changes, so it says nothing about freshness.
 7. **Probe** each candidate in parallel (`std::thread`): fetch the same two `InRelease` files from `<mirror>/dists/...` and parse `Date:`. Measure connect latency. Measure throughput on a larger sample (`Range: bytes=0-1048575` of `main/binary-<arch>/Packages.xz`), because a few KB of `InRelease` only measures TCP slow start. Redirects: follow at most 3, re-validate the final host and scheme; report mirrors that redirect to another host.
 8. **Reject** unreachable mirrors, non-200 responses, and stale mirrors. `<codename>-updates` decides: a mirror is stale if its `Date` is older than the reference by more than `MAX_LAG` (24 hours). `<codename>-security` lag is shown for information only, because `security.ubuntu.com` is left untouched. A missing `-updates` pocket or unparsable `Date` rejects. `Date` is the signing time, not the sync time. If the reference host is unreachable (network error, 5xx), use the newest `Date` among candidates as baseline and print a warning. If the reference answers 404 for the codename, the release is no longer on `archive.ubuntu.com` (it moved to `old-releases.ubuntu.com`, which has no mirrors): exit 4 with a message that names the codename and explains this; never use the newest-candidate baseline in that case. Measured on 2026-11-11 (`noble-updates`): of 10 Lithuanian and Norwegian mirrors, 6 matched the reference exactly and 4 were identical to each other but one signing generation behind (about 6 hours), so a 1-hour limit would reject 40% of good mirrors. Freshness also guards against replay of old indexes; apt still verifies signatures.
@@ -100,7 +101,18 @@ Library: `ratatui` + `crossterm` (no async). Opens after probing finishes (a pro
 - Write atomically: temp file in the same directory, fsync, rename.
 - `--restore` copies the newest backup back. It validates the manifest first: every path must be under `/etc/apt/` and be a regular file after resolution; otherwise refuse with an explanation. `--restore` does not depend on the rewrite logic.
 - Custom URLs (`Insert`): scheme `http` or `https` only; reject userinfo, whitespace, `file:`, and loopback/private/link-local addresses; probe like any candidate; show a warning before apt is pointed at a user-supplied host.
+- If no URI is rewritable (for example arm64, Pop!_OS, or a system already using a third-party mirror), say so before any probing: scan the sources first, print every file inspected and why each entry was skipped, exit 0 for a dry run and 1 for `--apply`. Do not probe 30 mirrors for nothing.
+- Candidate hygiene (mirror lists are partly fetched over plain HTTP): every candidate, from any list source, must be `http`/`https`, have no userinfo, and not resolve to a private, loopback or link-local address. Results from the `mirrors.ubuntu.com` fallback are marked unverified in the output.
 - After apply, suggest `apt update`; do not run it.
+
+## Resilience
+
+Third-party services change formats, add limits or become paid. The program must keep working when they do.
+
+- Geolocation and AS are optional accelerators. If every source fails or returns something invalid, the run continues with the worldwide mirror list and ranks by measured freshness and speed. The failure is shown with the source name and reason; it is never silent and never fatal.
+- Core data comes from sources the project depends on anyway: the Ubuntu archive (`InRelease`), Launchpad mirror list, DNS. No account, key or paid tier is needed anywhere.
+- Parsers reject unexpected shapes instead of guessing, and report which field was missing.
+- Weekly contract check (GitHub Actions `schedule`, not a required check): fetch each live source once, check that the fields the parser needs are still present, and open an issue only after two consecutive failures (runner IPs can be rate limited by individual services). Scheduled workflows on public repos are disabled after 60 days without repository activity; the check is advisory.
 
 ## Errors and self-healing
 
@@ -112,7 +124,7 @@ Principle: the program solves its own problems when safe, and otherwise says exa
   - Missing own directories (`~/.cache/apt-scout`, `/var/backups/apt-scout`): create with `create_dir_all`.
   - Missing, empty or corrupt cache file: ignore it, refetch, rewrite it.
   - Missing `/etc/os-release`: try `/usr/lib/os-release`, then `lsb_release` fallbacks; if still unknown, ask for `--codename`/`--distro` flags.
-  - Missing `VERSION_CODENAME`: fall back to `UBUNTU_CODENAME`, then to the codename in the existing apt sources.
+  - Missing `UBUNTU_CODENAME` and `VERSION_CODENAME`: use the codename in the existing apt sources, then ask for `--codename`.
   - Apt sources at an unexpected location or format: search `/etc/apt/sources.list`, `/etc/apt/sources.list.d/*.{list,sources}`, and report every file inspected and why each was skipped or used.
   - Network failure: follow the mirror-list source chain, retry, then use cache/snapshot; report each failed source with its reason.
   - Interrupted write: temp files are cleaned up on the next run; the original file is never left half-written.
@@ -130,7 +142,7 @@ Principle: the program solves its own problems when safe, and otherwise says exa
 - Suggested layout: `main.rs`, `error.rs`, `distro.rs`, `geo.rs`, `mirrors.rs`, `probe.rs`, `fresh.rs`, `rank.rs`, `sources.rs` (pure string in/out), `apply.rs`, `tui/`. Keep `sources`, `rank`, `fresh` pure; HTTP is injected as a function so tests use canned responses.
 - Test fixtures: Ubuntu 22.04 `sources.list`, 24.04 `ubuntu.sources`, multi-URI stanza, `Enabled: no`, comments, `deb-src`, arm64 ports, `InRelease`, mirror list HTML and text, corrupt cache. Round-trip test (rewrite then restore equals original bytes), tempdir test for atomic write and failed-backup abort, `ratatui` `TestBackend` for TUI snapshots.
 - Parsing and ranking are pure functions, unit-tested on fixtures; no live network in tests.
-- Security note: server geolocation uses HTTPS sources; mirror AS lookups may use HTTP (`ip-api.com` batch), so AS data influences ranking only and is never trusted for anything else. All geolocation results are validated and untrusted.
+- Security note: all geolocation and AS answers are untrusted input, validated, and influence ranking only. Canonical's lookup is plain HTTP; AS data comes from DNS. Nothing derived from them is ever written into apt sources.
 
 ## Testing
 

@@ -14,7 +14,7 @@
 
 **Server AS**: The autonomous system of the machine running apt-scout, as reported by the first geolocation source that answers.
 
-**Geo source**: One of the HTTPS services (`ifconfig.co`, `ipinfo.io`, Cloudflare trace) tried in order to learn the server's country and AS.
+**Geo source**: One of the sources tried in order to learn the server's country (Canonical geoip, `ifconfig.co`, `ipinfo.io`, Cloudflare trace) or AS (Team Cymru DNS, RIPEstat).
 
 **AS match**: A candidate whose AS equals the server AS. Wins ties within a speed band; it never overrides a clearly faster mirror.
 
