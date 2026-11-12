@@ -93,7 +93,7 @@ When the user requests a durable behavior change, record it here or in the relev
 - `Cargo.toml` / `Cargo.lock`: crate manifest and lockfile
 - `SPEC.md`: source of truth for behavior (scope, CLI, pipeline, apply rules, exit codes); update it before changing behavior
 - `GLOSSARY.md`: project vocabulary only, no implementation detail
-- `src/main.rs`: entry point; `src/distro.rs`: os-release detection (Ubuntu family, codename; last duplicate assignment wins, errors identify the source path); `scripts/docker-test.sh`: container integration tests
+- `src/main.rs`: entry point; `src/distro.rs`: os-release detection (Ubuntu family, codename; last duplicate assignment wins, errors identify the source path); `src/mirrors.rs`: Launchpad HTML and `mirrors.ubuntu.com` list parsers, candidate URL validation (pure, tested on `tests/fixtures/`); `scripts/docker-test.sh`: container integration tests
 - `target/`: build output, never edit
 - Repo: https://github.com/tdslot/apt-scout (public, `tdslot`); license MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`)
 - Branches: `develop` collects work, `main` = last release. Feature branches `feat/*`, `fix/*`, `chore/*` -> PR into `develop` (squash). Never push directly to `main` or `develop`.

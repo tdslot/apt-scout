@@ -1,0 +1,1857 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en" dir="ltr">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Mirrors : Ubuntu</title>
+    <link rel="apple-touch-icon" sizes="180x180" href="/@@/apple-touch-icon.png?v=2022" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/@@/favicon-32x32.png?v=2022" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/@@/favicon-16x16.png?v=2022" />
+    <link rel="manifest" href="/@@/site.webmanifest?v=2022" />
+    <link rel="mask-icon" href="/@@/safari-pinned-tab.svg?v=2022" color="#e9531f" />
+    <link rel="shortcut icon" href="/@@/favicon.ico?v=2022" />
+    <meta name="msapplication-TileColor" content="#da532c" />
+    <meta name="msapplication-config" content="/@@/browserconfig.xml?v=2022" />
+    <meta name="theme-color" content="#ffffff" />
+    
+    
+    
+
+    
+  
+  <link type="text/css" rel="stylesheet" media="screen, print" href="/+icing/rev72ba15af7e009b17d4aa1467977127ac8392a4de/combo.css" />
+
+
+    
+
+    
+      <meta name="description" content="Ubuntu also includes a wide variety of software through its network of software repositories. Once your system is installed you can simply call up a list of all the existing tools out there and choose any of them for immediate installation over the internet.
+" />
+      <meta property="og:description" content="Ubuntu also includes a wide variety of software through its network of software repositories. Once your system is installed you can simply call up a list of all the existing tools out there and choose any of them for immediate installation over the internet.
+" />
+    
+
+    
+    
+      <meta property="og:title" content="Mirrors : Ubuntu" />
+      <meta property="og:type" content="website" />
+      <meta property="og:image" content="/@@/launchpad-og-image.png" />
+      <meta property="og:url" content="https://launchpad.net/ubuntu/+archivemirrors" />
+      <meta property="og:site_name" content="Launchpad" />
+    
+
+    
+
+    
+  
+
+  
+  
+  <script type="text/javascript">
+    var LP = {
+        cache: {},
+        links: {}
+    };
+  </script>
+
+  
+
+  <script type="text/javascript">var cookie_scope = '; Path=/; Secure; Domain=.launchpad.net';</script>
+
+   <script type="text/javascript" src="/+combo/rev72ba15af7e009b17d4aa1467977127ac8392a4de/?yui/yui/yui-min.js&amp;lp/meta.js&amp;yui/loader/loader-min.js"></script>
+   <script type="text/javascript">
+        var raw = null;
+        if (LP.devmode) {
+           raw = 'raw';
+        }
+        YUI.GlobalConfig = {
+            combine: true,
+            comboBase: '/+combo/rev72ba15af7e009b17d4aa1467977127ac8392a4de/?',
+            root: 'yui/',
+            filter: raw,
+            debug: false,
+            fetchCSS: false,
+            maxURLLength: 2000,
+            groups: {
+                lp: {
+                    combine: true,
+                    base: '/+combo/rev72ba15af7e009b17d4aa1467977127ac8392a4de/?lp/',
+                    comboBase: '/+combo/rev72ba15af7e009b17d4aa1467977127ac8392a4de/?',
+                    root: 'lp/',
+                    // comes from including lp/meta.js
+                    modules: LP_MODULES,
+                    fetchCSS: false
+                }
+            }
+        }</script>
+
+  <script type="text/javascript">
+      // we need this to create a single YUI instance all events and code
+      // talks across. All instances of YUI().use should be based off of
+      // LPJS instead.
+      var LPJS = new YUI();
+  </script>
+
+
+
+    <script id="base-layout-load-scripts" type="text/javascript">
+        //<![CDATA[
+        LPJS.use('base', 'node', 'console', 'event',
+            'oop', 'lp', 'lp.app.foldables','lp.app.sorttable',
+            'lp.app.inlinehelp', 'lp.app.links',
+            'lp.bugs.bugtask_index', 'lp.bugs.subscribers',
+            'lp.app.ellipsis', 'lp.code.branchmergeproposal.diff',
+            'lp.views.global',
+             function(Y) {
+
+            Y.on("domready", function () {
+                var global_view = new Y.lp.views.Global();
+                global_view.render();
+
+                Y.lp.app.sorttable.SortTable.init();
+                Y.lp.app.inlinehelp.init_help();
+                Y.lp.activate_collapsibles();
+                Y.lp.app.foldables.activate();
+                Y.lp.app.links.check_valid_lp_links();
+            });
+
+            Y.on('lp:context:web_link:changed', function(e) {
+                  window.location = e.new_value;
+            });
+        });
+        //]]>
+    </script>
+    <script id="base-helper-functions" type="text/javascript">
+         //<![CDATA[
+        // This code is pulled from lp.js that needs to be available on every
+        // request. Pulling here to get it outside the scope of the YUI block.
+        function setFocusByName(name) {
+            // Focus the first element matching the given name which can be focused.
+            var nodes = document.getElementsByName(name);
+            var i, node;
+            for (i = 0; i < nodes.length; i++) {
+                node = nodes[i];
+                if (node.focus) {
+                    try {
+                        // Trying to focus a hidden element throws an error in IE8.
+                        if (node.offsetHeight !== 0) {
+                            node.focus();
+                        }
+                    } catch (e) {
+                        LPJS.use('console', function(Y) {
+                            Y.log('In setFocusByName(<' +
+                                node.tagName + ' type=' + node.type + '>): ' + e);
+                        });
+                    }
+                    break;
+                }
+            }
+        }
+
+        function selectWidget(widget_name, event) {
+          if (event && (event.keyCode === 9 || event.keyCode === 13)) {
+              // Avoid firing if user is tabbing through or simply pressing
+              // enter to submit the form.
+              return;
+          }
+          document.getElementById(widget_name).checked = true;
+        }
+        //]]>
+    </script>
+
+    
+      
+    
+  </head>
+
+  <body id="document" itemscope="" itemtype="http://schema.org/WebPage" class="tab-overview
+      main_side
+      public
+      yui3-skin-sam">
+          
+          
+          
+    <div class="yui-d0">
+      <div id="locationbar" class="login-logout">
+        
+
+<div id="logincontrol"><a href="https://launchpad.net/ubuntu/+archivemirrors/+login">Log in / Register</a></div>
+
+
+
+      </div><!--id="locationbar"-->
+
+      <div id="watermark" class="watermark-apps-portlet">
+        <div>
+          <a href="https://launchpad.net/ubuntu"><img alt="" width="64" height="64" src="https://launchpadlibrarian.net/606381979/CoF%2064px.png" /></a>
+        </div>
+        <div class="wide">
+          <h2 id="watermark-heading"><a href="https://launchpad.net/ubuntu">Ubuntu</a></h2>
+        </div>
+        
+  <!-- Application Menu -->
+  <ul class="facetmenu">
+    
+      <li class="overview active"><a href="https://launchpad.net/ubuntu">Overview</a></li>
+      
+      
+    
+    
+      
+      <li class="branches"><a href="https://code.launchpad.net/ubuntu">Code</a></li>
+      
+    
+    
+      
+      <li class="bugs"><a href="https://bugs.launchpad.net/ubuntu">Bugs</a></li>
+      
+    
+    
+      
+      <li class="specifications"><a href="https://blueprints.launchpad.net/ubuntu">Blueprints</a></li>
+      
+    
+    
+      
+      <li class="translations"><a href="https://translations.launchpad.net/ubuntu">Translations</a></li>
+      
+    
+    
+      
+      <li class="answers"><a href="https://answers.launchpad.net/ubuntu">Answers</a></li>
+      
+    
+  </ul>
+
+      </div>
+
+      <div class="yui-t4">
+        <div id="maincontent" class="yui-main">
+          <div class="yui-b" dir="ltr">
+            <div class="context-publication">
+              
+    <h1>Official Archive Mirrors for Ubuntu</h1>
+  
+              
+
+              <div id="registration" class="registering">
+                
+              </div>
+            </div>
+
+            
+            <div id="request-notifications">
+              
+            </div>
+
+            
+              
+
+  <div class="main-portlet">
+    <p class="application-summary">These mirrors provide repositories and archives of all software for the distribution.</p>
+    <p>
+      
+      <span>
+        There are
+        <strong>562</strong>
+        mirrors
+      </span>
+      registered for Ubuntu.
+    </p>
+  </div>
+
+  <div class="top-portlet" style="margin-top: 0.5em;">
+  
+
+    
+
+    <div>
+      
+  
+
+  <table class="listing" id="mirrors_list">
+  <tbody>
+    
+      <tr class="head">
+        <th colspan="2">Algeria</th>
+        <th>1 Gbps</th>
+        
+        <th>
+          1
+          <span>mirror</span>
+          
+        </th>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.hostarts.dz-archive">hostarts</a>
+        </td>
+        <td>
+          <a href="https://mirror.hostarts.dz/ubuntu/">https</a>
+          <a href="http://mirror.hostarts.dz/ubuntu/">http</a>
+          
+          <a href="rsync://mirror.hostarts.dz/ubuntu/">rsync</a>
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+
+      
+      <tr class="section-break">
+        <td colspan="5" />
+      </tr>
+
+    
+    
+      <tr class="head">
+        <th colspan="2">Lithuania</th>
+        <th>22 Gbps</th>
+        
+        <th>
+          5
+          
+          <span>mirrors</span>
+        </th>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.bacloud.com-archive"> Informacinės sistemos ir technologijos, UAB logotipas Informacinės sistemos ir technologijos, UAB </a>
+        </td>
+        <td>
+          <a href="https://mirror.bacloud.com/ubuntu-mirror/archive/">https</a>
+          <a href="http://mirror.bacloud.com/ubuntu-mirror/archive/">http</a>
+          
+          <a href="rsync://mirror.bacloud.com/ubuntu-mirror/">rsync</a>
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.vpsnet.com-archive">VPSnet.com</a>
+        </td>
+        <td>
+          <a href="https://mirror.vpsnet.com/ubuntu/">https</a>
+          <a href="http://mirror.vpsnet.com/ubuntu/">http</a>
+          
+          
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUNKNOWN">Last update unknown</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ubuntu-archive.mirror.serveriai.lt-archive">Interneto Vizija</a>
+        </td>
+        <td>
+          
+          <a href="http://ubuntu-archive.mirror.serveriai.lt/">http</a>
+          
+          
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ubuntu.mirror.vu.lt-archive">Vilnius University</a>
+        </td>
+        <td>
+          
+          <a href="http://ubuntu.mirror.vu.lt/ubuntu/">http</a>
+          <a href="ftp://ubuntu.mirror.vu.lt/ubuntu/">ftp</a>
+          <a href="rsync://ubuntu.mirror.vu.lt/ubuntu/">rsync</a>
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUNKNOWN">Last update unknown</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ftp.litnet.lt-archive">LitNET</a>
+        </td>
+        <td>
+          
+          <a href="http://ftp.litnet.lt/ubuntu/">http</a>
+          <a href="ftp://ftp.litnet.lt/ubuntu/">ftp</a>
+          <a href="rsync://ftp.litnet.lt/ubuntu/">rsync</a>
+        </td>
+        <td>100 Mbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+
+      
+      <tr class="section-break">
+        <td colspan="5" />
+      </tr>
+
+    
+    
+      <tr class="head">
+        <th colspan="2">Norway</th>
+        <th>31 Gbps</th>
+        
+        <th>
+          4
+          
+          <span>mirrors</span>
+        </th>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/no.mirrors.blix-archive">Blix Solutions AS</a>
+        </td>
+        <td>
+          
+          <a href="http://no.mirrors.blix.com/ubuntu/">http</a>
+          
+          <a href="rsync://no.mirrors.blix.com/ubuntu/">rsync</a>
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/redskapet-ubuntu-archive">The Student Society in Trondhjem, Norway</a>
+        </td>
+        <td>
+          
+          <a href="http://no.archive.ubuntu.com/ubuntu/">http</a>
+          
+          <a href="rsync://no.archive.ubuntu.com/ubuntu/">rsync</a>
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ubuntu.hi.no-archive">Institute of Marine Research</a>
+        </td>
+        <td>
+          <a href="https://ubuntu.hi.no/archive/">https</a>
+          <a href="http://ubuntu.hi.no/archive/">http</a>
+          
+          <a href="rsync://ubuntu.hi.no/ubuntu-archive/">rsync</a>
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUNKNOWN">Last update unknown</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ubuntu.uib.no-archive">University of Bergen</a>
+        </td>
+        <td>
+          
+          <a href="http://ubuntu.uib.no/archive/">http</a>
+          <a href="ftp://ubuntu.uib.no/pub/Linux/Distributions/ubuntu/archive/">ftp</a>
+          <a href="rsync://ubuntu.uib.no/ubuntu-archive/">rsync</a>
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUNKNOWN">Last update unknown</span>
+          
+        </td>
+      </tr>
+
+      
+      <tr class="section-break">
+        <td colspan="5" />
+      </tr>
+
+    
+    
+      <tr class="head">
+        <th colspan="2">Germany</th>
+        <th>303 Gbps</th>
+        
+        <th>
+          42
+          
+          <span>mirrors</span>
+        </th>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ftp.uni-stuttgart.de-archive">Uni Stuttgart</a>
+        </td>
+        <td>
+          <a href="https://ftp.uni-stuttgart.de/ubuntu/">https</a>
+          <a href="http://ftp.uni-stuttgart.de/ubuntu/">http</a>
+          
+          <a href="rsync://ftp.uni-stuttgart.de/ubuntu/">rsync</a>
+        </td>
+        <td>100 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ftp.halifax.rwth-aachen.de-archive">RWTH Aachen University</a>
+        </td>
+        <td>
+          
+          <a href="http://ftp.halifax.rwth-aachen.de/ubuntu/">http</a>
+          <a href="ftp://ftp.halifax.rwth-aachen.de/ubuntu/">ftp</a>
+          <a href="rsync://ftp.halifax.rwth-aachen.de/ubuntu/">rsync</a>
+        </td>
+        <td>20 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.dogado.de-archive">dogado GmbH</a>
+        </td>
+        <td>
+          <a href="https://mirror.dogado.de/ubuntu/">https</a>
+          <a href="http://mirror.dogado.de/ubuntu/">http</a>
+          
+          <a href="rsync://mirror.dogado.de/ubuntu/">rsync</a>
+        </td>
+        <td>20 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.netcologne.de-archive">NetCologne</a>
+        </td>
+        <td>
+          <a href="https://mirror.netcologne.de/ubuntu/">https</a>
+          <a href="http://mirror.netcologne.de/ubuntu/">http</a>
+          <a href="ftp://mirror.netcologne.de/ubuntu/">ftp</a>
+          <a href="rsync://mirror.netcologne.de/ubuntu/">rsync</a>
+        </td>
+        <td>20 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUNKNOWN">Last update unknown</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ubuntu.mirror.lrz.de-archive">LRZ</a>
+        </td>
+        <td>
+          
+          <a href="http://ubuntu.mirror.lrz.de/ubuntu/">http</a>
+          
+          <a href="rsync://ubuntu.mirror.lrz.de/ubuntu/">rsync</a>
+        </td>
+        <td>20 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/de.mirrors.clouvider.net-archive">Clouvider</a>
+        </td>
+        <td>
+          <a href="https://de.mirrors.clouvider.net/ubuntu/">https</a>
+          <a href="http://de.mirrors.clouvider.net/ubuntu/">http</a>
+          
+          
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/debian.charite.de-archive">Charite Berlin</a>
+        </td>
+        <td>
+          <a href="https://debian.charite.de/ubuntu/">https</a>
+          <a href="http://debian.charite.de/ubuntu/">http</a>
+          
+          
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ftp.stw-bonn.de-archive">StudNet Bonn</a>
+        </td>
+        <td>
+          
+          <a href="http://ftp.stw-bonn.de/ubuntu/">http</a>
+          <a href="ftp://ftp.stw-bonn.de/ubuntu/">ftp</a>
+          <a href="rsync://ftp.stw-bonn.de/ubuntu/">rsync</a>
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.creoline.net-archive">creoline GmbH</a>
+        </td>
+        <td>
+          <a href="https://mirror.creoline.net/ubuntu/">https</a>
+          <a href="http://mirror.creoline.net/ubuntu/">http</a>
+          
+          <a href="rsync://mirror.creoline.net/ubuntu/">rsync</a>
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.de.leaseweb.net-archive">LeaseWeb Germany GmbH</a>
+        </td>
+        <td>
+          <a href="https://mirror.de.leaseweb.net/ubuntu/">https</a>
+          <a href="http://mirror.de.leaseweb.net/ubuntu/">http</a>
+          <a href="ftp://mirror.de.leaseweb.net/ubuntu/">ftp</a>
+          <a href="rsync://mirror.de.leaseweb.net/ubuntu/">rsync</a>
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.ipb.de-archive">IPB Internet Provider in Berlin GmbH</a>
+        </td>
+        <td>
+          
+          <a href="http://mirror.ipb.de/ubuntu/">http</a>
+          
+          <a href="rsync://mirror.ipb.de/ubuntu/">rsync</a>
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUNKNOWN">Last update unknown</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.wtnet.de-archive">wilhelm.tel GmbH</a>
+        </td>
+        <td>
+          
+          <a href="http://mirror.wtnet.de/ubuntu/">http</a>
+          
+          
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirrors.xtom.de-archive">xTom</a>
+        </td>
+        <td>
+          <a href="https://mirrors.xtom.de/ubuntu/">https</a>
+          <a href="http://mirrors.xtom.de/ubuntu/">http</a>
+          
+          <a href="rsync://mirrors.xtom.de/ubuntu/">rsync</a>
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUNKNOWN">Last update unknown</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ubuntu.mirror.tudos.de-archive">Technische Universität Dresden</a>
+        </td>
+        <td>
+          
+          <a href="http://ubuntu.mirror.tudos.de/ubuntu/">http</a>
+          
+          <a href="rsync://ubuntu.mirror.tudos.de/ubuntu/">rsync</a>
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ftp.uni-erlangen.de-archive">Friedrich-Alexander-Universität Erlangen-Nürnberg</a>
+        </td>
+        <td>
+          
+          <a href="http://ftp.fau.de/ubuntu/">http</a>
+          <a href="ftp://ftp.fau.de/ubuntu/">ftp</a>
+          <a href="rsync://ftp.fau.de/ubuntu/">rsync</a>
+        </td>
+        <td>4 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/drmirror.physi.uni-heidelberg.de-archive">Physikalisches Institut Uni Heidelberg</a>
+        </td>
+        <td>
+          <a href="https://drmirror.physi.uni-heidelberg.de/ubuntu/">https</a>
+          
+          
+          
+        </td>
+        <td>2 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ftp-stud.hs-esslingen.de-archive">Esslingen University of Applied Sciences</a>
+        </td>
+        <td>
+          
+          <a href="http://ftp-stud.hs-esslingen.de/ubuntu/">http</a>
+          <a href="ftp://ftp-stud.hs-esslingen.de/ubuntu/">ftp</a>
+          <a href="rsync://ftp-stud.hs-esslingen.de/ubuntu/">rsync</a>
+        </td>
+        <td>2 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ftp.uni-kl.de-archive">University of Kaiserslautern</a>
+        </td>
+        <td>
+          
+          <a href="http://ftp.uni-kl.de/pub/linux/ubuntu/">http</a>
+          <a href="ftp://ftp.uni-kl.de/pub/linux/ubuntu/">ftp</a>
+          <a href="rsync://ftp.uni-kl.de/pub/linux/ubuntu/">rsync</a>
+        </td>
+        <td>2 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.netzwerge.de-archive">Netzwerge GmbH</a>
+        </td>
+        <td>
+          <a href="https://mirror.netzwerge.de/ubuntu/">https</a>
+          <a href="http://mirror.netzwerge.de/ubuntu/">http</a>
+          
+          <a href="rsync://mirror.netzwerge.de/ubuntu/">rsync</a>
+        </td>
+        <td>2 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.serverloft.eu-archive">serverloft - SERVER4YOU</a>
+        </td>
+        <td>
+          
+          <a href="http://mirror.serverloft.eu/ubuntu/ubuntu/">http</a>
+          
+          <a href="rsync://mirror.serverloft.eu/ubuntu-linux/ubuntu/">rsync</a>
+        </td>
+        <td>2 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/artfiles.org-archive">Artfiles New Media GmbH</a>
+        </td>
+        <td>
+          
+          <a href="http://artfiles.org/ubuntu.com/">http</a>
+          <a href="ftp://artfiles.org/ubuntu.com/">ftp</a>
+          
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ftp.fu-berlin.de-archive">Freie Universität Berlin</a>
+        </td>
+        <td>
+          
+          
+          <a href="ftp://ftp.fu-berlin.de/linux/ubuntu/">ftp</a>
+          
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ftp.rz.tu-bs.de-archive">Technical University of Braunschweig</a>
+        </td>
+        <td>
+          
+          <a href="http://ftp.rz.tu-bs.de/pub/mirror/ubuntu-packages/">http</a>
+          <a href="ftp://ftp.rz.tu-bs.de/pub/mirror/ubuntu-packages/">ftp</a>
+          <a href="rsync://ftp.rz.tu-bs.de/pub/mirror/ubuntu-packages/">rsync</a>
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ftp.tu-chemnitz.de-archive">TU Chemnitz</a>
+        </td>
+        <td>
+          
+          <a href="http://ftp.tu-chemnitz.de/pub/linux/ubuntu-ports/">http</a>
+          <a href="ftp://ftp.tu-chemnitz.de/pub/linux/ubuntu-ports/">ftp</a>
+          
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ftp.tu-ilmenau.de-archive">TU-Ilmenau</a>
+        </td>
+        <td>
+          
+          <a href="http://ftp.tu-ilmenau.de/mirror/ubuntu/">http</a>
+          <a href="ftp://ftp.tu-ilmenau.de/mirror/ubuntu/">ftp</a>
+          
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ftp.uni-mainz.de-archive">Johannes Gutenberg-University Mainz</a>
+        </td>
+        <td>
+          
+          <a href="http://ftp.uni-mainz.de/ubuntu/">http</a>
+          <a href="ftp://ftp.uni-mainz.de/ubuntu/">ftp</a>
+          
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ftp5.gwdg.de-archive">GWDG</a>
+        </td>
+        <td>
+          
+          <a href="http://ftp5.gwdg.de/pub/linux/debian/ubuntu/">http</a>
+          <a href="ftp://ftp5.gwdg.de/pub/linux/debian/ubuntu/">ftp</a>
+          <a href="rsync://ftp5.gwdg.de/pub/linux/debian/ubuntu/">rsync</a>
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.23m.com-archive">23M GmbH</a>
+        </td>
+        <td>
+          <a href="https://mirror.23m.com/ubuntu/">https</a>
+          <a href="http://mirror.23m.com/ubuntu/">http</a>
+          
+          <a href="rsync://mirror.23m.com/ubuntu/">rsync</a>
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.daniel-jost.net-archive">Daniel Jost - Freelance Web Professional</a>
+        </td>
+        <td>
+          
+          <a href="http://mirror.daniel-jost.net/ubuntu/">http</a>
+          <a href="ftp://mirror.daniel-jost.net/ubuntu/">ftp</a>
+          
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.eu-fr.kamatera.com-archive">Kamatera Inc.</a>
+        </td>
+        <td>
+          
+          <a href="http://mirror.eu-fr.kamatera.com/ubuntu/">http</a>
+          
+          
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.informatik.tu-freiberg.de-archive">TU Bergakademie Freiberg</a>
+        </td>
+        <td>
+          <a href="https://mirror.informatik.tu-freiberg.de/ubuntu/">https</a>
+          <a href="http://mirror.informatik.tu-freiberg.de/ubuntu/">http</a>
+          
+          
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.kkg.berlin-archive">KKG Berlin</a>
+        </td>
+        <td>
+          <a href="https://mirror.kkg.berlin/ubuntu/">https</a>
+          <a href="http://mirror.kkg.berlin/ubuntu/">http</a>
+          
+          
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUNKNOWN">Last update unknown</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.plustech.de-archive">PLUSTECH GmbH</a>
+        </td>
+        <td>
+          
+          <a href="http://mirror.plustech.de/ubuntu/">http</a>
+          
+          
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.rabisu.com-archive2">Rabisu</a>
+        </td>
+        <td>
+          <a href="https://mirror.rabisu.com/mirrors/ubuntu/">https</a>
+          <a href="http://mirror.rabisu.com/mirrors/ubuntu/">http</a>
+          
+          <a href="rsync://mirror.rabisu.com/mirrors/ubuntu/">rsync</a>
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUNKNOWN">Last update unknown</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.ratiokontakt.de-archive">ratiokontakt GmbH</a>
+        </td>
+        <td>
+          
+          <a href="http://mirror.ratiokontakt.de/mirror/ubuntu/">http</a>
+          
+          
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.scaleuptech.com-archive">ScaleUp Technologies GmbH &amp; Co. KG</a>
+        </td>
+        <td>
+          <a href="https://mirror.scaleuptech.com/ubuntu/">https</a>
+          <a href="http://mirror.scaleuptech.com/ubuntu/">http</a>
+          <a href="ftp://mirror.scaleuptech.com/ubuntu/">ftp</a>
+          <a href="rsync://mirror.scaleuptech.com/ubuntu/">rsync</a>
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.united-gameserver.de-archive">WIIT AG</a>
+        </td>
+        <td>
+          <a href="https://mirror.united-gameserver.de/ubuntu/">https</a>
+          <a href="http://mirror.united-gameserver.de/ubuntu/">http</a>
+          
+          <a href="rsync://mirror.united-gameserver.de/ubuntu/">rsync</a>
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror2.tuxinator.org-archive">Tuxinator</a>
+        </td>
+        <td>
+          
+          <a href="http://mirror2.tuxinator.org/ubuntu/">http</a>
+          <a href="ftp://mirror2.tuxinator.org/ubuntu/">ftp</a>
+          
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/suse.uni-leipzig.de-archive">University of Leipzig</a>
+        </td>
+        <td>
+          
+          <a href="http://suse.uni-leipzig.de/pub/releases.ubuntu.com/ubuntu/">http</a>
+          <a href="ftp://suse.uni-leipzig.de/pub/releases.ubuntu.com/ubuntu/">ftp</a>
+          <a href="rsync://suse.uni-leipzig.de/ubuntu/">rsync</a>
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ftp.hosteurope.de-archive">Host Europe</a>
+        </td>
+        <td>
+          
+          <a href="http://ftp.hosteurope.de/mirror/archive.ubuntu.com/">http</a>
+          <a href="ftp://ftp.hosteurope.de/mirror/archive.ubuntu.com/">ftp</a>
+          
+        </td>
+        <td>100 Mbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.funkfreundelandshut.de-archive">Funkfreunde Landshut e.V.</a>
+        </td>
+        <td>
+          
+          <a href="http://mirror.funkfreundelandshut.de/ubuntu/">http</a>
+          
+          <a href="rsync://mirror.funkfreundelandshut.de/mirror/ubuntu/">rsync</a>
+        </td>
+        <td>45 Mbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ftp.tu.chemnitz.de-archive">Technische Universität Chemnitz</a>
+        </td>
+        <td>
+          
+          <a href="http://ftp.tu-chemnitz.de/pub/linux/ubuntu/">http</a>
+          
+          
+        </td>
+        <td>10 Mbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+
+      
+      <tr class="section-break">
+        <td colspan="5" />
+      </tr>
+
+    
+    
+      <tr class="head">
+        <th colspan="2">Netherlands</th>
+        <th>183 Gbps</th>
+        
+        <th>
+          25
+          
+          <span>mirrors</span>
+        </th>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ubuntu.mirror.true.nl">TrueFullstaq B.V.</a>
+        </td>
+        <td>
+          
+          <a href="http://ubuntu.mirror.true.nl/ubuntu/">http</a>
+          
+          
+        </td>
+        <td>20 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/bit.nl.archive.ubuntu.com">BIT B.V.</a>
+        </td>
+        <td>
+          
+          <a href="http://nl.archive.ubuntu.com/ubuntu/">http</a>
+          
+          <a href="rsync://nl.archive.ubuntu.com/ubuntu/">rsync</a>
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ftp.nluug.nl-archive">NLUUG</a>
+        </td>
+        <td>
+          
+          <a href="http://ftp.nluug.nl/os/Linux/distr/ubuntu/">http</a>
+          <a href="ftp://ftp.nluug.nl/pub/os/Linux/distr/ubuntu/">ftp</a>
+          <a href="rsync://ftp.nluug.nl/ubuntu/">rsync</a>
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ftp.snt.utwente.nl-archive">University of Twente, The Netherlands</a>
+        </td>
+        <td>
+          
+          <a href="http://ftp.snt.utwente.nl/pub/os/linux/ubuntu/">http</a>
+          <a href="ftp://ftp.snt.utwente.nl/pub/os/linux/ubuntu/">ftp</a>
+          
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.colocenter.nl-archive">ColoCenter bv</a>
+        </td>
+        <td>
+          
+          <a href="http://mirror.colocenter.nl/ubuntu/">http</a>
+          
+          <a href="rsync://mirror.colocenter.nl/ubuntu/">rsync</a>
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.lyrahosting.com-archive">Lyra Hosting</a>
+        </td>
+        <td>
+          <a href="https://mirror.lyrahosting.com/ubuntuarchive/">https</a>
+          <a href="http://mirror.lyrahosting.com/ubuntuarchive/">http</a>
+          <a href="ftp://mirror.lyrahosting.com/ubuntuarchive/">ftp</a>
+          <a href="rsync://mirror.lyrahosting.com/ubuntuarchive/">rsync</a>
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.nforce.com-archive">NFOrce Entertainment B.V.</a>
+        </td>
+        <td>
+          
+          <a href="http://mirror.nforce.com/pub/linux/ubuntu/">http</a>
+          <a href="ftp://mirror.nforce.com/pub/linux/ubuntu/">ftp</a>
+          <a href="rsync://mirror.nforce.com/ubuntu/">rsync</a>
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.nl.altushost.com-archive">AltusHost B.V.</a>
+        </td>
+        <td>
+          <a href="https://mirror.nl.altushost.com/ubuntu/">https</a>
+          <a href="http://mirror.nl.altushost.com/ubuntu/">http</a>
+          
+          
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.nl.leaseweb.net-archive">LeaseWeb Global B.V.</a>
+        </td>
+        <td>
+          <a href="https://mirror.nl.leaseweb.net/ubuntu/">https</a>
+          <a href="http://mirror.nl.leaseweb.net/ubuntu/">http</a>
+          <a href="ftp://mirror.nl.leaseweb.net/ubuntu/">ftp</a>
+          <a href="rsync://mirror.nl.leaseweb.net/ubuntu/">rsync</a>
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.tngnet.com-archive">TNGNET B.V.</a>
+        </td>
+        <td>
+          <a href="https://mirror.tngnet.com/ubuntu/">https</a>
+          
+          
+          <a href="rsync://mirror.tngnet.com/ubuntu/">rsync</a>
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.vpgrp.io-archive">Vente-Privée</a>
+        </td>
+        <td>
+          
+          <a href="http://mirror.vpgrp.io/ubuntu/">http</a>
+          
+          
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUNKNOWN">Last update unknown</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirrors.hostiserver.com-archive">IT Services Compay S.R.O.</a>
+        </td>
+        <td>
+          <a href="https://mirrors.hostiserver.com/ubuntu/">https</a>
+          <a href="http://mirrors.hostiserver.com/ubuntu/">http</a>
+          <a href="ftp://mirrors.hostiserver.com/ubuntu/">ftp</a>
+          <a href="rsync://mirrors.hostiserver.com/ubuntu/">rsync</a>
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirrors.xtom.nl-archive">xTom</a>
+        </td>
+        <td>
+          <a href="https://mirrors.xtom.nl/ubuntu/">https</a>
+          <a href="http://mirrors.xtom.nl/ubuntu/">http</a>
+          
+          <a href="rsync://mirrors.xtom.nl/ubuntu/">rsync</a>
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUNKNOWN">Last update unknown</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/nl.mirrors.clouvider.net-archive">Clouvider</a>
+        </td>
+        <td>
+          <a href="https://nl.mirrors.clouvider.net/ubuntu/">https</a>
+          <a href="http://nl.mirrors.clouvider.net/ubuntu/">http</a>
+          
+          
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ubuntu.mirror.intermax.nl-archive">Intermax</a>
+        </td>
+        <td>
+          <a href="https://ubuntu.mirror.intermax.nl/">https</a>
+          <a href="http://ubuntu.mirror.intermax.nl/">http</a>
+          
+          
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUNKNOWN">Last update unknown</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ubuntu.mirror.wearetriple.com-archive">Triple</a>
+        </td>
+        <td>
+          <a href="https://ubuntu.mirror.wearetriple.com/archive/">https</a>
+          <a href="http://ubuntu.mirror.wearetriple.com/archive/">http</a>
+          
+          
+        </td>
+        <td>10 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.transip.net-archive">TransIP B.V.</a>
+        </td>
+        <td>
+          
+          <a href="http://mirror.transip.net/ubuntu/ubuntu/">http</a>
+          <a href="ftp://mirror.transip.net/ubuntu/ubuntu/">ftp</a>
+          <a href="rsync://mirror.transip.net/ubuntu/ubuntu/">rsync</a>
+        </td>
+        <td>4 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/as215248">AS215248</a>
+        </td>
+        <td>
+          <a href="https://mirrors.as215248.net/ubuntu/">https</a>
+          <a href="http://mirrors.as215248.net/ubuntu/">http</a>
+          
+          <a href="rsync://mirrors.as215248.net/ubuntu/">rsync</a>
+        </td>
+        <td>2 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/nl3.archive.ubuntu.com-archive">PCextreme B.V.</a>
+        </td>
+        <td>
+          
+          <a href="http://nl3.archive.ubuntu.com/ubuntu/">http</a>
+          
+          
+        </td>
+        <td>2 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.eu.kamatera.com-archive">Kamatera Inc.</a>
+        </td>
+        <td>
+          
+          <a href="http://mirror.eu.kamatera.com/ubuntu/">http</a>
+          
+          
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.nl.as215296.net-archive">AS215296</a>
+        </td>
+        <td>
+          <a href="https://mirror.nl.as215296.net/ubuntu/">https</a>
+          <a href="http://mirror.nl.as215296.net/ubuntu/">http</a>
+          
+          <a href="rsync://mirror.nl.as215296.net/ubuntu/">rsync</a>
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirror.previder.nl-archive">Previder B.V.</a>
+        </td>
+        <td>
+          <a href="https://mirror.previder.nl/ubuntu/">https</a>
+          <a href="http://mirror.previder.nl/ubuntu/">http</a>
+          
+          
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/mirrors.evoluso.com-archive">Evoluso.com</a>
+        </td>
+        <td>
+          <a href="https://mirrors.evoluso.com/ubuntu/">https</a>
+          <a href="http://mirrors.evoluso.com/ubuntu/">http</a>
+          
+          
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/nl.mirror.flokinet.net-archive">FlokiNET</a>
+        </td>
+        <td>
+          <a href="https://nl.mirror.flokinet.net/ubuntu/">https</a>
+          <a href="http://nl.mirror.flokinet.net/ubuntu/">http</a>
+          
+          <a href="rsync://nl.mirror.flokinet.net/ubuntu/">rsync</a>
+        </td>
+        <td>1 Gbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <a href="/ubuntu/+mirror/ftpserv-tudelft-nl">Ftpserv-tudelft-nl</a>
+        </td>
+        <td>
+          
+          
+          <a href="ftp://ftpserv.tudelft.nl/pub/Linux/archive.ubuntu.com/">ftp</a>
+          
+        </td>
+        <td>10 Mbps</td>
+        
+        <td>
+          
+            <span class="distromirrorstatusUP">Up to date</span>
+          
+        </td>
+      </tr>
+
+      
+      </table>
+
+    </div>
+
+  
+  </div>
+
+            
+            
+          </div><!-- yui-b -->
+        </div><!-- yui-main -->
+
+        
+          <div id="side-portlets" class="yui-b side">
+            
+  <div id="global-actions" class="portlet vertical">
+  <ul>
+    <li>
+      <a class="menu-link-cdimage_mirrors sprite info" href="https://launchpad.net/ubuntu/+cdmirrors">CD mirrors</a>
+    </li>
+    <li>
+      <span class="menu-link-archive_mirrors nolink sprite info">Archive mirrors</span>
+    </li>
+  </ul>
+</div>
+
+  <div class="portlet" id="register">
+      <a class="menu-link-newmirror sprite add" href="https://launchpad.net/ubuntu/+newmirror">Register a new mirror</a>
+  </div>
+
+          </div><!-- yui-b side -->
+        
+      </div><!-- yui-t4 -->
+
+      
+  <div id="footer" class="footer">
+  <a class="crawler" href="/?crawler-bait=true" hidden inert>Home</a>
+    <div class="lp-arcana">
+        <div class="lp-branding">
+          <a href="https://launchpad.net/"><img src="/@@/launchpad-footer-logo.svg" alt="Launchpad" width="65" height="18" /></a>
+          &nbsp;&bull;&nbsp;
+          <a href="https://launchpad.net/+tour">Take the tour</a>
+          &nbsp;&bull;&nbsp;
+          <a href="https://documentation.ubuntu.com/launchpad/">Read the guide</a>
+          &nbsp;
+          <form id="globalsearch" method="get" accept-charset="UTF-8" action="https://launchpad.net/+search">
+            <input type="search" id="search-text" name="field.text" />
+            <input type="image" src="/@@/search" style="vertical-align:5%" alt="Search Launchpad" />
+          </form>
+        </div>
+        
+  
+
+    </div>
+
+    <div class="colophon">
+      &copy; 2004
+      <a href="http://canonical.com/">Canonical&nbsp;Ltd.</a>
+      &nbsp;&bull;&nbsp;
+      <a href="https://ubuntu.com/legal/launchpad-terms-of-service">Terms of use</a>
+      &nbsp;&bull;&nbsp;
+      <a href="https://www.ubuntu.com/legal/dataprivacy">Data privacy</a>
+      &nbsp;&bull;&nbsp;
+      <a href="/feedback">Contact Launchpad Support</a>
+      
+      &nbsp;&bull;&nbsp;
+      <a href="http://blog.launchpad.net/">Blog</a>
+      
+	&nbsp;&bull;&nbsp;
+	<a href="https://canonical.com/careers">Careers</a>
+      
+      &nbsp;&bull;&nbsp;
+      <a href="https://status.canonical.com/">System status</a>
+      <span id="lp-version">
+      &nbsp;&bull;&nbsp;
+        72ba15a
+        
+        
+        (<a href="https://documentation.ubuntu.com/launchpad/developer/how-to/get-source-code/">Get the code!</a>)
+      </span>
+    </div>
+  </div>
+
+    </div><!-- yui-d0-->
+
+    
+  
+  
+  <script id="json-cache-script">LP.cache = {"related_features": {}, "context": {"self_link": "https://launchpad.net/api/devel/ubuntu", "web_link": "https://launchpad.net/ubuntu", "resource_type_link": "https://launchpad.net/api/devel/#distribution", "translations_usage": "Launchpad", "official_answers": true, "official_blueprints": true, "official_codehosting": false, "official_bugs": true, "information_type": "Public", "active": true, "branch_sharing_policy": "Public", "bug_sharing_policy": "Public", "specification_sharing_policy": "Public", "all_specifications_collection_link": "https://launchpad.net/api/devel/ubuntu/all_specifications", "valid_specifications_collection_link": "https://launchpad.net/api/devel/ubuntu/valid_specifications", "bug_reporting_guidelines": "Are you uncertain if your issue is really a bug?  Then ask a support question about Ubuntu at http://answers.launchpad.net/ubuntu/ - these can be made into bugs later.  Another support venue is http://askubuntu.com.\n\nIf you are certain this is a bug please include the source package the bug is in.  For help see https://wiki.ubuntu.com/Bugs/FindRightPackage.\n\nWe also need:\n\n1) The release of Ubuntu you are using, via 'lsb_release -rd' or System -\u003e About Ubuntu\n2) The version of the package you are using, via 'apt-cache policy pkgname' or by checking in Software Center\n3) What you expected to happen\n4) What happened instead\n\nMost of this information is gathered when you use apport to report the bug. See https://help.ubuntu.com/community/ReportingBugs for complete details.\n\nThe Ubuntu community has also created debugging procedures for a wide variety of packages at https://wiki.ubuntu.com/DebuggingProcedures.  Following the debugging instructions for the affected package will make your bug report much more complete. Thanks!", "content_templates": null, "bug_reported_acknowledgement": "Thank you for spending your time helping to make Ubuntu better with this bug report.  Reporting a bug is the first step in the bug fixing process.  As a part of that process you may need to answer some questions to help developers work on your bug.  You can learn more about how we triage bug reports at http://wiki.ubuntu.com/Bugs/HowToTriage.\n", "official_bug_tags": ["a11y", "appstream", "bionic", "bisect-done", "bitesize", "block-proposed", "block-proposed-focal", "block-proposed-jammy", "block-proposed-noble", "block-proposed-oracular", "cherry-pick", "community-security", "desktop-file", "dist-upgrade", "fixed-upstream", "focal", "ftbfs", "hw-specific", "iso-testing", "jammy", "kernel-bug", "manpage", "metabug", "multiarch", "multigpu", "multimonitor", "needs-bisect", "needs-design", "needs-packaging", "needs-reassignment", "noble", "nvidia", "package-conflict", "packaging", "patch", "patch-accepted-debian", "patch-accepted-upstream", "patch-forwarded-debian", "patch-forwarded-upstream", "patch-needswork", "patch-rejected", "patch-rejected-debian", "patch-rejected-upstream", "performing-bisect", "qt4-removal", "regression-proposed", "regression-release", "regression-update", "resolute", "stonking", "string-fix", "suspend-resume", "systemd-boot", "tenacious", "testcase", "unmetdeps", "update-excuse", "upgrade-software-version", "verification-done-bionic", "verification-done-focal", "verification-done-jammy", "verification-done-noble", "verification-done-resolute", "verification-done-stonking", "verification-failed-bionic", "verification-failed-jammy", "verification-needed-bionic", "verification-needed-focal", "verification-needed-jammy", "verification-needed-noble", "verification-needed-resolute", "verification-needed-stonking", "wayland"], "webhooks_collection_link": "https://launchpad.net/api/devel/ubuntu/webhooks", "active_milestones_collection_link": "https://launchpad.net/api/devel/ubuntu/active_milestones", "all_milestones_collection_link": "https://launchpad.net/api/devel/ubuntu/all_milestones", "bug_supervisor_link": "https://launchpad.net/api/devel/~ubuntu-bugcontrol", "translationgroup_link": "https://launchpad.net/api/devel/+groups/ubuntu-translators", "translationpermission": "Restricted", "private": false, "name": "ubuntu", "display_name": "Ubuntu", "title": "Ubuntu", "icon_link": "https://launchpad.net/api/devel/ubuntu/icon", "logo_link": "https://launchpad.net/api/devel/ubuntu/logo", "owner_link": "https://launchpad.net/api/devel/~techboard", "homepage_content": null, "mugshot_link": "https://launchpad.net/api/devel/ubuntu/mugshot", "summary": "Ubuntu is a complete Linux-based operating system, freely available with both community and professional support.", "description": "Ubuntu also includes a wide variety of software through its network of software repositories. Once your system is installed you can simply call up a list of all the existing tools out there and choose any of them for immediate installation over the internet.\n", "domain_name": "ubuntu.com", "registrant_link": "https://launchpad.net/api/devel/~techboard", "date_created": "2005-12-31T23:59:51+00:00", "driver_link": "https://launchpad.net/api/devel/~ubuntu-drivers", "members_link": "https://launchpad.net/api/devel/~ubuntumembers", "mirror_admin_link": "https://launchpad.net/api/devel/~ubuntu-mirror-admins", "archive_mirrors_collection_link": "https://launchpad.net/api/devel/ubuntu/archive_mirrors", "cdimage_mirrors_collection_link": "https://launchpad.net/api/devel/ubuntu/cdimage_mirrors", "oci_project_admin_link": null, "series_collection_link": "https://launchpad.net/api/devel/ubuntu/series", "derivatives_collection_link": "https://launchpad.net/api/devel/ubuntu/derivatives", "current_series_link": "https://launchpad.net/api/devel/ubuntu/tenacious", "official_packages": true, "supports_ppas": true, "supports_mirrors": true, "main_archive_link": "https://launchpad.net/api/devel/ubuntu/+archive/primary", "archives_collection_link": "https://launchpad.net/api/devel/ubuntu/archives", "redirect_release_uploads": true, "development_series_alias": "devel", "vcs": "Git", "default_traversal_policy": "Series", "redirect_default_traversal": false, "commercial_subscription_link": null, "commercial_subscription_is_due": false, "security_admin_link": "https://launchpad.net/api/devel/~ubuntu-security", "vulnerabilities_collection_link": "https://launchpad.net/api/devel/ubuntu/vulnerabilities", "code_admin_link": "https://launchpad.net/api/devel/~git-ubuntu-import", "http_etag": "\"3da0dd4654b9a44d60b658a36bf85481e2503ae7-9cfb2960e9e5764cdfb72c92dcd99ac01690eaeb\""}};</script>
+
+    
+  
+
+    
+  </body>
+
+
+  <!--
+    Facet name: overview
+    Page type: main_side
+    Has global search: True
+    Has application tabs: True
+    Has side portlets: True
+
+    At least 25 queries/external actions issued in 1.49 seconds
+
+    Features: {'profiling.enabled': None, 'hard_timeout': '5000', 'js.yui_version': None, 'app.mainsite_only.canonical_url': None, 'app.maintenance_message': None, 'baselayout.careers_link.disabled': None, 'visible_render_time': None}
+
+    r72ba15a
+
+    -->
+
+</html>
+
