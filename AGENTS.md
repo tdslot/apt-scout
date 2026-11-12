@@ -124,5 +124,6 @@ When the user requests a durable behavior change, record it here or in the relev
 ## Child DOX Index
 
 - `.pi/agents/AGENTS.md` — contract for the delivery team's five agent files: who may edit them and the read-only convention they share. Its sibling `.pi/README.md` covers the same boundary from the operator's side — launching the loop, what a machine needs, and what `scripts/agent-doctor.sh` checks — and states no rules of its own.
+- `docs/AGENTS.md` — contract for the durable decision records: who owns `threat-model.md`, that a ruling or an open design gap moves only with human approval, and the checks that keep its delta ledger and its citations honest.
 
 No `src/` child doc: module behavior lives in the Project bullets above, and no source folder carries rules of its own yet; add a child doc when one does — for rules, not for module descriptions.

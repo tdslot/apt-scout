@@ -26,9 +26,9 @@
 
 **Mirror list source**: Where the mirror list came from: Launchpad (primary), `mirrors.ubuntu.com`, disk cache, or built-in snapshot.
 
-**Dry-run**: Mode without TUI or `--apply`. Shows the ranking and the planned change; writes nothing.
+**Read-only run**: A run that writes nothing: `--list`, whatever the uid, and every non-root run, which prints the `sudo` command instead and exits 3.
 
-**Backup**: Timestamped copy of every apt sources file changed by `--apply`, stored under `/var/backups/apt-scout/`.
+**Backup**: Timestamped copy of every apt sources file changed by a write, stored under `/var/backups/apt-scout/`.
 
 **Official archive URI**: An apt source URI pointing at `archive.ubuntu.com` or a host in the current mirror list. The only kind apt-scout rewrites.
 
