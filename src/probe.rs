@@ -48,7 +48,8 @@ impl fmt::Display for ProbeError {
 /// Reference `Date`s from the canonical archive, fetched once before probing.
 pub struct Reference {
     pub updates: i64,
-    pub security: i64,
+    /// `None` when the archive has no readable `-security` InRelease; it is informational only.
+    pub security: Option<i64>,
 }
 
 fn date_of(net: &dyn Fetch, base: &str, suite: &str) -> Result<(i64, u64, String), String> {
@@ -82,21 +83,23 @@ pub fn fetch_reference(
     base: &str,
     codename: &str,
 ) -> Result<Reference, ReferenceError> {
-    let one = |suite: String| -> Result<i64, ReferenceError> {
-        let url = format!("{}/dists/{suite}/InRelease", base.trim_end_matches('/'));
-        let got = net
-            .get(&url, HEAD_BYTES, Some((0, HEAD_BYTES - 1)))
-            .map_err(|e| match e {
-                HttpError::Status(404, u) => ReferenceError::NotFound(u),
-                other => ReferenceError::Other(other.to_string()),
-            })?;
-        fresh::release_date(&String::from_utf8_lossy(&got.body))
-            .map_err(|e| ReferenceError::Other(format!("{url}: {e}")))
-    };
-    Ok(Reference {
-        updates: one(format!("{codename}-updates"))?,
-        security: one(format!("{codename}-security"))?,
-    })
+    let url = format!(
+        "{}/dists/{codename}-updates/InRelease",
+        base.trim_end_matches('/')
+    );
+    let got = net
+        .get(&url, HEAD_BYTES, Some((0, HEAD_BYTES - 1)))
+        .map_err(|e| match e {
+            // Only the deciding pocket decides whether the release left the archive.
+            HttpError::Status(404, u) => ReferenceError::NotFound(u),
+            other => ReferenceError::Other(other.to_string()),
+        })?;
+    let updates = fresh::release_date(&String::from_utf8_lossy(&got.body))
+        .map_err(|e| ReferenceError::Other(format!("{url}: {e}")))?;
+    let security = date_of(net, base, &format!("{codename}-security"))
+        .ok()
+        .map(|(d, _, _)| d);
+    Ok(Reference { updates, security })
 }
 
 pub fn probe(
@@ -175,8 +178,40 @@ mod tests {
     fn reference() -> Reference {
         Reference {
             updates: fresh::release_date(UPD).unwrap(),
-            security: fresh::release_date(SEC).unwrap(),
+            security: Some(fresh::release_date(SEC).unwrap()),
         }
+    }
+
+    #[test]
+    fn reference_survives_a_broken_security_pocket() {
+        let c = Canned(vec![
+            (
+                "http://archive.ubuntu.com/ubuntu/dists/noble-updates/InRelease",
+                Ok(UPD.as_bytes()),
+            ),
+            (
+                "http://archive.ubuntu.com/ubuntu/dists/noble-security/InRelease",
+                Err(500),
+            ),
+        ]);
+        let r = fetch_reference(&c, "http://archive.ubuntu.com/ubuntu", "noble").unwrap();
+        assert_eq!(r.security, None);
+        assert_eq!(r.updates, fresh::release_date(UPD).unwrap());
+    }
+
+    #[test]
+    fn missing_security_pocket_is_not_a_removed_release() {
+        let c = Canned(vec![
+            (
+                "http://archive.ubuntu.com/ubuntu/dists/noble-updates/InRelease",
+                Ok(UPD.as_bytes()),
+            ),
+            (
+                "http://archive.ubuntu.com/ubuntu/dists/noble-security/InRelease",
+                Err(404),
+            ),
+        ]);
+        assert!(fetch_reference(&c, "http://archive.ubuntu.com/ubuntu", "noble").is_ok());
     }
 
     #[test]
@@ -235,7 +270,8 @@ mod tests {
         let o = probe(&c, "http://m.example/ubuntu/", "noble", "amd64").unwrap();
         assert_eq!(fresh::lag(reference().updates, o.updates_date), 0);
         assert_eq!(
-            o.security_date.map(|d| fresh::lag(reference().security, d)),
+            o.security_date
+                .map(|d| fresh::lag(reference().security.unwrap(), d)),
             Some(0)
         );
         assert_eq!(o.url, "http://m.example/ubuntu");

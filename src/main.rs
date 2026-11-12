@@ -98,6 +98,9 @@ fn run() -> Result<(), (u8, String)> {
 
     let net = Net::new();
     let (mut cands, list_source) = load_candidates(&net, &country, country_name, args.https_only)?;
+    // Different list sources can name the same mirror twice (with and without a trailing slash).
+    let mut seen = std::collections::HashSet::new();
+    cands.retain(|m| seen.insert(m.url.trim_end_matches('/').to_ascii_lowercase()));
     cands.truncate(MAX_CANDIDATES);
 
     let reference = match probe::fetch_reference(&net, REFERENCE, &codename) {
@@ -134,7 +137,10 @@ fn run() -> Result<(), (u8, String)> {
     for (m, handle) in cands.iter().zip(handles) {
         match handle.join() {
             Ok(done) => results.push(done),
-            Err(_) => rejected.push((m.url.clone(), "the probe crashed unexpectedly".to_string())),
+            Err(_) => rejected.push((
+                m.url.trim_end_matches('/').to_string(),
+                "the probe crashed unexpectedly".to_string(),
+            )),
         }
     }
 
@@ -143,11 +149,13 @@ fn run() -> Result<(), (u8, String)> {
         .as_ref()
         .map(|r| r.updates)
         .or_else(|| {
-            results
-                .iter()
-                .filter_map(|(_, r)| r.as_ref().ok())
-                .map(|o| o.updates_date)
-                .max()
+            fallback_baseline(
+                results
+                    .iter()
+                    .filter_map(|(_, r)| r.as_ref().ok())
+                    .map(|o| o.updates_date)
+                    .collect(),
+            )
         })
         .unwrap_or(0);
     let mut probed: Vec<fresh::Probed> = Vec::new();
@@ -157,8 +165,10 @@ fn run() -> Result<(), (u8, String)> {
             Ok(o) => {
                 let lag = fresh::lag(baseline, o.updates_date);
                 let mut note = String::new();
-                if let (Some(r), Some(sec)) = (reference.as_ref(), o.security_date) {
-                    let sl = fresh::lag(r.security, sec);
+                if let (Some(rsec), Some(sec)) =
+                    (reference.as_ref().and_then(|r| r.security), o.security_date)
+                {
+                    let sl = fresh::lag(rsec, sec);
                     if sl > 0 {
                         note.push_str(&format!(" -security {}m behind", sl / 60));
                     }
@@ -170,7 +180,10 @@ fn run() -> Result<(), (u8, String)> {
                     notes.insert(o.url.clone(), note);
                 }
                 if fresh::is_stale(lag) {
-                    rejected.push((m.url, format!("stale: {} h behind", lag / 3600)));
+                    rejected.push((
+                        m.url.trim_end_matches('/').to_string(),
+                        format!("stale: {} h behind", lag / 3600),
+                    ));
                 } else {
                     probed.push(fresh::Probed {
                         url: o.url,
@@ -181,7 +194,7 @@ fn run() -> Result<(), (u8, String)> {
                     });
                 }
             }
-            Err(e) => rejected.push((m.url, e.to_string())),
+            Err(e) => rejected.push((m.url.trim_end_matches('/').to_string(), e.to_string())),
         }
     }
     rejected.sort();
@@ -240,6 +253,20 @@ fn architecture() -> Result<String, (u8, String)> {
             ),
         )),
     }
+}
+
+/// Baseline when the canonical archive is unreachable: the newest mirror date, but a date that is
+/// more than `MAX_LAG_SECS` ahead of the median is treated as bogus and ignored, so one mirror with a
+/// wrong clock cannot make every other mirror look stale.
+fn fallback_baseline(mut dates: Vec<i64>) -> Option<i64> {
+    if dates.is_empty() {
+        return None;
+    }
+    dates.sort_unstable();
+    let median = dates[dates.len() / 2];
+    dates
+        .into_iter()
+        .rfind(|d| *d - median <= fresh::MAX_LAG_SECS)
 }
 
 /// SPEC step 3: Launchpad first, then `mirrors.ubuntu.com/<CC>.txt`. Returns the candidates and the
@@ -322,6 +349,19 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
     use crate::http::Canned;
+
+    #[test]
+    fn fallback_baseline_ignores_a_bogus_future_date() {
+        assert_eq!(fallback_baseline(vec![]), None);
+        assert_eq!(fallback_baseline(vec![100, 100, 100]), Some(100));
+        // one mirror claims a date two days ahead: ignored
+        assert_eq!(
+            fallback_baseline(vec![1000, 1000, 1000 + 2 * 86_400]),
+            Some(1000)
+        );
+        // a normal 6 h spread keeps the newest
+        assert_eq!(fallback_baseline(vec![0, 0, 6 * 3600]), Some(6 * 3600));
+    }
 
     const LT_TXT: &[u8] = b"https://mirror.vpsnet.com/ubuntu/\nhttp://ubuntu.mirror.vu.lt/ubuntu/\nftp://x.example/\n";
     const LAUNCHPAD_OK: &[u8] = include_bytes!("../tests/fixtures/launchpad-archivemirrors.html");

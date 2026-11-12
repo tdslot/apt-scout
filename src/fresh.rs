@@ -1,5 +1,4 @@
 //! Freshness from InRelease `Date:` (SPEC.md, Pipeline steps 6-9). Pure functions, no network.
-#![allow(dead_code)] // ponytail: not called by main yet; remove this allow when the pipeline uses it.
 
 use std::fmt;
 
