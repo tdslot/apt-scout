@@ -31,11 +31,11 @@ Deliver a safe Ubuntu-family CLI that discovers and ranks mirrors, lets the user
 - [x] D5. Add local Docker runtime coverage and CI checks. [SPEC: Testing]
 - [x] D6. Formal Oracle audit completed. Accepted requirements recorded in SPEC and tasks D6a–D6c. [SPEC: Pipeline preflight, Pipeline 9, Security note, Apply testing]
 - [x] D6a. Reorder preflight so invalid/unknown `--country` and unsupported architecture fail before geo, HTTP, or DNS; Docker regression proves both cases are rejected without network attempts. Merged PR #18.
-- [ ] **D6b — IN PROGRESS (isolated worktree).** Show mirror AS and same/different/unknown status in CLI output; test known and unavailable AS cases. [SPEC: Pipeline 9]
+- [ ] **D6b — IN PROGRESS (`feat/as-output`).** Show mirror AS and same/different/unknown status in CLI output; test known and unavailable AS cases. [SPEC: Pipeline 9]
 - [ ] **D6c — BLOCKED by D7 and D8.** Decide keyring/signature implementation and add fail-closed `InRelease` signature checks before any apply decision. No apt write task may start before D6c is implemented. [SPEC: Security note, Apply]
 
 
-Merged PRs: #13, #14, #15, #16, and D6a PR #18. D6a local evidence: 79 unit tests, fmt, Clippy `-D warnings`, `cargo deny check`, Docker 17/17; PR #18 required CI and final review passed. Oracle audit run 2026-11-12; see D6a–D6c.
+Merged PRs: #13, #14, #15, #16, and D6a PR #18. D6a local evidence: 79 unit tests, fmt, Clippy `-D warnings`, `cargo deny check`, Docker 17/17; PR #18 required CI and final review passed. D6b local checks: 80 unit tests, fmt, Clippy `-D warnings`, `cargo deny check`, Docker 17/17; PR pending. Oracle audit run 2026-11-12; see D6a–D6c.
 
 ## Milestone 2 — Apt source discovery, apply, backup, restore
 
