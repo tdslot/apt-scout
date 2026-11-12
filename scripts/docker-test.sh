@@ -13,6 +13,12 @@ docker run --rm --platform "$platform" -v "$PWD":/src -w /src -e CARGO_TARGET_DI
   sh -c "rustup target add $target >/dev/null 2>&1 && cargo build --release --locked --target $target"
 bin=target/docker/$target/release/apt-scout
 
+# Pull every image first so `docker run` prints only the program's output (a fresh runner would
+# otherwise add "Unable to find image..." lines to the output being compared).
+for image in ubuntu:20.04 ubuntu:22.04 ubuntu:24.04 ubuntu:26.04 debian:12; do
+  docker pull --quiet --platform "$platform" "$image" >/dev/null
+done
+
 # Run the binary in an image; the platform is explicit so Docker prints no mismatch warning.
 run() { docker run --rm --platform "$platform" -v "$PWD/$bin":/apt-scout:ro "$@"; }
 
