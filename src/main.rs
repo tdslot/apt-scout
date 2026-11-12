@@ -1,10 +1,13 @@
 mod countries;
 mod cymru;
+mod digest;
 mod distro;
 mod fresh;
 mod geo;
 mod http;
+mod manifest;
 mod mirrors;
+mod plan;
 mod probe;
 pub mod sources;
 mod verify;
