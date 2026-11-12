@@ -42,6 +42,10 @@ Never chain with `&&`. If a check cannot run (missing Docker, no network), say e
 7. DOX: if behavior or contracts changed, were `SPEC.md` / `AGENTS.md` / `ROADMAP.md` / `CHANGELOG.md` updated to match, and does the nearest `AGENTS.md` still describe the tree truthfully?
 8. Rust quality: ownership and allocation choices, needless clones, `unwrap`/`expect` on fallible input, integer overflow in size and duration arithmetic, blocking calls in a thread budget.
 
+## Skills you apply
+
+`logic-reviewer`, `style-reviewer` and `acceptance-validator` for the dimensions you are checking. Read the skill before using it.
+
 ## Time discipline
 
 - Never leave an open-ended command running. Anything that can exceed ~120 s gets an explicit bound and a log file:

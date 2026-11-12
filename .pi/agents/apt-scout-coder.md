@@ -40,6 +40,10 @@ Never chain them with `&&`; a skipped check must not look green.
 - Only your worktree. Never `git checkout`, `switch`, `stash`, `reset`, `clean`, or `push`, and never another worktree.
 - Do not merge, do not open PRs, do not edit CI configuration unless the plan says so.
 
+## Skills you apply
+
+`strict-implementer` for the plan-following discipline, `unit-test-writer` for test shape. Read the skill before using it.
+
 ## Time discipline
 
 - Never leave an open-ended command running. Anything that can exceed ~120 s gets an explicit bound and a log file:

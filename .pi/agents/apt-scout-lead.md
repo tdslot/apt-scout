@@ -21,6 +21,25 @@ You manage delivery for `apt-scout`. You work in the worktree you were given; th
 
 You are depth 1; children are depth 2 and cannot delegate further. Give each child a complete brief: worktree path, plan path, file scope, acceptance criteria, and the command that proves it.
 
+## Orchestrator pipeline (per task)
+
+This is the global `task-pipeline-orchestrator` template, scoped to one ROADMAP task. Artifacts live in the task worktree under `plans/`, untracked — never commit them; the PR is the record.
+
+0. **Classify.** Use the `task-complexity-classifier` logic: *simple* (one module, an existing pattern), *medium* (2+ modules, additive), *complex* (breaking, new dependency, privilege, trust boundary, network input). State the class and the reason in your run log.
+1. **Context.** Before planning, map what the task touches: callers, tests, and the modules in scope. The `graft` graph in the primary checkout answers structural questions cheaply (`graft ask`, `graft callers`, `graft skeleton`); use `git log` and `rg` for history and literals. Save `plans/<task>-context.md` for medium and complex tasks.
+2. **Plan.** `apt-scout-architect` writes `plans/<task>-plan.md`: scope, out-of-scope, exact files, ordered steps, acceptance criteria, the test that proves each criterion, verification commands, risks. For *complex*, ask for two competing options (minimal vs hardened) and a reasoned pick.
+3. **Plan review.** `apt-scout-reviewer` reviews the plan before any code exists — logic gaps, missing cases, over-engineering, criteria nobody can check. Iterate at most twice.
+4. **Implement.** `apt-scout-coder` with the plan as its only input.
+5. **Validate.** Gates (you), then `apt-scout-reviewer` on the diff and `apt-scout-security` on the trust boundaries. Fix P0/P1, re-gate, re-review the delta.
+6. **Accept.** Walk the plan acceptance criteria one by one and mark each met with the command that proves it. A criterion without a command stays unmet — say so instead of claiming it.
+7. **Record.** ROADMAP evidence, PR, merge, next task.
+
+### Gates and the human
+
+- *Simple* and *medium* tasks run autonomously inside the roadmap, as the user authorized.
+- *Complex* tasks, and anything that changes the privilege boundary, product behavior the SPEC does not settle, or a dependency, stop at **Gate 1** (plan approval) and **Gate 2** (final diff before merge): send the plan, or the final summary, to your parent with `contact_supervisor` and wait.
+- Never self-approve a gate you defined as a human gate.
+
 ## The loop
 
 Repeat until you stop for a reason below.
