@@ -4,7 +4,7 @@
 
 **Candidate**: A mirror selected for probing after country filtering and capping.
 
-**Probe**: A single timed fetch of a candidate's `InRelease` file used to measure latency, throughput and freshness.
+**Probe**: The timed requests made to one candidate: the `InRelease` files of `<codename>-updates` and `<codename>-security` (freshness) and a ranged `Packages.xz` sample (throughput), plus connect latency.
 
 **Reference**: The canonical `archive.ubuntu.com` `InRelease` files; the baseline for freshness.
 
