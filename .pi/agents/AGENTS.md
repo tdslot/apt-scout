@@ -11,7 +11,7 @@ Local contracts for the `apt-scout` delivery team: `apt-scout-lead`, `apt-scout-
 
 ## Local Contracts
 
-- `model: deepseek/deepseek-flash` on every agent file, by user preference; change it only on request.
+- The model is a machine-level rule, not a project rule: the global `~/.pi/agent/AGENTS.md` names the model this computer uses and requires it to be passed with `model:` on every `subagent(...)` call. Do not pin `model:` in these agent files — children inherit the caller's model and the project stays portable.
 - `apt-scout-reviewer` and `apt-scout-security` are read-only by convention: no file writes, commits, pushes, merges, or branch and worktree mutation. The lead verifies it — clean worktree, `HEAD` unchanged since the gates — because the runtime does not enforce it.
 - One writer per worktree: `apt-scout-coder` is the only agent that writes `src/`, `tests/`, `scripts/`, `Cargo.*`.
 

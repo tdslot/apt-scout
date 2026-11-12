@@ -81,9 +81,8 @@ When the user requests a durable behavior change, record it here or in the relev
 - Chat language: agent talks to the user in Lithuanian; project artifacts stay English
 - Language: all project artifacts are English only: AGENTS.md, skills, rules, specs, docs, code comments, commit messages, PR text, CLI output, error messages
 - Spec-driven development (SDD) allowed: keep a single English `SPEC.md` at the repo root if behavior needs a spec; code follows the spec
-- Default model for this agent and every subagent it launches: `deepseek/deepseek-flash` (user preference: DeepSeek V4.1 Flash). Pass it with `model:` on delegation so it does not drift; change it only on an explicit request.
+- Delivery team lives in the repo, not in the global config: `.pi/agents/` holds `apt-scout-lead` (owns the ROADMAP loop and merges), `apt-scout-architect` (owns SPEC/ROADMAP/plans), `apt-scout-coder` (the only code writer), `apt-scout-reviewer` (independent code review) and `apt-scout-security` (trust-boundary audit). Edit them here. Delegation must pass `agentScope: project` (or `both`), because the default scope loads only the global agent directory and leaves `.pi/agents/` unloaded. The lead is the only agent that merges into `develop`, and only through a PR with green checks plus a review and security verdict. Model choice is not a project rule: the machine-level rule in the global agent config decides it.
 - Long-running commands: never leave an open-ended blocking command. Bound it and log it (`timeout 420 bash scripts/docker-test.sh > /tmp/docker.log 2>&1`), then poll the log with short calls. Ceiling per command: 7 min for `scripts/docker-test.sh`, 5 min for cargo/deny; a bound hit is a result to report, not a reason to retry bigger.
-- Delivery team lives in the repo, not in the global config: `.pi/agents/` holds `apt-scout-lead` (owns the ROADMAP loop and merges), `apt-scout-architect` (owns SPEC/ROADMAP/plans), `apt-scout-coder` (the only code writer), `apt-scout-reviewer` (independent code review) and `apt-scout-security` (trust-boundary audit). Edit them here. Delegation must pass `agentScope: project` (or `both`), because the default scope loads only the global agent directory and leaves `.pi/agents/` unloaded. The lead is the only agent that merges into `develop`, and only through a PR with green checks plus a review and security verdict.
 
 ## Project
 
@@ -122,6 +121,6 @@ When the user requests a durable behavior change, record it here or in the relev
 
 ## Child DOX Index
 
-- `.pi/agents/AGENTS.md` — contract for the delivery team's five agent files: who may edit them, the read-only convention, the model policy.
+- `.pi/agents/AGENTS.md` — contract for the delivery team's five agent files: who may edit them and the read-only convention they share.
 
 No `src/` child doc: the ten modules are documented in the Project bullets above, and no source folder carries rules of its own yet; add a child doc when one does.

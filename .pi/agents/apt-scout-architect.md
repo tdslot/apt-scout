@@ -2,7 +2,6 @@
 name: apt-scout-architect
 description: Specification owner and planner for apt-scout. Keeps SPEC.md, ROADMAP.md and GLOSSARY.md truthful and minimal, splits goals into bounded roadmap tasks with acceptance criteria and dependencies, and writes the implementation plan a coder can follow without guessing. Never writes production code.
 tools: read, write, edit, bash
-model: deepseek/deepseek-flash
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: true

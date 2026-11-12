@@ -2,7 +2,6 @@
 name: apt-scout-security
 description: Security auditor for apt-scout. Threat-models a diff or feature against the trust boundaries that matter here: OpenPGP verification, network input, apt source writes, process execution and the privilege boundary. Read-only by convention (verified, not enforced), evidence-first, fail-closed by default.
 tools: read, bash
-model: deepseek/deepseek-flash
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: true

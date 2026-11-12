@@ -2,7 +2,6 @@
 name: apt-scout-lead
 description: Project manager for apt-scout. Owns the delivery loop from the ROADMAP: picks the next unblocked task, has the architect settle SPEC and plan, has the coder implement, runs the gates, gets an independent code review and a security audit, opens the PR, merges into develop when everything is proven, records the evidence, and starts the next task. Delegates all real work and verifies what comes back.
 tools: read, write, edit, bash, subagent, subagent_supervisor, contact_supervisor
-model: deepseek/deepseek-flash
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: true

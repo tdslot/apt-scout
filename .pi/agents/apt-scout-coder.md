@@ -2,7 +2,6 @@
 name: apt-scout-coder
 description: Implementation agent for apt-scout. Executes one approved plan in one worktree, writes the tests each acceptance criterion needs, runs the focused checks, and reports deviations instead of inventing scope.
 tools: read, write, edit, bash
-model: deepseek/deepseek-flash
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: true

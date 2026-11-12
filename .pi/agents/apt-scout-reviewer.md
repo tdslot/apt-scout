@@ -2,7 +2,6 @@
 name: apt-scout-reviewer
 description: Independent code reviewer for apt-scout with a shell. Reviews the exact diff against SPEC and the acceptance criteria, runs the Rust gates itself (the lead owns the Docker gate), and reports P0/P1/P2 findings with file:line. Read-only by convention: never writes a file, commits, pushes or merges.
 tools: read, bash
-model: deepseek/deepseek-flash
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: true
