@@ -163,6 +163,7 @@ pub fn parse_text_list(text: &str) -> Vec<String> {
 pub enum Reject {
     Scheme(String),
     Userinfo,
+    TooLong(usize),
     Whitespace,
     NoHost,
     /// Characters outside letters, digits, `.` and `-` (backslash, `%` escapes, zone ids).
@@ -181,7 +182,11 @@ impl fmt::Display for Reject {
                 f,
                 "scheme '{s}' is not http or https; use an http:// or https:// mirror URL"
             ),
-            Reject::Userinfo => write!(f, "URL contains credentials (user@host); remove them"),
+            Reject::Userinfo => write!(
+                f,
+                "URL contains '@' or a backslash (credentials or a parser-confusing character); remove it"
+            ),
+            Reject::TooLong(n) => write!(f, "URL is {n} bytes long, over the 2048 byte limit"),
             Reject::Whitespace => write!(f, "URL contains whitespace; remove it"),
             Reject::NoHost => write!(f, "URL has no host; use http://host/path"),
             Reject::BadHost(h) => write!(
@@ -213,6 +218,9 @@ fn is_private(ip: std::net::IpAddr) -> bool {
                 || v4.is_multicast()
                 || v4.is_broadcast()
                 || o[0] == 0 // 0.0.0.0/8
+                || o[0] >= 240 // 240.0.0.0/4 reserved
+                || (o[0] == 192 && o[1] == 0 && o[2] == 0) // 192.0.0.0/24
+                || (o[0] == 198 && (o[1] & 0xfe) == 18) // 198.18.0.0/15 benchmarking
                 || (o[0] == 100 && (o[1] & 0xc0) == 64) // 100.64.0.0/10 shared address space
         }
         std::net::IpAddr::V6(v6) => {
@@ -220,7 +228,11 @@ fn is_private(ip: std::net::IpAddr) -> bool {
                 return is_private(v4.into());
             }
             let seg = v6.segments();
-            v6.is_loopback()
+            seg[..6].iter().all(|&x| x == 0) // ::a.b.c.d IPv4-compatible
+                || (seg[0] == 0x64 && seg[1] == 0xff9b) // 64:ff9b::/96 NAT64
+                || seg[0] == 0x2002 // 2002::/16 6to4
+                || (seg[0] & 0xffc0) == 0xfec0 // fec0::/10 site-local
+                || v6.is_loopback()
                 || v6.is_unspecified()
                 || v6.is_multicast()
                 || (seg[0] & 0xfe00) == 0xfc00 // unique local fc00::/7
@@ -235,6 +247,13 @@ pub fn validate_url(url: &str) -> Result<(), Reject> {
     if url.chars().any(char::is_whitespace) {
         return Err(Reject::Whitespace);
     }
+    // Parsers disagree on `\` and on `@` after an early authority end, so reject both anywhere.
+    if url.contains('\\') || url.contains('@') {
+        return Err(Reject::Userinfo);
+    }
+    if url.len() > 2048 {
+        return Err(Reject::TooLong(url.len()));
+    }
     let rest = url
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))
@@ -248,14 +267,23 @@ pub fn validate_url(url: &str) -> Result<(), Reject> {
         let (h, after) = v6
             .split_once(']')
             .ok_or_else(|| Reject::BadHost(authority.to_string()))?;
-        (h, after.strip_prefix(':').unwrap_or(""))
+        let port = match after {
+            "" => "",
+            _ => after
+                .strip_prefix(':')
+                .ok_or_else(|| Reject::BadHost(authority.to_string()))?,
+        };
+        (h, port)
     } else {
         authority.split_once(':').unwrap_or((authority, ""))
     };
     if host.is_empty() {
         return Err(Reject::NoHost);
     }
-    if !port.is_empty() && !matches!(port.parse::<u16>(), Ok(p) if p > 0) {
+    if !port.is_empty()
+        && !(port.chars().all(|c| c.is_ascii_digit())
+            && matches!(port.parse::<u16>(), Ok(p) if p > 0))
+    {
         return Err(Reject::BadPort(port.to_string()));
     }
     if authority.starts_with('[') {
@@ -266,6 +294,9 @@ pub fn validate_url(url: &str) -> Result<(), Reject> {
         };
     }
     let name = host.trim_end_matches('.');
+    if name.is_empty() || name.len() > 253 {
+        return Err(Reject::BadHost(host.to_string()));
+    }
     if !name
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
@@ -475,6 +506,46 @@ mod hygiene_tests {
     }
 
     #[test]
+    fn rejects_review_round_two_forms() {
+        assert_eq!(
+            validate_url("http://evil\\@127.0.0.1/"),
+            Err(Reject::Userinfo)
+        );
+        assert_eq!(validate_url("http://a.example/x@y"), Err(Reject::Userinfo));
+        assert!(matches!(validate_url("http://./"), Err(Reject::BadHost(_))));
+        assert!(matches!(
+            validate_url("https://[2001:db8::1]junk/"),
+            Err(Reject::BadHost(_))
+        ));
+        assert!(matches!(
+            validate_url("http://host.example:+80/"),
+            Err(Reject::BadPort(_))
+        ));
+        assert!(matches!(
+            validate_url(&format!("http://{}.example/", "a".repeat(300))),
+            Err(Reject::BadHost(_))
+        ));
+        assert!(matches!(
+            validate_url(&format!("http://a.example/{}", "x".repeat(3000))),
+            Err(Reject::TooLong(_))
+        ));
+        for u in [
+            "http://[::127.0.0.1]/",
+            "http://[64:ff9b::7f00:1]/",
+            "http://[2002:7f00:1::]/",
+            "http://[fec0::1]/",
+            "http://240.0.0.1/",
+            "http://192.0.0.1/",
+            "http://198.18.0.1/",
+        ] {
+            assert!(
+                matches!(validate_url(u), Err(Reject::PrivateAddress(_))),
+                "{u}"
+            );
+        }
+    }
+
+    #[test]
     fn rejects_ssrf_bypass_forms() {
         // libc getaddrinfo reads these as 127.0.0.1
         for u in [
@@ -498,10 +569,7 @@ mod hygiene_tests {
             validate_url("http://[fe80::1%25eth0]/"),
             Err(Reject::BadHost(_))
         ));
-        assert!(matches!(
-            validate_url("http://127.0.0.1\\x/"),
-            Err(Reject::PrivateAddress(_))
-        ));
+        assert_eq!(validate_url("http://127.0.0.1\\x/"), Err(Reject::Userinfo));
         assert!(matches!(
             validate_url("http://[::1/ubuntu"),
             Err(Reject::BadHost(_))
