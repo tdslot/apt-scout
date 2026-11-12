@@ -44,6 +44,15 @@ got=$(run ubuntu:24.04 sh -c \
   'printf "ID=linuxmint\nID_LIKE=\"ubuntu debian\"\nVERSION_CODENAME=wilma\nUBUNTU_CODENAME=noble\n" > /etc/os-release; /apt-scout' 2>&1) || true
 [ "$got" = "linuxmint noble" ] && echo "PASS mint -> $got" || { echo "FAIL mint -> '$got'"; status=1; }
 
+# Missing codename must name the source and must not suggest an unsupported CLI flag.
+rc=0
+got=$(run ubuntu:24.04 sh -c 'printf "ID=ubuntu\n" > /etc/os-release; /apt-scout' 2>&1) || rc=$?
+if [ "$rc" -eq 1 ] && [[ "$got" == *"/etc/os-release contains neither"* ]] && [[ "$got" != *"--codename"* ]]; then
+  echo "PASS missing codename -> actionable error, exit 1"
+else
+  echo "FAIL missing codename -> exit $rc: $got"; status=1
+fi
+
 # Debian must be rejected with exit code 4
 run debian:12 /apt-scout >/dev/null 2>&1 && rc=0 || rc=$?
 [ "$rc" = 4 ] && echo "PASS debian -> exit 4" || { echo "FAIL debian -> exit $rc"; status=1; }

@@ -22,7 +22,7 @@ fn main() -> ExitCode {
         Some(c) => println!("{} {c}", d.id),
         None => {
             eprintln!(
-                "error: no UBUNTU_CODENAME or VERSION_CODENAME in os-release; pass --codename."
+                "error: {source} contains neither UBUNTU_CODENAME nor VERSION_CODENAME, so the Ubuntu release cannot be determined. Check that the distribution's os-release file is intact; report this error with its ID and codename fields at https://github.com/tdslot/apt-scout/issues."
             );
             return ExitCode::from(1);
         }
