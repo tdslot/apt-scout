@@ -326,16 +326,7 @@ mod tests {
 
     #[test]
     fn reference_survives_a_broken_security_pocket() {
-        let c = Canned(vec![
-            (
-                "http://archive.ubuntu.com/ubuntu/dists/noble-updates/InRelease",
-                Ok(UPD.as_bytes()),
-            ),
-            (
-                "http://archive.ubuntu.com/ubuntu/dists/noble-security/InRelease",
-                Err(500),
-            ),
-        ]);
+        let c = Canned(vec![(ARCH_UPD, Ok(UPD.as_bytes())), (ARCH_SEC, Err(500))]);
         let r = fetch_reference(&c, "http://archive.ubuntu.com/ubuntu", "noble").unwrap();
         assert_eq!(r.security, None);
         assert_eq!(r.updates, fresh::release_date_tolerant(UPD).unwrap());
@@ -343,16 +334,7 @@ mod tests {
 
     #[test]
     fn missing_security_pocket_is_not_a_removed_release() {
-        let c = Canned(vec![
-            (
-                "http://archive.ubuntu.com/ubuntu/dists/noble-updates/InRelease",
-                Ok(UPD.as_bytes()),
-            ),
-            (
-                "http://archive.ubuntu.com/ubuntu/dists/noble-security/InRelease",
-                Err(404),
-            ),
-        ]);
+        let c = Canned(vec![(ARCH_UPD, Ok(UPD.as_bytes())), (ARCH_SEC, Err(404))]);
         assert!(fetch_reference(&c, "http://archive.ubuntu.com/ubuntu", "noble").is_ok());
     }
 
@@ -380,14 +362,8 @@ mod tests {
     #[test]
     fn reference_from_archive() {
         let c = Canned(vec![
-            (
-                "http://archive.ubuntu.com/ubuntu/dists/noble-updates/InRelease",
-                Ok(UPD.as_bytes()),
-            ),
-            (
-                "http://archive.ubuntu.com/ubuntu/dists/noble-security/InRelease",
-                Ok(SEC.as_bytes()),
-            ),
+            (ARCH_UPD, Ok(UPD.as_bytes())),
+            (ARCH_SEC, Ok(SEC.as_bytes())),
         ]);
         let r = fetch_reference(&c, "http://archive.ubuntu.com/ubuntu/", "noble").unwrap();
         assert_eq!(r.updates, fresh::release_date_tolerant(UPD).unwrap());
@@ -611,5 +587,115 @@ mod tests {
             panic!("expected BadUpdates, got {e}");
         };
         assert!(msg.contains("524288"), "{msg}");
+    }
+
+    #[test]
+    fn unsigned_inrelease_is_not_reported_verified() {
+        let o = probe(&recording(), "http://m.example/ubuntu/", "noble", "amd64").unwrap();
+        assert!(
+            !o.updates_signature.is_verified(),
+            "probe must not report an unsigned body as verified, got {}",
+            o.updates_signature
+        );
+        assert!(o.verified_updates().is_none());
+    }
+
+    #[test]
+    fn unsigned_reference_is_not_reported_verified() {
+        let c = Canned(vec![
+            (ARCH_UPD, Ok(UPD.as_bytes())),
+            (ARCH_SEC, Ok(SEC.as_bytes())),
+        ]);
+        let r = fetch_reference(&c, "http://archive.ubuntu.com/ubuntu", "noble").unwrap();
+        assert!(
+            !r.updates_signature.is_verified(),
+            "fetch_reference must keep the verifier's verdict, got {}",
+            r.updates_signature
+        );
+        assert!(r.verified_updates().is_none());
+    }
+
+    /// Ruling 4, read half: a prefixed `-updates` body is still ranked, and exposes no trusted date even
+    /// when `gpgv` accepts the prefix (it does: `verify::tests::gpgv_accepts_a_prefixed_body`).
+    #[test]
+    fn prefixed_body_stays_rankable_and_untrusted() {
+        let signed_body = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/signed/noble-updates-InRelease"),
+        )
+        .unwrap();
+        let mut prefixed = b"Date: Thu, 1 Jan 2099 00:00:00 UTC\n".to_vec();
+        prefixed.extend_from_slice(&signed_body);
+        let body: &'static [u8] = Box::leak(prefixed.into_boxed_slice());
+        let c = Canned(vec![
+            (M_UPD, Ok(body)),
+            (M_SEC, Ok(SEC.as_bytes())),
+            (M_SAMPLE, Ok(XZ_OK)),
+        ]);
+        let o = probe(&c, "http://m.example/ubuntu", "noble", "amd64")
+            .expect("a prefixed body must stay rankable in read-only mode");
+        assert_eq!(
+            o.updates_date,
+            fresh::parse_date("Thu, 1 Jan 2099 00:00:00 UTC").unwrap()
+        );
+        assert_eq!(
+            o.signed_updates_date, None,
+            "the Date is outside the signed region"
+        );
+        assert!(
+            o.verified_updates().is_none(),
+            "a Date gpgv never signed must not be trusted"
+        );
+    }
+
+    /// Ruling 4, reference half: the run keeps its baseline when the canonical body carries a prefix,
+    /// and still refuses to make that baseline trusted.
+    #[test]
+    fn prefixed_reference_keeps_read_only_tolerance() {
+        let mut prefixed = b"Date: Thu, 1 Jan 2099 00:00:00 UTC\n".to_vec();
+        prefixed.extend_from_slice(UPD.as_bytes());
+        let body: &'static [u8] = Box::leak(prefixed.into_boxed_slice());
+        let c = Canned(vec![(ARCH_UPD, Ok(body)), (ARCH_SEC, Ok(SEC.as_bytes()))]);
+        let r = fetch_reference(&c, "http://archive.ubuntu.com/ubuntu", "noble").unwrap();
+        assert_eq!(
+            r.updates,
+            fresh::parse_date("Thu, 1 Jan 2099 00:00:00 UTC").unwrap()
+        );
+        assert_eq!(r.signed_updates_date, None);
+        assert!(r.verified_updates().is_none());
+    }
+
+    #[test]
+    fn signed_inrelease_is_reported_verified() {
+        // Needs the production paths (/usr/bin/gpgv, ubuntu-archive-keyring.gpg); skipped on hosts without
+        // them. Docker case 13 proves the same path against the real archive.
+        if !std::path::Path::new(verify::GPGV).is_file()
+            || !std::path::Path::new(verify::UBUNTU_KEYRING).is_file()
+        {
+            return;
+        }
+        let signed_body = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/signed/noble-updates-InRelease"),
+        )
+        .unwrap();
+        let body: &'static [u8] = Box::leak(signed_body.into_boxed_slice());
+        let c = Canned(vec![
+            (M_UPD, Ok(body)),
+            (M_SEC, Ok(SEC.as_bytes())),
+            (M_SAMPLE, Ok(XZ_OK)),
+        ]);
+        let o = probe(&c, "http://m.example/ubuntu", "noble", "amd64").unwrap();
+        assert_eq!(
+            o.updates_signature,
+            SignatureStatus::Verified,
+            "{}",
+            o.updates_signature
+        );
+        assert!(o.signed_updates_date.is_some());
+        assert_eq!(
+            o.verified_updates().map(|d| d.seconds()),
+            Some(o.updates_date)
+        );
     }
 }
