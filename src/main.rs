@@ -1,4 +1,5 @@
 mod distro;
+mod mirrors;
 
 use std::process::ExitCode;
 
