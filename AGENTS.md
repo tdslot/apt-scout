@@ -114,7 +114,7 @@ When the user requests a durable behavior change, record it here or in the relev
 - Git guard: some developer machines enforce a repository-kind setting and a matching git identity; if a commit is rejected, follow the fix printed by the guard. Do not record personal identities in project documentation.
 - Rust rules: no `unwrap()`/`expect()` outside tests; errors carry context (see `SPEC.md` Errors and self-healing); `unsafe` only with a `// SAFETY:` comment; std over new dependencies; `rustls`, never OpenSSL; pure logic separate from IO; tests use fixtures, never live network
 - Commits: Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`, `feat!:` breaking); the changelog is generated from subjects
-- Agent-local skill `apt-scout-dev-workflow` (outside the repo, in the agent's project memory) mirrors these rules; the repo files are authoritative
+- Repo files are authoritative: `AGENTS.md` for workflow rules, `.github/workflows/ci.yml` for required checks, `.github/workflows/pr-title.yml` for the Conventional Commit PR title, `ROADMAP.md` for task order and status.
 - Verification: `cargo fmt --all -- --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, `scripts/docker-test.sh` (needs Docker). Run the full set before PRs that change Rust/build behavior and record results in ROADMAP.
 
 ## Child DOX Index
