@@ -37,3 +37,5 @@
 **Zero-effort flow**: The default TUI path where pressing `Enter` at every step saves the recommended mirror.
 
 **Custom mirror**: A mirror URL added by the user with `Insert`; probed and ranked like any other candidate.
+
+**Vendor default mirror**: The `X-Repolib-Default-Mirror` value in a Pop!_OS `system.sources` stanza. Left unchanged so the vendor default stays available for restore.
