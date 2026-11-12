@@ -7,7 +7,8 @@ Local contracts for the `apt-scout` delivery team: `apt-scout-lead`, `apt-scout-
 ## Ownership
 
 - This folder is off-limits to every delivery agent, together with the root `AGENTS.md`, `.github/**`, `deny.toml`, `rust-toolchain.toml`, `rustfmt.toml`, `.cargo/**`, and the dependency set in `Cargo.toml`. A change to any of them goes to the human as a `chore:` PR; the loop stops instead.
-- Delegation must pass `agentScope: project` (or `both`), otherwise the runtime does not load this folder at all.
+- Delegation must pass `agentScope: project` (or `both`). The runtime default is already `both`, which loads the user-level agents and this folder together; `project` loads this folder alone, so a same-named user-level agent cannot shadow the team.
+- The sibling `.pi/README.md` documents this same boundary from the operator's side: how the loop is launched, what a machine needs, and what `scripts/agent-doctor.sh` checks and does not check. It states no rules; this file does.
 
 ## Local Contracts
 
