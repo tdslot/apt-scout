@@ -230,12 +230,13 @@ fn run() -> Result<(), (u8, String)> {
         }
     }
 
-    // Baseline: the canonical archive; when it was unreachable, the newest candidate date.
+    // Read-only ranking baseline (SPEC step 8): the canonical archive; when it was unreachable, the
+    // newest candidate date, verified or not, because ranking must work without `gpgv`.
     let baseline = reference
         .as_ref()
         .map(|r| r.updates)
         .or_else(|| {
-            fallback_baseline(
+            display_baseline_fallback(
                 results
                     .iter()
                     .filter_map(|(_, r)| r.as_ref().ok())
@@ -244,6 +245,16 @@ fn run() -> Result<(), (u8, String)> {
             )
         })
         .unwrap_or(0);
+    // Write baseline (SPEC: Freshness trust boundary, ruling 5): verified values only, so a write
+    // fails closed when nothing verified. D9 consumes it; D6f pins the composition with tests.
+    let _write_baseline = write_baseline(
+        reference.as_ref(),
+        results
+            .iter()
+            .filter_map(|(_, r)| r.as_ref().ok())
+            .filter_map(|o| o.verified_updates())
+            .collect(),
+    );
     // AS of each candidate (SPEC step 5): informational, never a reason to fail; skipped with --no-geo.
     let server_asn = geo.asn.clone();
     let mirror_asn: std::collections::HashMap<String, String> =
@@ -486,10 +497,10 @@ fn resolve_mirror_asns(urls: &[String]) -> std::collections::HashMap<String, Str
     out
 }
 
-/// Baseline when the canonical archive is unreachable: the newest mirror date, but a date that is
-/// more than `MAX_LAG_SECS` ahead of the median is treated as bogus and ignored, so one mirror with a
-/// wrong clock cannot make every other mirror look stale.
-fn fallback_baseline(mut dates: Vec<i64>) -> Option<i64> {
+/// Read-only fallback baseline (SPEC step 8): the newest candidate date, but a date more than
+/// `MAX_LAG_SECS` ahead of the median is treated as bogus and ignored, so one mirror with a wrong
+/// clock cannot make every other mirror look stale. Verified or not: ranking must work without `gpgv`.
+fn display_baseline_fallback(mut dates: Vec<i64>) -> Option<i64> {
     if dates.is_empty() {
         return None;
     }
@@ -498,6 +509,25 @@ fn fallback_baseline(mut dates: Vec<i64>) -> Option<i64> {
     dates
         .into_iter()
         .rfind(|d| *d - median <= fresh::MAX_LAG_SECS)
+}
+
+/// Write fallback baseline (SPEC: Freshness trust boundary, ruling 5): the same newest-sane-date rule,
+/// restricted to candidate dates whose own `-updates` `InRelease` is `Verified`. `None` when nothing
+/// verified, so a write fails closed instead of trusting an unverified date.
+fn fallback_baseline(dates: Vec<verify::VerifiedDate>) -> Option<verify::VerifiedDate> {
+    let newest = display_baseline_fallback(dates.iter().map(|d| d.seconds()).collect())?;
+    dates.into_iter().find(|d| d.seconds() == newest)
+}
+
+/// The freshness baseline a write may trust: the canonical reference when it is `Verified`, otherwise
+/// the newest verified candidate date. `None` means no write (SPEC: Freshness trust boundary).
+fn write_baseline(
+    reference: Option<&probe::Reference>,
+    candidates: Vec<verify::VerifiedDate>,
+) -> Option<verify::VerifiedDate> {
+    reference
+        .and_then(|r| r.verified_updates())
+        .or_else(|| fallback_baseline(candidates))
 }
 
 /// SPEC step 3: Launchpad first, then `mirrors.ubuntu.com/<CC>.txt`. Returns the candidates and the
@@ -654,17 +684,111 @@ mod tests {
         assert_eq!(mirror_host_port("not-a-url"), None);
     }
 
+    /// A `VerifiedDate` built the only way one exists: a `Date` the strict parser accepted inside the
+    /// armour, plus a `Verified` status.
+    fn vd(rfc: &str) -> verify::VerifiedDate {
+        let body = format!("-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nDate: {rfc}\n");
+        verify::SignatureStatus::Verified
+            .verified_date(fresh::release_date(&body).unwrap())
+            .unwrap()
+    }
+
     #[test]
-    fn fallback_baseline_ignores_a_bogus_future_date() {
-        assert_eq!(fallback_baseline(vec![]), None);
-        assert_eq!(fallback_baseline(vec![100, 100, 100]), Some(100));
+    fn display_baseline_fallback_ignores_a_bogus_future_date() {
+        assert_eq!(display_baseline_fallback(vec![]), None);
+        assert_eq!(display_baseline_fallback(vec![100, 100, 100]), Some(100));
         // one mirror claims a date two days ahead: ignored
         assert_eq!(
-            fallback_baseline(vec![1000, 1000, 1000 + 2 * 86_400]),
+            display_baseline_fallback(vec![1000, 1000, 1000 + 2 * 86_400]),
             Some(1000)
         );
         // a normal 6 h spread keeps the newest
-        assert_eq!(fallback_baseline(vec![0, 0, 6 * 3600]), Some(6 * 3600));
+        assert_eq!(
+            display_baseline_fallback(vec![0, 0, 6 * 3600]),
+            Some(6 * 3600)
+        );
+    }
+
+    #[test]
+    fn fallback_baseline_takes_only_verified_dates() {
+        assert_eq!(fallback_baseline(vec![]), None);
+        let secs = |d: Option<verify::VerifiedDate>| d.map(|d| d.seconds());
+        // same arithmetic as the read-only fallback, over trusted values only
+        assert_eq!(
+            secs(fallback_baseline(vec![
+                vd("Thu, 01 Jan 1970 00:16:40 UTC");
+                3
+            ])),
+            Some(1000)
+        );
+        assert_eq!(
+            secs(fallback_baseline(vec![
+                vd("Thu, 01 Jan 1970 00:16:40 UTC"),
+                vd("Thu, 01 Jan 1970 00:16:40 UTC"),
+                vd("Sat, 03 Jan 1970 00:16:40 UTC"),
+            ])),
+            Some(1000)
+        );
+        assert_eq!(
+            secs(fallback_baseline(vec![
+                vd("Thu, 01 Jan 1970 00:00:00 UTC"),
+                vd("Thu, 01 Jan 1970 00:00:00 UTC"),
+                vd("Thu, 01 Jan 1970 06:00:00 UTC"),
+            ])),
+            Some(21_600)
+        );
+        // an unverified date cannot enter at all: only `Verified` + a parsed signed date builds the type
+        let signed = fresh::release_date(
+            "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nDate: Thu, 01 Jan 1970 00:16:40 UTC\n",
+        )
+        .unwrap();
+        assert!(
+            verify::SignatureStatus::Invalid("bad".into())
+                .verified_date(signed)
+                .is_none()
+        );
+        assert!(
+            verify::SignatureStatus::Unavailable("missing".into())
+                .verified_date(signed)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn write_baseline_prefers_a_verified_reference() {
+        let reference_date = fresh::parse_date("Thu, 12 Nov 2026  8:29:02 UTC").unwrap();
+        let verified = probe::Reference {
+            updates: reference_date,
+            signed_updates_date: Some(
+                fresh::release_date(
+                    "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nDate: Thu, 12 Nov 2026  8:29:02 UTC\n",
+                )
+                .unwrap(),
+            ),
+            updates_signature: verify::SignatureStatus::Verified,
+            security: None,
+        };
+        let unverified = probe::Reference {
+            updates: reference_date,
+            signed_updates_date: None,
+            updates_signature: verify::SignatureStatus::Invalid("unsigned".into()),
+            security: None,
+        };
+        let candidate = vd("Thu, 12 Nov 2026  4:23:38 UTC");
+        let candidate_secs = fresh::parse_date("Thu, 12 Nov 2026  4:23:38 UTC").ok();
+        // the verified reference wins over any candidate
+        assert_eq!(
+            write_baseline(Some(&verified), vec![candidate]).map(|d| d.seconds()),
+            Some(reference_date)
+        );
+        // an unverified reference falls back to the newest verified candidate
+        assert_eq!(
+            write_baseline(Some(&unverified), vec![candidate]).map(|d| d.seconds()),
+            candidate_secs
+        );
+        // nothing verified: a write fails closed
+        assert_eq!(write_baseline(Some(&unverified), vec![]), None);
+        assert_eq!(write_baseline(None, vec![]), None);
     }
 
     const LT_TXT: &[u8] = b"https://mirror.vpsnet.com/ubuntu/\nhttp://ubuntu.mirror.vu.lt/ubuntu/\nftp://x.example/\n";
