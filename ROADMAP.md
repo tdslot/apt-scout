@@ -59,15 +59,7 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
   [SPEC: Testing, Errors and self-healing]
 - [x] **D23 — DONE.** Root `AGENTS.md` described `src/` as it was before D9a, which added `digest.rs`, `plan.rs` and `manifest.rs` while the root Project list named none of them. `AGENTS.md` is closed to every delivery agent, so a human authorization was needed to add exactly these three bullets to the root Project list, one clause each, changing nothing else. Merged in PR #32.
 
-  Paste-ready lines:
-
-  ```markdown
-  - `src/digest.rs`: std-only SHA-256 and lowercase hex, used to describe a backup file by content and never to make a decision (pure, no IO)
-  - `src/plan.rs`: the closed target enumeration and the `Plan`/`PlannedWrite` validation every write passes, naming the only files an apply may touch and binding each to the bytes and metadata it was computed from
-  - `src/manifest.rs`: backup manifest `render`/`parse`, where `parse` fails closed on anything `render` would not have written and nothing here touches a disk
-  ```
-
-  Acceptance: `rg -n 'src/(digest|plan|manifest)\.rs' AGENTS.md` prints exactly those three lines and the rest of the diff is empty. [SPEC: Apply]
+  Acceptance, satisfied in this PR: `rg -n 'src/(digest|plan|manifest)\.rs' AGENTS.md` prints exactly those three lines, and no other line in that file changed.
 - [ ] **D10 — BLOCKED by D9c.** Implement validated `--restore` from the newest backup in one root run: re-read the manifest, re-derive targets and digests, refuse on mismatch; test malformed manifests, path traversal, missing files, and rollback behavior. [SPEC: CLI, Apply]
 - [ ] **D11 — BLOCKED by D10.** Add the CLI write workflow: behavior by privilege with no flags (root writes after one confirmation, non-root exits 3 with the `sudo` line), `--tui` as an opt-in mode, the `--list` read-only path, the non-root `--restore` line, and the exit codes. Docker-test actual source rewrite and restore in Ubuntu images. [SPEC: CLI, Apply, Testing]
 - [ ] **D12 — BLOCKED by D9–D11.** Oracle milestone audit; reconcile gaps in `SPEC.md`; update roadmap.
