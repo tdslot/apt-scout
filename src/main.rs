@@ -280,14 +280,17 @@ fn run() -> Result<(), (u8, String)> {
         geo.asn.as_deref().unwrap_or("AS unknown")
     );
     println!(
-        "{:>2}  {:<48} {:>7} {:>9} {:>8}",
-        "#", "mirror", "lag", "speed", "latency"
+        "{:>2}  {:<48} {:>12} {:>9} {:>7} {:>9} {:>8}",
+        "#", "mirror", "mirror AS", "AS status", "lag", "speed", "latency"
     );
     for (i, r) in ranked.iter().take(args.top).enumerate() {
+        let mirror_asn = mirror_asn.get(&r.url).map(String::as_str);
         println!(
-            "{:>2}  {:<48} {:>6}m {:>6.1} MB/s {:>6} ms",
+            "{:>2}  {:<48} {:>12} {:>9} {:>6}m {:>6.1} MB/s {:>6} ms",
             i + 1,
             r.url,
+            mirror_asn.unwrap_or("unknown"),
+            as_status(server_asn.as_deref(), mirror_asn),
             r.lag_secs / 60,
             r.throughput_bps as f64 / 1e6,
             r.latency_ms
@@ -324,6 +327,14 @@ fn architecture() -> Result<String, (u8, String)> {
                 "architecture '{other}' uses ports.ubuntu.com, which has no mirrors to choose from; apt-scout supports amd64 and i386 only."
             ),
         )),
+    }
+}
+
+fn as_status(server_asn: Option<&str>, mirror_asn: Option<&str>) -> &'static str {
+    match (server_asn, mirror_asn) {
+        (Some(server), Some(mirror)) if server == mirror => "same",
+        (Some(_), Some(_)) => "different",
+        _ => "unknown",
     }
 }
 
@@ -541,6 +552,16 @@ mod tests {
         .unwrap();
         assert!(args.no_geo);
         assert_eq!(args.country.as_deref(), Some("LT"));
+    }
+
+    #[test]
+    fn as_status_reports_same_different_and_unknown() {
+        assert_eq!(as_status(Some("AS64500"), Some("AS64500")), "same");
+        assert_eq!(as_status(Some("AS64500"), Some("AS64501")), "different");
+        assert_eq!(as_status(Some("AS64500"), None), "unknown");
+        assert_eq!(as_status(None, Some("AS64500")), "unknown");
+        // Lookup unavailable: no ASN values, so never imply an AS preference.
+        assert_eq!(as_status(None, None), "unknown");
     }
 
     #[test]
