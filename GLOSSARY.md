@@ -26,7 +26,7 @@
 
 **Mirror list source**: Where the mirror list came from: Launchpad (primary), `mirrors.ubuntu.com`, disk cache, or built-in snapshot.
 
-**Dry-run**: A run that shows the ranking and the planned change and writes nothing: `--list`, or any run that does not hold root.
+**Read-only run**: A run that writes nothing: `--list`, whatever the uid, and every non-root run, which prints the `sudo` command instead and exits 3.
 
 **Backup**: Timestamped copy of every apt sources file changed by a write, stored under `/var/backups/apt-scout/`.
 
