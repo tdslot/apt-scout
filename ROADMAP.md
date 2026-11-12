@@ -33,20 +33,21 @@ Deliver a safe Ubuntu-family CLI that discovers and ranks mirrors, lets the user
 - [x] D6a. Reorder preflight so invalid/unknown `--country` and unsupported architecture fail before geo, HTTP, or DNS; Docker regression proves both cases are rejected without network attempts. Merged PR #18.
 - [x] D6b. Show mirror AS and same/different/unknown status in CLI output; tests cover status mapping and scheme/port handling. Merged PR #19.
 - [ ] **D6c — BLOCKED by D8.** Decide keyring/signature implementation and add fail-closed `InRelease` signature checks before any apply decision. No apt write task may start before D6c is implemented. [SPEC: Security note, Apply]
+- [ ] **D6e — BLOCKED by D6c and D8.** Oracle threat-model/design audit plus independent security review of the proposed privilege boundary; approve a trusted root handoff and security acceptance tests before any privileged implementation. Explicitly decide whether self-reexec is allowed. [SPEC: Privilege boundary and threat model]
 
 
 Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, and D7 PR #21. D6a evidence: 79 unit tests and Docker 17/17; D6b evidence: 80 unit tests, fmt, Clippy `-D warnings`, `cargo deny check`, Docker 17/17; both passed required CI and review. D7 evidence: 92 unit tests, fmt, Clippy `-D warnings`, `cargo deny check`, Docker 18/18; required CI and final review passed. Oracle audit run 2026-11-12; see D6a–D6c.
 
 ## Milestone 2 — Apt source discovery, apply, backup, restore
 
-**Status: IN PROGRESS** — D6a and D6b are complete. D7 is complete; D8 is next and pure/read-only. Apt writes remain separately blocked by D6c.
+**Status: IN PROGRESS** — D6a/D6b and D7 are complete; D8 pure rewrite is in progress. D6c and D6e gate every privileged write.
 
 - [x] D7. Read-only apt source inventory and legacy/deb822 parsers; print eligible/skipped URIs and stop before probes if no eligible source exists. No apt writes. Tests cover comments/options, malformed/duplicate/missing fields, disabled/security stanzas, current mirrors, Pop!_OS mixed security suites, invalid URI ports/userinfo, root/file/directory symlinks, non-UTF8 files, third-party-only sources, and Docker CLI output. Merged PR #21.
-- [ ] **D8 — READY.** Implement pure URI rewrite with byte-preserving behavior for comments, options, non-target repositories, disabled stanzas, and security suites. Add fixture and round-trip tests. [SPEC: Apply]
-- [ ] **D9 — BLOCKED by D8 and D6c.** Implement safe backup manifest and atomic apply: no symlink following, preserve owner/mode, fsync, abort before writes on any backup failure. [SPEC: Apply]
-- [ ] **D10 — BLOCKED by D9.** Implement validated `--restore` from newest backup; test malformed manifests, path traversal, missing files, and rollback behavior. [SPEC: Apply]
-- [ ] **D11 — BLOCKED by D10 and D6c.** Add CLI dry-run diff and explicit root/confirmation behavior; Docker-test actual source rewrite and restore in Ubuntu images. [SPEC: CLI, Apply, Testing]
-- [ ] **D12 — BLOCKED by D6c and D8–D11.** Oracle milestone audit; reconcile gaps in `SPEC.md`; update roadmap.
+- [ ] **D8 — IN PROGRESS (`feat/source-rewrite`).** Implement pure URI rewrite with byte-preserving behavior for legacy/deb822 comments, options, CRLF, non-target repositories, disabled stanzas, and security suites. Return a plan containing changed source content plus the Pop!_OS `system-security.sources` content when needed; perform no filesystem IO. Add exact-output and URI round-trip tests. [SPEC: Apply]
+- [ ] **D9 — BLOCKED by D8, D6c, and D6e.** Implement safe backup manifest and atomic apply: no symlink following, preserve owner/mode, fsync, abort before writes on any backup failure. [SPEC: Apply]
+- [ ] **D10 — BLOCKED by D9 and D6e.** Implement validated `--restore` from newest backup; test malformed manifests, path traversal, missing files, and rollback behavior. [SPEC: Apply]
+- [ ] **D11 — BLOCKED by D10, D6c, and D6e.** Add CLI dry-run diff and explicit root/confirmation behavior; Docker-test actual source rewrite and restore in Ubuntu images. [SPEC: CLI, Apply, Testing]
+- [ ] **D12 — BLOCKED by D6c, D6e, and D8–D11.** Oracle milestone audit; reconcile gaps in `SPEC.md`; update roadmap.
 
 ## Milestone 3 — TUI core and laptop inspection
 
@@ -64,8 +65,9 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, and D7 PR #21. D6a evide
 
 - [ ] **D18 — BLOCKED by D17.** Add custom URL (`Insert`) validation and isolated probe flow. [SPEC: TUI, Apply]
 - [ ] **D19 — BLOCKED by D18.** Add current-run candidate removal (`Delete`) and confirmation. [SPEC: TUI]
-- [ ] **D20 — BLOCKED by D19.** Re-run laptop visual inspection and Ubuntu Docker tests; Oracle final audit against original goal and all of `SPEC.md`.
+- [ ] **D20 — BLOCKED by D19.** Write and package the comprehensive Linux man page at `man/apt-scout.1`, with `man apt-scout`, all implemented options/modes, security/privacy, files/errors/exit status, and practical examples/recipes. Include it in `.deb` as `/usr/share/man/man1/apt-scout.1` and in the release `.tar.gz`; validate formatting and query it in an Ubuntu container. [SPEC: CLI, Testing]
+- [ ] **D21 — BLOCKED by D20 and D16.** Re-run laptop visual inspection and Ubuntu Docker tests; Oracle final audit against original goal and all of `SPEC.md`.
 
 ## Change log
 
-- 2026-11-12: PR #17 established this roadmap and cycle. Formal Milestone 1 Oracle audit found preflight ordering and AS output gaps, plus the unsigned-InRelease write trust boundary. D6a merged as PR #18, D6b as PR #19, and read-only D7 as PR #21. D8 pure rewrite is READY; D6c blocks all apt writes. All apt-write tests must run in disposable Ubuntu containers with isolated `/etc/apt`; never mount the host path.
+- 2026-11-12: PR #17 established this roadmap and cycle. Formal Milestone 1 Oracle audit found preflight ordering and AS output gaps, plus the unsigned-InRelease write trust boundary. D6a merged as PR #18, D6b as PR #19, and read-only D7 as PR #21. D8 pure rewrite is in progress. D6c signature verification and D6e privilege-security audit block all apt writes. After D19 stabilizes CLI/TUI behavior, D20 adds the detailed packaged `man apt-scout` manual before D21 final audit. All apt-write tests must run in disposable Ubuntu containers with isolated `/etc/apt`; never mount the host path.
