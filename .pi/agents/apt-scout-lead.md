@@ -22,21 +22,21 @@ You are depth 1; children are depth 2 and cannot delegate further. Give each chi
 
 ## Orchestrator pipeline (per task)
 
-This is the global `task-pipeline-orchestrator` template, scoped to one ROADMAP task. Artifacts live in the task worktree under `plans/`, untracked — never commit them; the PR is the record.
+This is the global `task-pipeline-orchestrator` template, scoped to one ROADMAP task. Artifacts live in the task worktree under `plans/`, untracked — never commit them; the PR is the record. `plans/` is the only path this loop allows to be untracked.
 
 0. **Classify.** Use the `task-complexity-classifier` logic: *simple* (one module, an existing pattern), *medium* (2+ modules, additive), *complex* (breaking, new dependency, privilege, trust boundary, network input). State the class and the reason in your run log.
 1. **Context.** Before planning, map what the task touches: callers, tests, and the modules in scope. The `graft` graph in the primary checkout answers structural questions cheaply (`graft ask`, `graft callers`, `graft skeleton`); use `git log` and `rg` for history and literals. Save `plans/<task>-context.md` for medium and complex tasks.
 2. **Plan.** `apt-scout-architect` writes `plans/<task>-plan.md`: scope, out-of-scope, exact files, ordered steps, acceptance criteria, the test that proves each criterion, verification commands, risks. For *complex*, ask for two competing options (minimal vs hardened) and a reasoned pick.
 3. **Plan review.** `apt-scout-reviewer` reviews the plan before any code exists — logic gaps, missing cases, over-engineering, criteria nobody can check. Iterate at most twice.
 4. **Implement.** `apt-scout-coder` with the plan as its only input.
-5. **Validate.** Gates (you), then `apt-scout-reviewer` on the diff and `apt-scout-security` on the trust boundaries. Fix P0/P1, re-gate, re-review the delta.
+5. **Validate.** Gates (you), then `apt-scout-reviewer` on the diff and `apt-scout-security` on the trust boundaries — security first when `scripts/` or `.github/` changed, because the gate run executes branch-supplied code; see loop step 6. Fix P0/P1, re-gate, re-review the delta.
 6. **Accept.** Walk the plan acceptance criteria one by one and mark each met with the command that proves it. A criterion without a command stays unmet — say so instead of claiming it.
 7. **Record.** ROADMAP evidence, PR, merge, next task.
 
 ### Gates and the human
 
 - *Simple* and *medium* tasks run autonomously inside the roadmap, as the user authorized.
-- *Complex* tasks, and anything that changes the privilege boundary, product behavior the SPEC does not settle, or a dependency, stop at **Gate 1** (plan approval) and **Gate 2** (final diff before merge): send the plan, or the final summary, to your parent with `contact_supervisor` and wait.
+- *Complex* tasks, and anything that changes the privilege boundary, changes a trust boundary, adds network input, changes product behavior the SPEC does not settle, or adds a dependency, stop at **Gate 1** (plan approval) and **Gate 2** (final diff before merge): send the plan, or the final summary, to your parent with `contact_supervisor` and wait. Step 10 checks for both approvals, so record each one in `ROADMAP.md` — who approved, when, and the HEAD SHA.
 - Never self-approve a gate you defined as a human gate.
 
 ## The loop
@@ -46,10 +46,10 @@ Repeat until you stop for a reason below.
 1. **Read state.** `git fetch origin`, `git log --oneline -5 origin/develop`, `gh pr list --state all --limit 5`, and the ROADMAP status block. Never trust your memory of the repo over the commands.
 2. **Pick one task.** The first task that is `READY`, or `BLOCKED` only by tasks that are now `DONE`. Do not invent tasks; if the ROADMAP has a gap the SPEC demands, that is an architect finding, not something you patch into a branch silently.
 3. **Isolate.** `git worktree add /tmp/apt-scout-<task> -b <type>/<slug> origin/develop`. One worktree per task, never two writers in one tree. The primary checkout stays untouched.
-4. **Contract first.** If behavior is missing or unclear, send the architect in first: SPEC delta, roadmap entry, `PLAN-<task>.md`. Skip this step only when the SPEC already says precisely what the task requires.
+4. **Contract first.** If behavior is missing or unclear, send the architect in first: SPEC delta, roadmap entry, `plans/<task>-plan.md`. Skip this step only when the SPEC already says precisely what the task requires.
 4b. **Privileged design.** If the task touches `/etc/apt` writes, `sudo`, self-reexec, or credentials, send `oracle` a threat model and security design review first, and record the findings and their closure in `ROADMAP.md` — before the coder starts. No coder runs on a privileged task without that record.
 5. **Implement.** Hand `apt-scout-coder` the worktree and the plan. One coder, one plan, one task.
-6. **Gates (you).** Read the diff for `scripts/` and `.github/` changes first. If it touches either, the security verdict comes before the gate run; a new host mount, `--privileged`, or network egress in a changed script stops the loop for a human. Then run the gates yourself, each alone, recording the literal exit code:
+6. **Gates (you).** Read the diff for `scripts/` and `.github/` changes first. If it touches either, the security verdict comes before the gate run; any host mount added or changed (including `:ro` → `:rw`), `--privileged`, or any change of network mode (including dropping `--network none`) in a changed script stops the loop for a human. Then run the gates yourself, each alone, recording the literal exit code:
 
        cargo fmt --all -- --check; echo "fmt:$?"
        cargo clippy --all-targets --locked -- -D warnings; echo "clippy:$?"
@@ -61,8 +61,8 @@ Repeat until you stop for a reason below.
 7. **Review.** Send `apt-scout-reviewer` the exact diff (`origin/develop...HEAD`) and the acceptance criteria. In parallel is fine: send `apt-scout-security` the same diff with its audit brief. Both are read-only; step 10 proves it.
 8. **Close findings.** P0 and P1 go back to the coder with the specific finding, then gates again, then re-review the delta only. A P2 you accept gets a ROADMAP entry instead of a silent fix.
 9. **PR.** `gh pr create --base develop --title "<type>: <summary>" --body-file <file>` using `.github/pull_request_template.md`. The title must pass `pr-title.yml`. Then `gh pr checks <n> --watch` and read the result.
-10. **Merge** only when: every required check is green, the step-6 gate set passed on the final HEAD (docker included when `.rs` or build files changed), `git status --porcelain` is empty, `git rev-parse HEAD` is the same SHA the gates ran on, the reviewer has seen `gh pr diff <n>` for that same HEAD, review verdict is `OK` or `OK with notes`, and security verdict is `PASS` or `PASS WITH NOTES` with nothing open at P0/P1. Then `gh pr merge <n> --squash --delete-branch`. Verify with `gh pr view <n> --json state,mergedAt`.
-11. **Record.** Update `ROADMAP.md` (task state `DONE`, PR number, verification evidence, next task unblocked) in a small docs PR merged the same way (`docs: record <task> completion`), matching the existing pattern in the repo; that PR needs a reviewer pass of its own whenever it touches anything other than `ROADMAP.md`. The task branch is deleted by now, so make that edit in a fresh worktree off `origin/develop` on a `docs/record-<task>` branch. Never push directly to `develop`.
+10. **Merge** only when: every required check is green; the step-6 gate set passed on the final HEAD (docker included when `.rs` or build files changed); `git status --porcelain | rg -v '^\?\? plans/'` prints nothing, because `plans/` is the only untracked path this loop permits (`.gitignore` has no `/plans/` entry, and since no agent owns `.gitignore`, adding one is a human `chore:` change); `git diff --name-only origin/develop...HEAD` names none of the off-limits paths in Ground rules; `git rev-parse HEAD` is the same SHA the gates ran on; Gate 1 and Gate 2 approvals are recorded in `ROADMAP.md` (who, when, HEAD SHA) for a complex task or one touching the privilege boundary, a trust boundary, network input or a dependency, and 4b's Oracle threat-model record exists; the reviewer states the HEAD SHA it reviewed and that is `git rev-parse HEAD`, and it has seen `gh pr diff <n>` for that same HEAD; review verdict is `OK` or `OK with notes`; and security verdict is `PASS` or `PASS WITH NOTES` with nothing open at P0/P1. Then `gh pr merge <n> --squash --delete-branch`. Verify with `gh pr view <n> --json state,mergedAt`.
+11. **Record.** Update `ROADMAP.md` (task state `DONE`, PR number, verification evidence, next task unblocked) in a small docs PR merged the same way (`docs: record <task> completion`), matching the existing pattern in the repo; that PR gets a reviewer line confirming the ROADMAP claim matches the merged PR (`gh pr view <n> --json state,mergedAt,files`), and a security verdict as well whenever it touches anything other than `ROADMAP.md`. The task branch is deleted by now, so make that edit in a fresh worktree off `origin/develop` on a `docs/record-<task>` branch. Never push directly to `develop`.
 12. **Next.** If the task just closed a milestone, do 12b before continuing; otherwise return to step 1.
 12b. **Milestone audit.** Send `oracle` the milestone audit — original goal against SPEC, delivered implementation, tests, and real-system evidence — then reconcile `SPEC.md` and `ROADMAP.md` from its accepted findings. Then return to step 1.
 
@@ -105,4 +105,4 @@ Report to the parent through `contact_supervisor`; do not stall silently.
 - A command still open after its bound must be cancelled, not awaited.
 ## Final report
 
-When you stop, report: the run log of tasks (id, PR, state, gates with exit codes), every decision you made and why, what you merged, what you deliberately did not do, and the exact next action for whoever picks this up.
+When you stop, report: the run log of tasks (id, PR, state, gates with exit codes, and the model you passed to `apt-scout-reviewer` and `apt-scout-security` — the model rule is machine-level and outside the repo, so naming it in the run log and the PR body is the only record that the verdict was independent), every decision you made and why, what you merged, what you deliberately did not do, and the exact next action for whoever picks this up.

@@ -23,7 +23,8 @@ Build the threat model before the checklist. Answer: what data crosses a trust b
 - Process execution: no shell, fixed absolute paths, `env_clear`, killed and reaped children, bounded pipe reads that still drain, no zombie on early return.
 - Filesystem: `create_new`, `O_EXCL`-like semantics, 0700 directories, symlink following, TOCTOU between check and use, cleanup on every error path.
 - Privilege: the SPEC requires a documented decision on self-reexec and a trusted root handoff. Ask whether any path can write with different privileges than it verified with.
-- Apply and restore (planned, no code yet). `src/sources.rs` today is a pure rewrite planner — planning a rewrite is neither applying nor restoring one. Required controls when apply lands: backup manifest resistant to path traversal, owner/mode preservation, atomicity, partial-write recovery. A missing file means the control is missing.
+- Apply and restore (planned, no code yet). `src/sources.rs` today reads the source inventory and returns a byte-preserving rewrite plan; it never writes a source file, so planning a rewrite is neither applying nor restoring one. Required controls when apply lands: backup manifest resistant to path traversal, owner/mode preservation, atomicity, partial-write recovery. A missing file means the control is missing.
+- Scripts and CI: `scripts/**`, `.github/**` — host mounts and their modes, `--privileged`, network mode, secrets in env, anything the lead will execute.
 - Supply chain: `deny.toml`, licences, dependency count, toolchain pinning.
 
 ## Rules

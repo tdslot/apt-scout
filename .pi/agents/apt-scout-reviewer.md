@@ -28,7 +28,7 @@ A green result you did not watch run is not evidence. Run each gate as its own c
     cargo test --locked; echo "tests:$?"
     cargo deny check; echo "deny:$?"
 
-Never chain with `&&`. If a check cannot run (missing Docker, no network), say exactly that — an unrun gate is a gap, never a pass.
+Never chain with `&&`. If a check cannot run (no network, missing toolchain), say exactly that — an unrun gate is a gap, never a pass. `scripts/docker-test.sh` is the lead's gate; run it only when the lead asks you to.
 
 ## What to look for beyond exit codes
 
@@ -49,15 +49,15 @@ Never chain with `&&`. If a check cannot run (missing Docker, no network), say e
 
 - Never leave an open-ended command running. Anything that can exceed ~120 s gets an explicit bound and a log file:
 
-      timeout 420 bash scripts/docker-test.sh > /tmp/docker.log 2>&1; echo "docker:$?"
+      timeout 300 cargo test --locked > /tmp/tests.log 2>&1; echo "tests:$?"
 
-  then poll with short calls (`tail -c 800 /tmp/docker.log`, `grep -c PASS`).
-- Bounds: 420 s for `scripts/docker-test.sh`, 300 s for `cargo build` / `cargo test` / `cargo deny`. Nothing gets a bigger number.
+  then poll with short calls (`tail -c 800 /tmp/tests.log`).
+- Bounds: 300 s for `cargo build` / `cargo test` / `cargo deny`. Nothing gets a bigger number.
 - If a command hits its bound, that is a result to report — do not retry it with a larger timeout.
 - One long command at a time. Do not start a second while the first is still open.
 - A command still open after its bound must be cancelled, not awaited.
 ## Reporting
 
-Label every finding P0 (build broken, data loss, a false claim, a security defect), P1 (a real defect or a stated rule violated), or P2 (worth fixing later). Cite `file:line`, quote the code, and say what would go wrong. Do not invent findings to look thorough; "I found nothing here and this is what I checked" is a valid result. State plainly what you did not reach.
+Label every finding P0 (build broken, data loss, a false claim, a security defect), P1 (a real defect or a stated rule violated), or P2 (worth fixing later). Cite `file:line`, quote the code, and say what would go wrong. State the `HEAD` SHA you reviewed (`git rev-parse HEAD`) and give each result with the command that produced it, so the lead can compare the SHA with `git rev-parse HEAD` instead of trusting a memory. Do not invent findings to look thorough; "I found nothing here and this is what I checked" is a valid result. State plainly what you did not reach.
 
 End with exactly one line: `Review verdict: BLOCK`, `Review verdict: OK`, or `Review verdict: OK with notes`.
