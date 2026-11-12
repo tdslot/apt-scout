@@ -9,7 +9,7 @@ apt-scout --country LT
 apt-scout --country LT --no-geo --top 5 --https-only
 ```
 
-Without `--country`, apt-scout attempts optional country detection. If every source fails, it asks for `--country`. `--no-geo` disables country and AS lookups and requires an explicit country. `--list` prints ranked mirrors; `--top N` limits results.
+Without `--country`, apt-scout attempts optional country detection. If every source fails, it asks for `--country`. `--no-geo` disables country and AS lookups and requires an explicit country. Before mirror probing, apt-scout prints a read-only inventory of apt source URIs and stops if none can use an official Ubuntu mirror. `--list` prints ranked mirrors; `--top N` limits results.
 
 ## Network and privacy
 

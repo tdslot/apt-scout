@@ -6,6 +6,7 @@ mod geo;
 mod http;
 mod mirrors;
 mod probe;
+mod sources;
 
 use std::process::ExitCode;
 use std::thread;
@@ -66,7 +67,7 @@ fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args, Strin
             }
             "-h" | "--help" => {
                 println!(
-                    "apt-scout [--country <CC>] [--no-geo] [--top N] [--https-only] [--list]\nShows the freshest, fastest Ubuntu mirrors for your country (detected, or given with --country). --no-geo skips every geolocation lookup and needs --country. Read-only: nothing is written."
+                    "apt-scout [--country <CC>] [--no-geo] [--top N] [--https-only] [--list]\nShows the freshest, fastest Ubuntu mirrors for your country (detected, or given with --country). --no-geo skips every geolocation lookup and needs --country. Shows a read-only apt source inventory; nothing is written."
                 );
                 std::process::exit(0);
             }
@@ -159,6 +160,33 @@ fn run() -> Result<(), (u8, String)> {
     let mut seen = std::collections::HashSet::new();
     cands.retain(|m| seen.insert(m.url.trim_end_matches('/').to_ascii_lowercase()));
     cands.truncate(MAX_CANDIDATES);
+
+    let mut archive_hosts = vec!["archive.ubuntu.com".to_string()];
+    if d.id == "pop" {
+        archive_hosts.push("apt.pop-os.org".to_string());
+    }
+    archive_hosts.extend(
+        cands
+            .iter()
+            .filter_map(|m| mirror_host_port(&m.url).map(|(host, _)| host)),
+    );
+    archive_hosts.sort_unstable();
+    archive_hosts.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    let apt_sources = sources::inventory(
+        std::path::Path::new("/etc/apt"),
+        &archive_hosts,
+        d.id == "pop",
+    );
+    println!(
+        "APT source inventory (read-only):\n{}",
+        apt_sources.report()
+    );
+    if !apt_sources.has_rewritable_uri() {
+        println!(
+            "No official Ubuntu apt source URI can be changed; stopping before mirror probes."
+        );
+        return Ok(());
+    }
 
     let reference = match probe::fetch_reference(&net, REFERENCE, &codename) {
         Ok(r) => Some(r),

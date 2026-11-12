@@ -35,13 +35,13 @@ Deliver a safe Ubuntu-family CLI that discovers and ranks mirrors, lets the user
 - [ ] **D6c — BLOCKED by D7 and D8.** Decide keyring/signature implementation and add fail-closed `InRelease` signature checks before any apply decision. No apt write task may start before D6c is implemented. [SPEC: Security note, Apply]
 
 
-Merged PRs: #13, #14, #15, #16, D6a PR #18, and D6b PR #19. D6a evidence: 79 unit tests and Docker 17/17; D6b evidence: 80 unit tests, fmt, Clippy `-D warnings`, `cargo deny check`, Docker 17/17; both PRs passed required CI and final review. Oracle audit run 2026-11-12; see D6a–D6c.
+Merged PRs: #13, #14, #15, #16, D6a PR #18, and D6b PR #19. D6a evidence: 79 unit tests and Docker 17/17; D6b evidence: 80 unit tests, fmt, Clippy `-D warnings`, `cargo deny check`, Docker 17/17; both PRs passed required CI and final review. Oracle audit run 2026-11-12; see D6a–D6c. D7 local evidence: 92 unit tests, fmt, Clippy `-D warnings`, `cargo deny check`, Docker 18/18; D7 review passed, PR pending.
 
 ## Milestone 2 — Apt source discovery, apply, backup, restore
 
-**Status: READY** — D6a and D6b are complete. D7 is next and read-only; apt writes remain separately blocked by D6c.
+**Status: IN PROGRESS** — D6a and D6b are complete. D7 is read-only; apt writes remain separately blocked by D6c.
 
-- [ ] **D7 — READY (read-only only).** Build source-file inventory and pure parsers for legacy `.list` and deb822 `.sources`; identify official Ubuntu archive URI tokens only, including Pop!_OS rules. Show inspected/ignored entries. [SPEC: Apply, no-rewritable-URI rule]
+- [ ] **D7 — IN PROGRESS (`feat/source-inventory`, read-only).** Scan only regular apt source files without following symlinks; parse legacy `deb`/`deb-src` and deb822 stanzas into URI/suite records without modifying source bytes; identify official Ubuntu/Pop!_OS URI tokens, print inspected/skipped entries before candidate probing, and stop before probes if no eligible URI exists. No apt writes. Tests cover comments, options, malformed/duplicate/missing fields, disabled/security stanzas, current mirrors, Pop!_OS policy, symlinks, non-UTF8 files, third-party-only sources, and Docker CLI output. [SPEC: Apply, source discovery]
 - [ ] **D8 — BLOCKED by D7.** Implement pure URI rewrite with byte-preserving behavior for comments, options, non-target repositories, disabled stanzas, and security suites. Add fixture and round-trip tests. [SPEC: Apply]
 - [ ] **D9 — BLOCKED by D8 and D6c.** Implement safe backup manifest and atomic apply: no symlink following, preserve owner/mode, fsync, abort before writes on any backup failure. [SPEC: Apply]
 - [ ] **D10 — BLOCKED by D9.** Implement validated `--restore` from newest backup; test malformed manifests, path traversal, missing files, and rollback behavior. [SPEC: Apply]
