@@ -32,21 +32,21 @@ Deliver a safe Ubuntu-family CLI that discovers and ranks mirrors, lets the user
 - [x] D6. Formal Oracle audit completed. Accepted requirements recorded in SPEC and tasks D6a–D6c. [SPEC: Pipeline preflight, Pipeline 9, Security note, Apply testing]
 - [x] D6a. Reorder preflight so invalid/unknown `--country` and unsupported architecture fail before geo, HTTP, or DNS; Docker regression proves both cases are rejected without network attempts. Merged PR #18.
 - [x] D6b. Show mirror AS and same/different/unknown status in CLI output; tests cover status mapping and scheme/port handling. Merged PR #19.
-- [ ] **D6c — BLOCKED by D7 and D8.** Decide keyring/signature implementation and add fail-closed `InRelease` signature checks before any apply decision. No apt write task may start before D6c is implemented. [SPEC: Security note, Apply]
+- [ ] **D6c — BLOCKED by D8.** Decide keyring/signature implementation and add fail-closed `InRelease` signature checks before any apply decision. No apt write task may start before D6c is implemented. [SPEC: Security note, Apply]
 
 
-Merged PRs: #13, #14, #15, #16, D6a PR #18, and D6b PR #19. D6a evidence: 79 unit tests and Docker 17/17; D6b evidence: 80 unit tests, fmt, Clippy `-D warnings`, `cargo deny check`, Docker 17/17; both PRs passed required CI and final review. Oracle audit run 2026-11-12; see D6a–D6c. D7 local evidence: 92 unit tests, fmt, Clippy `-D warnings`, `cargo deny check`, Docker 18/18; D7 review passed, PR pending.
+Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, and D7 PR #21. D6a evidence: 79 unit tests and Docker 17/17; D6b evidence: 80 unit tests, fmt, Clippy `-D warnings`, `cargo deny check`, Docker 17/17; both passed required CI and review. D7 evidence: 92 unit tests, fmt, Clippy `-D warnings`, `cargo deny check`, Docker 18/18; required CI and final review passed. Oracle audit run 2026-11-12; see D6a–D6c.
 
 ## Milestone 2 — Apt source discovery, apply, backup, restore
 
-**Status: IN PROGRESS** — D6a and D6b are complete. D7 is read-only; apt writes remain separately blocked by D6c.
+**Status: IN PROGRESS** — D6a and D6b are complete. D7 is complete; D8 is next and pure/read-only. Apt writes remain separately blocked by D6c.
 
-- [ ] **D7 — IN PROGRESS (`feat/source-inventory`, read-only).** Scan only regular apt source files without following symlinks; parse legacy `deb`/`deb-src` and deb822 stanzas into URI/suite records without modifying source bytes; identify official Ubuntu/Pop!_OS URI tokens, print inspected/skipped entries before candidate probing, and stop before probes if no eligible URI exists. No apt writes. Tests cover comments, options, malformed/duplicate/missing fields, disabled/security stanzas, current mirrors, Pop!_OS policy, symlinks, non-UTF8 files, third-party-only sources, and Docker CLI output. [SPEC: Apply, source discovery]
-- [ ] **D8 — BLOCKED by D7.** Implement pure URI rewrite with byte-preserving behavior for comments, options, non-target repositories, disabled stanzas, and security suites. Add fixture and round-trip tests. [SPEC: Apply]
+- [x] D7. Read-only apt source inventory and legacy/deb822 parsers; print eligible/skipped URIs and stop before probes if no eligible source exists. No apt writes. Tests cover comments/options, malformed/duplicate/missing fields, disabled/security stanzas, current mirrors, Pop!_OS mixed security suites, invalid URI ports/userinfo, root/file/directory symlinks, non-UTF8 files, third-party-only sources, and Docker CLI output. Merged PR #21.
+- [ ] **D8 — READY.** Implement pure URI rewrite with byte-preserving behavior for comments, options, non-target repositories, disabled stanzas, and security suites. Add fixture and round-trip tests. [SPEC: Apply]
 - [ ] **D9 — BLOCKED by D8 and D6c.** Implement safe backup manifest and atomic apply: no symlink following, preserve owner/mode, fsync, abort before writes on any backup failure. [SPEC: Apply]
 - [ ] **D10 — BLOCKED by D9.** Implement validated `--restore` from newest backup; test malformed manifests, path traversal, missing files, and rollback behavior. [SPEC: Apply]
 - [ ] **D11 — BLOCKED by D10 and D6c.** Add CLI dry-run diff and explicit root/confirmation behavior; Docker-test actual source rewrite and restore in Ubuntu images. [SPEC: CLI, Apply, Testing]
-- [ ] **D12 — BLOCKED by D6c and D7–D11.** Oracle milestone audit; reconcile gaps in `SPEC.md`; update roadmap.
+- [ ] **D12 — BLOCKED by D6c and D8–D11.** Oracle milestone audit; reconcile gaps in `SPEC.md`; update roadmap.
 
 ## Milestone 3 — TUI core and laptop inspection
 
@@ -68,4 +68,4 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, and D6b PR #19. D6a evidence: 79 uni
 
 ## Change log
 
-- 2026-11-12: PR #17 established this roadmap and cycle. Formal Milestone 1 Oracle audit found preflight ordering and AS output gaps, plus the unsigned-InRelease write trust boundary. Manager decision: D6a merged as PR #18 and D6b as PR #19; D7 is now READY and read-only. D6c blocks all apt writes. All apt-write tests must run in disposable Ubuntu containers with isolated `/etc/apt`; never mount the host path.
+- 2026-11-12: PR #17 established this roadmap and cycle. Formal Milestone 1 Oracle audit found preflight ordering and AS output gaps, plus the unsigned-InRelease write trust boundary. D6a merged as PR #18, D6b as PR #19, and read-only D7 as PR #21. D8 pure rewrite is READY; D6c blocks all apt writes. All apt-write tests must run in disposable Ubuntu containers with isolated `/etc/apt`; never mount the host path.
