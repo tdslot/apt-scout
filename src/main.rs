@@ -7,6 +7,7 @@ mod http;
 mod mirrors;
 mod probe;
 pub mod sources;
+mod verify;
 
 use std::process::ExitCode;
 use std::thread;
@@ -258,6 +259,8 @@ fn run() -> Result<(), (u8, String)> {
         };
     let mut probed: Vec<fresh::Probed> = Vec::new();
     let mut notes: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut signatures: std::collections::HashMap<String, verify::SignatureStatus> =
+        std::collections::HashMap::new();
     for (m, r) in results {
         match r {
             Ok(o) => {
@@ -274,6 +277,10 @@ fn run() -> Result<(), (u8, String)> {
                 if let Some(host) = &o.redirected_to {
                     note.push_str(&format!(" redirects to {host}"));
                 }
+                if !o.updates_signature.is_verified() {
+                    note.push_str(&format!(" signature {}", o.updates_signature));
+                }
+                signatures.insert(o.url.clone(), o.updates_signature.clone());
                 if !note.is_empty() {
                     notes.insert(o.url.clone(), note);
                 }
@@ -307,18 +314,31 @@ fn run() -> Result<(), (u8, String)> {
         "Ubuntu {codename}, country {country_name} ({country_origin}), server {}, mirror list: {list_source}, baseline {baseline_name}\n",
         geo.asn.as_deref().unwrap_or("AS unknown")
     );
+    if let Some(reference) = reference.as_ref() {
+        println!(
+            "Reference InRelease signature: {}",
+            reference.updates_signature
+        );
+    }
     println!(
-        "{:>2}  {:<48} {:>12} {:>9} {:>7} {:>9} {:>8}",
-        "#", "mirror", "mirror AS", "AS status", "lag", "speed", "latency"
+        "Signature status is shown for ranking only; apt writes will require verified InRelease data.\n"
+    );
+    println!(
+        "{:>2}  {:<48} {:>12} {:>9} {:>10} {:>7} {:>9} {:>8}",
+        "#", "mirror", "mirror AS", "AS status", "signature", "lag", "speed", "latency"
     );
     for (i, r) in ranked.iter().take(args.top).enumerate() {
         let mirror_asn = mirror_asn.get(&r.url).map(String::as_str);
         println!(
-            "{:>2}  {:<48.48} {:>12} {:>9} {:>6}m {:>6.1} MB/s {:>6} ms",
+            "{:>2}  {:<48.48} {:>12} {:>9} {:>10} {:>6}m {:>6.1} MB/s {:>6} ms",
             i + 1,
             r.url,
             mirror_asn.unwrap_or("unknown"),
             as_status(server_asn.as_deref(), mirror_asn),
+            signatures
+                .get(&r.url)
+                .map(signature_label)
+                .unwrap_or("unknown"),
             r.lag_secs / 60,
             r.throughput_bps as f64 / 1e6,
             r.latency_ms
@@ -355,6 +375,14 @@ fn architecture() -> Result<String, (u8, String)> {
                 "architecture '{other}' uses ports.ubuntu.com, which has no mirrors to choose from; apt-scout supports amd64 and i386 only."
             ),
         )),
+    }
+}
+
+fn signature_label(status: &verify::SignatureStatus) -> &'static str {
+    match status {
+        verify::SignatureStatus::Verified => "verified",
+        verify::SignatureStatus::Invalid(_) => "invalid",
+        verify::SignatureStatus::Unavailable(_) => "unavailable",
     }
 }
 
