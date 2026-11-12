@@ -8,6 +8,7 @@ repository = "https://github.com/tdslot/apt-scout"
 readme = "README.md"
 
 [dependencies]
+ureq = { version = "3.5.1", default-features = false, features = ["rustls"] }
 
 [profile.release]
 lto = true

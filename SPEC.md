@@ -161,6 +161,10 @@ Principle: the program solves its own problems when safe, and otherwise says exa
 - Pop!_OS is tested in an Ubuntu 22.04 container with the real `pop-default-settings` package downloaded from `apt.pop-os.org` (pinned by file checksum in the test fixtures, downloaded once and cached; the download is a test setup step, not a test of the live service): its `os-release` and the deb822 `system.sources` template from its `postinst` are the fixture. Linux Mint is covered by its documented `os-release` (`ID=linuxmint`, `VERSION_CODENAME=wilma`, `UBUNTU_CODENAME=noble`) in a container. Neither is a full installation, only the files this tool reads and writes.
 - Live-network smoke tests (real Launchpad, geo sources) are manual, never part of CI, because they are rate limited and flaky.
 
+## Implementation status
+
+Implemented and tested: os-release detection (Ubuntu family, codename), Launchpad and `mirrors.ubuntu.com` list parsing, candidate URL hygiene, `-updates`/`-security` InRelease dates, lag, ranking, per-mirror probing, and a read-only `--country <CC> [--top N] [--https-only] [--list]` run. Not yet implemented: geolocation and AS (`--country` is required), disk cache, `mirrors.ubuntu.com` fallback wiring, apply/backup/restore, TUI.
+
 ## Out of scope (v1)
 
 Debian, Fedora/other package managers, running `apt update`, scheduling, GUI, PPA mirrors.
