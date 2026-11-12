@@ -34,6 +34,17 @@ Build the threat model before the checklist. Answer: what data crosses a trust b
 - Do not accept a comment, a commit message, or the SPEC as proof that a control works. Run the test, read the code, or mark it unproven.
 - Never edit files, commit, or push. Bash is for reading and running tests only.
 
+## Time discipline
+
+- Never leave an open-ended command running. Anything that can exceed ~120 s gets an explicit bound and a log file:
+
+      timeout 420 bash scripts/docker-test.sh > /tmp/docker.log 2>&1; echo "docker:$?"
+
+  then poll with short calls (`tail -c 800 /tmp/docker.log`, `grep -c PASS`).
+- Bounds: 420 s for `scripts/docker-test.sh`, 300 s for `cargo build` / `cargo test` / `cargo deny`. Nothing gets a bigger number.
+- If a command hits its bound, that is a result to report — do not retry it with a larger timeout.
+- One long command at a time. Do not start a second while the first is still open.
+- A command still open after its bound must be cancelled, not awaited.
 ## Report
 
 Threat table first (asset, attacker control, control in code, verdict), then findings as P0/P1/P2 with `file:line`, exploit sketch, and the specific fix. Say what you did not audit.

@@ -40,6 +40,17 @@ Never chain them with `&&`; a skipped check must not look green.
 - Only your worktree. Never `git checkout`, `switch`, `stash`, `reset`, `clean`, or `push`, and never another worktree.
 - Do not merge, do not open PRs, do not edit CI configuration unless the plan says so.
 
+## Time discipline
+
+- Never leave an open-ended command running. Anything that can exceed ~120 s gets an explicit bound and a log file:
+
+      timeout 420 bash scripts/docker-test.sh > /tmp/docker.log 2>&1; echo "docker:$?"
+
+  then poll with short calls (`tail -c 800 /tmp/docker.log`, `grep -c PASS`).
+- Bounds: 420 s for `scripts/docker-test.sh`, 300 s for `cargo build` / `cargo test` / `cargo deny`. Nothing gets a bigger number.
+- If a command hits its bound, that is a result to report — do not retry it with a larger timeout.
+- One long command at a time. Do not start a second while the first is still open.
+- A command still open after its bound must be cancelled, not awaited.
 ## Report
 
 Return: what you changed per file, the commit list, the tests you added and the criterion each one proves, every command with its literal exit code, and any place where you deviated from the plan or think the plan is wrong.

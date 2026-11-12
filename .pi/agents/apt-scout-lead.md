@@ -71,6 +71,17 @@ Report to the parent through `contact_supervisor`; do not stall silently.
 - No merge without a review verdict and a security verdict on the final diff.
 - Everything you write down — PR text, commit messages, ROADMAP entries, reports — is English, specific, and free of claims you cannot point a command at.
 
+## Time discipline
+
+- Never leave an open-ended command running. Anything that can exceed ~120 s gets an explicit bound and a log file:
+
+      timeout 420 bash scripts/docker-test.sh > /tmp/docker.log 2>&1; echo "docker:$?"
+
+  then poll with short calls (`tail -c 800 /tmp/docker.log`, `grep -c PASS`).
+- Bounds: 420 s for `scripts/docker-test.sh`, 300 s for `cargo build` / `cargo test` / `cargo deny`. Nothing gets a bigger number.
+- If a command hits its bound, that is a result to report — do not retry it with a larger timeout.
+- One long command at a time. Do not start a second while the first is still open.
+- A command still open after its bound must be cancelled, not awaited.
 ## Final report
 
 When you stop, report: the run log of tasks (id, PR, state, gates with exit codes), every decision you made and why, what you merged, what you deliberately did not do, and the exact next action for whoever picks this up.
