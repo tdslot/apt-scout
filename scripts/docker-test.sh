@@ -64,17 +64,25 @@ if [ "$rc" -eq 1 ] && [[ "$got" == *"/etc/os-release contains neither"* ]] && [[
 rc=0; run none debian:12 /apt-scout >/dev/null 2>&1 || rc=$?
 [ "$rc" = 4 ] && pass "debian -> exit 4" || fail "debian -> exit $rc"
 
-# 6. Offline: bad arguments are usage errors (exit 2) that say what to do.
+# 6. Offline: a syntactically valid but unsupported country is rejected before geolocation.
+rc=0; got=$(run none ubuntu:24.04 /apt-scout --country ZZ 2>&1) || rc=$?
+if [ "$rc" = 2 ] && [[ "$got" == *"unknown country code 'ZZ'"* ]] && [[ "$got" != *"note: geolocation"* ]] && [[ "$got" != *"cannot reach"* ]]; then pass "unknown country -> rejected before network"; else fail "unknown country -> exit $rc: $got"; fi
+
+# 7. Offline: unsupported architecture detected from dpkg is rejected before geolocation/network.
+rc=0; got=$(run none ubuntu:24.04 sh -c 'mkdir -p /tmp/fakebin; printf "#!/bin/sh\\necho arm64\\n" > /tmp/fakebin/dpkg; chmod +x /tmp/fakebin/dpkg; PATH=/tmp/fakebin:/usr/bin:/bin /apt-scout --country LT' 2>&1) || rc=$?
+if [ "$rc" = 4 ] && [[ "$got" == *"architecture 'arm64'"* ]] && [[ "$got" != *"note: geolocation"* ]] && [[ "$got" != *"cannot reach"* ]]; then pass "unsupported architecture -> rejected before network"; else fail "unsupported architecture -> exit $rc: $got"; fi
+
+# 8. Offline: bad arguments are usage errors (exit 2) that say what to do.
 rc=0; got=$(run none ubuntu:24.04 /apt-scout --country LTU 2>&1) || rc=$?
 [ "$rc" = 2 ] && [[ "$got" == *"not a two-letter country code"* ]] && pass "bad --country -> exit 2" || fail "bad --country -> exit $rc: $got"
 rc=0; got=$(run none ubuntu:24.04 /apt-scout --bogus 2>&1) || rc=$?
 [ "$rc" = 2 ] && [[ "$got" == *"unknown option '--bogus'"* ]] && pass "unknown option -> exit 2" || fail "unknown option -> exit $rc: $got"
 
-# 7. Offline: a network failure names the URL and the cause and exits 1 (no panic, no hang).
+# 9. Offline: a network failure names the URL and the cause and exits 1 (no panic, no hang).
 rc=0; got=$(run none ubuntu:24.04 /apt-scout --country LT 2>&1) || rc=$?
 if [ "$rc" = 1 ] && [[ "$got" == *"no mirror list is available"* ]] && [[ "$got" == *"launchpad.net"* ]] && [[ "$got" == *"mirrors.ubuntu.com/LT.txt"* ]]; then pass "no network -> clear error, exit 1"; else fail "no network -> exit $rc: $got"; fi
 
-# 8. Live (needs internet): real Launchpad + real mirrors, every supported Ubuntu release.
+# 10. Live (needs internet): real Launchpad + real mirrors, every supported Ubuntu release.
 #    Checks shape, not specific mirrors: a ranked table with at least one fresh mirror.
 for v in 20.04 22.04 24.04 26.04; do
   if [ $# -gt 0 ]; then case " $* " in *" $v "*) ;; *) continue ;; esac; fi
