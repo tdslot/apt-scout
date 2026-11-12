@@ -1,6 +1,4 @@
 //! Mirror lists (see SPEC.md, Pipeline step 3): parsers are pure and tested on saved fixtures.
-// ponytail: not called by main yet; remove this allow when the pipeline uses the module.
-#![allow(dead_code)]
 
 use std::fmt;
 
@@ -187,7 +185,10 @@ impl fmt::Display for Reject {
                 "URL contains '@' or a backslash (credentials or a parser-confusing character); remove it"
             ),
             Reject::TooLong(n) => write!(f, "URL is {n} bytes long, over the 2048 byte limit"),
-            Reject::Whitespace => write!(f, "URL contains whitespace; remove it"),
+            Reject::Whitespace => write!(
+                f,
+                "URL contains whitespace or control characters; remove them"
+            ),
             Reject::NoHost => write!(f, "URL has no host; use http://host/path"),
             Reject::BadHost(h) => write!(
                 f,
@@ -207,7 +208,7 @@ impl fmt::Display for Reject {
     }
 }
 
-fn is_private(ip: std::net::IpAddr) -> bool {
+pub fn is_private(ip: std::net::IpAddr) -> bool {
     match ip {
         std::net::IpAddr::V4(v4) => {
             let o = v4.octets();
@@ -244,7 +245,7 @@ fn is_private(ip: std::net::IpAddr) -> bool {
 /// Check a candidate mirror URL before it is probed or written anywhere. Names are not resolved
 /// here: a hostname that later resolves to a private address must be re-checked by the prober.
 pub fn validate_url(url: &str) -> Result<(), Reject> {
-    if url.chars().any(char::is_whitespace) {
+    if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err(Reject::Whitespace);
     }
     // Parsers disagree on `\` and on `@` after an early authority end, so reject both anywhere.
@@ -543,6 +544,18 @@ mod hygiene_tests {
                 "{u}"
             );
         }
+    }
+
+    #[test]
+    fn rejects_control_characters() {
+        assert_eq!(
+            validate_url("http://a.example/\x1b[31mred"),
+            Err(Reject::Whitespace)
+        );
+        assert_eq!(
+            validate_url("http://a.example/x\0y"),
+            Err(Reject::Whitespace)
+        );
     }
 
     #[test]
