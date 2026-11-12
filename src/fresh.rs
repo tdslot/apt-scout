@@ -5,8 +5,13 @@ use std::fmt;
 /// Stale mirrors are rejected when `-updates` lags the reference by more than this (SPEC step 8).
 pub const MAX_LAG_SECS: i64 = 24 * 3600;
 
+const ARMOUR_HEAD: &str = "-----BEGIN PGP SIGNED MESSAGE-----";
+const ARMOUR_SIG: &str = "-----BEGIN PGP SIGNATURE-----";
+
 #[derive(Debug, PartialEq)]
 pub enum DateError {
+    /// Content before the armour header is outside what `gpgv` hashes, so it cannot supply a date.
+    NotCleartextSigned,
     NoDateHeader,
     Malformed(String),
 }
@@ -14,6 +19,10 @@ pub enum DateError {
 impl fmt::Display for DateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            DateError::NotCleartextSigned => write!(
+                f,
+                "InRelease is empty or does not start with '-----BEGIN PGP SIGNED MESSAGE-----'; content before that header is not covered by the signature, so its Date cannot be trusted"
+            ),
             DateError::NoDateHeader => write!(
                 f,
                 "InRelease has no 'Date:' header; the mirror may not serve a real InRelease"
@@ -77,13 +86,54 @@ pub fn parse_date(value: &str) -> Result<i64, DateError> {
     Ok(days_from_civil(year, month, day) * 86400 + h * 3600 + mi * 60 + s)
 }
 
-/// Extract the `Date:` header of an InRelease (clearsigned text; headers come first).
-pub fn release_date(text: &str) -> Result<i64, DateError> {
+/// A `Date` parsed from inside an `InRelease`'s cleartext-signed region.
+/// The field is private and `release_date` is the only function that builds one, so holding a
+/// `SignedDate` means the strict parse accepted this body's armour (SPEC step 8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SignedDate(i64);
+
+impl SignedDate {
+    pub fn seconds(self) -> i64 {
+        self.0
+    }
+}
+
+/// Extract the `Date:` header from the cleartext-signed region only (SPEC step 8): anything but
+/// whitespace-only lines before the armour is refused, because `gpgv` hashes nothing there.
+pub fn release_date(text: &str) -> Result<SignedDate, DateError> {
+    let mut lines = text.lines();
+    let head = lines.by_ref().find(|l| !l.trim().is_empty());
+    match head {
+        // `trim_end` only: a leading space on the armour line makes a different body, and `gpgv`
+        // refuses it ("no signed data"), so it must not be taken for the armour here either.
+        Some(l) if l.trim_end() == ARMOUR_HEAD => {}
+        _ => return Err(DateError::NotCleartextSigned),
+    }
+    // Armour headers ("Hash: SHA512", ...) run to the first blank line; the cleartext starts there.
+    for line in lines.by_ref() {
+        if line.trim().is_empty() {
+            break;
+        }
+    }
+    for line in lines {
+        if line.starts_with(ARMOUR_SIG) {
+            break;
+        }
+        if let Some(v) = line.strip_prefix("Date:") {
+            return parse_date(v.trim()).map(SignedDate);
+        }
+    }
+    Err(DateError::NoDateHeader)
+}
+
+/// Extract the `Date:` header of an InRelease, scanning from the first line (today's tolerance).
+/// Read-only ranking, lag and display use this; on its own it authorizes nothing (SPEC step 8).
+pub fn release_date_tolerant(text: &str) -> Result<i64, DateError> {
     for line in text.lines() {
         if let Some(v) = line.strip_prefix("Date:") {
             return parse_date(v.trim());
         }
-        if line.starts_with("-----BEGIN PGP SIGNATURE") {
+        if line.starts_with(ARMOUR_SIG) {
             break;
         }
     }
@@ -185,10 +235,10 @@ mod tests {
     #[test]
     fn release_date_from_real_fixtures() {
         let t = include_str!("../tests/fixtures/inrelease-noble-updates.txt");
-        assert_eq!(release_date(t), Ok(1_794_457_418));
+        assert_eq!(release_date(t).map(SignedDate::seconds), Ok(1_794_457_418));
         let j = include_str!("../tests/fixtures/inrelease-jammy-security.txt");
         assert_eq!(
-            release_date(j),
+            release_date(j).map(SignedDate::seconds),
             Ok(parse_date("Thu, 12 Nov 2026  2:19:32 UTC").unwrap())
         );
     }
@@ -198,6 +248,87 @@ mod tests {
         assert_eq!(
             release_date("-----BEGIN PGP SIGNED MESSAGE-----\n\nOrigin: Ubuntu\n"),
             Err(DateError::NoDateHeader)
+        );
+    }
+
+    fn signed_fixture() -> String {
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/signed/noble-updates-InRelease"),
+        )
+        .unwrap()
+    }
+
+    /// A `SignedDate` built the only way anything outside `fresh` can build one: by parsing.
+    fn signed(rfc: &str) -> SignedDate {
+        release_date(&format!("{ARMOUR_HEAD}\nHash: SHA512\n\nDate: {rfc}\n")).unwrap()
+    }
+
+    #[test]
+    fn release_date_reads_only_the_signed_region() {
+        // the real signed fixture still parses, and the value is the signed one
+        assert_eq!(
+            release_date(&signed_fixture()).map(SignedDate::seconds),
+            parse_date("Thu, 12 Nov 2026  8:29:02 UTC")
+        );
+    }
+
+    #[test]
+    fn release_date_rejects_a_date_before_the_armour() {
+        let forged = format!("Date: Thu, 1 Jan 2099 00:00:00 UTC\n{}", signed_fixture());
+        assert_eq!(release_date(&forged), Err(DateError::NotCleartextSigned));
+        // and, if it ever did parse, it must never return the forged value:
+        assert_ne!(
+            release_date(&forged).map(SignedDate::seconds).ok(),
+            parse_date("Thu, 1 Jan 2099 00:00:00 UTC").ok()
+        );
+    }
+
+    #[test]
+    fn release_date_ignores_a_date_after_the_signature_header() {
+        let body = format!(
+            "{ARMOUR_HEAD}\nHash: SHA512\n\nOrigin: Ubuntu\n{ARMOUR_SIG}\nDate: Thu, 1 Jan 2099 00:00:00 UTC\n"
+        );
+        assert_eq!(release_date(&body), Err(DateError::NoDateHeader));
+    }
+
+    #[test]
+    fn release_date_allows_whitespace_only_lines_before_the_armour() {
+        // `gpgv` exits 0 on a whitespace-only prefix (checked by hand), so the strict parse accepts it.
+        assert_eq!(
+            release_date(&format!("\n\n  \n{}", signed_fixture())).map(SignedDate::seconds),
+            parse_date("Thu, 12 Nov 2026  8:29:02 UTC")
+        );
+    }
+
+    #[test]
+    fn release_date_rejects_whitespace_on_the_armour_line() {
+        // `gpgv` exits 2 with "no signed data" on this body, so the armour must start the line.
+        assert_eq!(
+            release_date(&format!(" {}", signed_fixture())),
+            Err(DateError::NotCleartextSigned)
+        );
+    }
+
+    #[test]
+    fn release_date_without_a_blank_line_after_the_armour_is_rejected() {
+        // No blank line: every following line is still an armour header, and `gpgv` signs none of them.
+        assert_eq!(
+            release_date(&format!(
+                "{ARMOUR_HEAD}\nHash: SHA512\nDate: Thu, 12 Nov 2026  8:29:02 UTC\n"
+            )),
+            Err(DateError::NoDateHeader)
+        );
+    }
+
+    #[test]
+    fn release_date_tolerant_keeps_a_prefixed_date_for_ranking() {
+        // Ruling 4: the read-only tolerance is today's behaviour, unchanged.
+        let forged = "Date: Thu, 1 Jan 2099 00:00:00 UTC\n-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nOrigin: Ubuntu\nDate: Thu, 12 Nov 2026  4:23:38 UTC\n";
+        assert_eq!(release_date(forged), Err(DateError::NotCleartextSigned));
+        assert_eq!(
+            release_date_tolerant(forged),
+            parse_date("Thu, 1 Jan 2099 00:00:00 UTC")
         );
     }
 

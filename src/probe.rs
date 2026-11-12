@@ -79,7 +79,7 @@ fn date_of_verified(
         .get(&url, INRELEASE_BYTES, None)
         .map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&got.body);
-    let date = fresh::release_date(&text).map_err(|e| format!("{url}: {e}"))?;
+    let date = fresh::release_date_tolerant(&text).map_err(|e| format!("{url}: {e}"))?;
     let signature = verify::verify_inrelease(&got.body);
     Ok((date, got.ttfb.as_millis() as u64, got.final_url, signature))
 }
@@ -92,7 +92,7 @@ fn date_of_cheap(net: &dyn Fetch, base: &str, suite: &str) -> Result<i64, String
         .get(&url, HEAD_BYTES, Some((0, HEAD_BYTES - 1)))
         .map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&got.body);
-    fresh::release_date(&text).map_err(|e| format!("{url}: {e}"))
+    fresh::release_date_tolerant(&text).map_err(|e| format!("{url}: {e}"))
 }
 
 #[derive(Debug, PartialEq)]
@@ -122,7 +122,7 @@ pub fn fetch_reference(
         HttpError::Status(404, u) => ReferenceError::NotFound(u),
         other => ReferenceError::Other(other.to_string()),
     })?;
-    let updates = fresh::release_date(&String::from_utf8_lossy(&got.body))
+    let updates = fresh::release_date_tolerant(&String::from_utf8_lossy(&got.body))
         .map_err(|e| ReferenceError::Other(format!("{url}: {e}")))?;
     let updates_signature = verify::verify_inrelease(&got.body);
     let security = date_of_cheap(net, base, &format!("{codename}-security")).ok();
@@ -276,9 +276,9 @@ mod tests {
 
     fn reference() -> Reference {
         Reference {
-            updates: fresh::release_date(UPD).unwrap(),
+            updates: fresh::release_date_tolerant(UPD).unwrap(),
             updates_signature: SignatureStatus::Invalid("test fixture is unsigned".into()),
-            security: Some(fresh::release_date(SEC).unwrap()),
+            security: Some(fresh::release_date_tolerant(SEC).unwrap()),
         }
     }
 
@@ -296,7 +296,7 @@ mod tests {
         ]);
         let r = fetch_reference(&c, "http://archive.ubuntu.com/ubuntu", "noble").unwrap();
         assert_eq!(r.security, None);
-        assert_eq!(r.updates, fresh::release_date(UPD).unwrap());
+        assert_eq!(r.updates, fresh::release_date_tolerant(UPD).unwrap());
     }
 
     #[test]
@@ -348,7 +348,7 @@ mod tests {
             ),
         ]);
         let r = fetch_reference(&c, "http://archive.ubuntu.com/ubuntu/", "noble").unwrap();
-        assert_eq!(r.updates, fresh::release_date(UPD).unwrap());
+        assert_eq!(r.updates, fresh::release_date_tolerant(UPD).unwrap());
     }
 
     #[test]
