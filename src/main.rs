@@ -5,6 +5,7 @@ mod distro;
 mod fresh;
 mod geo;
 mod http;
+mod manifest;
 mod mirrors;
 mod plan;
 mod probe;
