@@ -135,7 +135,16 @@ Principle: the program solves its own problems when safe, and otherwise says exa
 ## Testing
 
 - Unit tests (`#[cfg(test)]`) cover pure logic on fixtures: `os-release`, Launchpad HTML, `mirrors.txt`, `InRelease` dates, freshness, ranking, sources rewrite. Saved fixtures come from real responses (the Launchpad page is ~316 KB; keep a trimmed copy with at least two countries and every status value seen).
-- Integration tests run inside Docker on real Ubuntu images, offline: Ubuntu 24.04 (deb822 `/etc/apt/sources.list.d/ubuntu.sources`) and Ubuntu 22.04 (legacy `/etc/apt/sources.list`). They exercise sources rewrite, backup, atomic write, `--restore` and error messages against real `/etc/apt` files. Network answers are injected from fixtures; automated tests never call live services.
+- Integration tests run inside Docker on real Ubuntu images, offline. The matrix covers every supported release; format measured on 2026-11-11:
+
+  | Release | Codename | Sources format |
+  | --- | --- | --- |
+  | 20.04 | focal | legacy `/etc/apt/sources.list` (10 `deb` lines) |
+  | 22.04 | jammy | legacy `/etc/apt/sources.list` |
+  | 24.04 | noble | deb822 `/etc/apt/sources.list.d/ubuntu.sources` |
+  | 26.04 | resolute | deb822 `/etc/apt/sources.list.d/ubuntu.sources` |
+
+  Older releases are out of scope until they are requested (they move to `old-releases.ubuntu.com`, which has no mirrors). The `amd64` images are used (`--platform linux/amd64`); on Apple Silicon they run under emulation, slower but equivalent. Tests exercise sources rewrite, backup, atomic write, `--restore` and error messages against real `/etc/apt` files. Network answers are injected from fixtures; automated tests never call live services.
 - One Dockerfile and one script (`scripts/docker-test.sh`) are shared by local runs and CI, so results match. Run it before opening a PR that changes `.rs` files or build configuration; CI runs the same image for those changes.
 - Pop!_OS and Mint are covered by changing `/etc/os-release` (`ID=pop`, `ID_LIKE="ubuntu debian"`) in a container; this simulates detection only and is not a real Pop!_OS.
 - Live-network smoke tests (real Launchpad, geo sources) are manual, never part of CI, because they are rate limited and flaky.
