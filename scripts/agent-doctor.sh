@@ -133,8 +133,10 @@ fi
 
 if [ -d "$agent_dir/npm/node_modules/pi-subagents" ]; then
   pass "[3b] pi-subagents extension installed ($agent_dir/npm/node_modules/pi-subagents)"
+elif [ -d "$root/.pi/npm/node_modules/pi-subagents" ]; then
+  pass "[3b] pi-subagents extension installed for this project only ($root/.pi/npm/node_modules/pi-subagents)"
 else
-  fail "[3b] pi-subagents extension not installed at $agent_dir/npm/node_modules/pi-subagents" \
+  fail "[3b] pi-subagents extension not installed (looked in $agent_dir/npm/node_modules and $root/.pi/npm/node_modules)" \
     "pi install npm:pi-subagents; without it there is no subagent tool and the team cannot run"
 fi
 
@@ -233,12 +235,24 @@ report_trust() { # label dir
   fi
 }
 
+# What Pi would do for a directory, so a second directory is only reported when it differs.
+trust_state() { # dir
+  local entry
+  entry=$(nearest_trust_entry "$1")
+  printf '%s|%s\n' "${entry#*|}" "$(trust_requiring_resources "$1")"
+}
+
+root_trust=$(trust_state "$root")
 report_trust "4a" "$root"
-# A Pi launched deeper inside the clone would use the nearest decision for that folder, so a
-# directory the user actually launches in is reported too when it is not the clone itself.
+# A Pi launched deeper inside the clone resolves the same decisions for almost every path, so
+# the launch directory is reported only when trusting it would actually turn out differently.
 launch_dir=$(canon "${PWD:-$root}")
 case "$launch_dir" in
-  "$root"/*) report_trust "4b" "$launch_dir" ;;
+  "$root"/*)
+    if [ "$(trust_state "$launch_dir")" != "$root_trust" ]; then
+      report_trust "4b" "$launch_dir"
+    fi
+    ;;
 esac
 
 # --- 5. Rust toolchain -------------------------------------------------------------------
@@ -291,16 +305,11 @@ else
 fi
 
 # Commits carry the identity git resolves here; the coder and the lead commit on every task.
-commit_name=$(git -C "$root" config user.name 2>/dev/null || true)
-commit_email=$(git -C "$root" config user.email 2>/dev/null || true)
-if [ -n "$commit_name" ] && [ -n "$commit_email" ]; then
-  pass "[7c] commit identity resolves in this checkout (user.name and user.email are set)"
+# `git var` is what a commit actually consults: config, environment and system fallbacks.
+if commit_ident=$(git -C "$root" var GIT_AUTHOR_IDENT 2>/dev/null) && [ -n "$commit_ident" ]; then
+  pass "[7c] git resolves a commit identity in this checkout"
 else
-  name_state=set
-  [ -n "$commit_name" ] || name_state=empty
-  email_state=set
-  [ -n "$commit_email" ] || email_state=empty
-  fail "[7c] no commit identity in $root (user.name is $name_state, user.email is $email_state)" \
+  fail "[7c] git cannot resolve a commit identity in $root" \
     "git config user.name '<name>' and git config user.email '<email>'; without them every commit the loop makes is rejected or attributed wrong"
 fi
 
@@ -331,6 +340,8 @@ skill_installed() { # skill
   compgen -G "$agent_dir/skills/*/$skill/SKILL.md" >/dev/null && return 0
   compgen -G "$agent_dir/npm/node_modules/*/skills/$skill/SKILL.md" >/dev/null && return 0
   compgen -G "$agent_dir/npm/node_modules/*/skills/*/$skill/SKILL.md" >/dev/null && return 0
+  compgen -G "$root/.pi/npm/node_modules/*/skills/$skill/SKILL.md" >/dev/null && return 0
+  compgen -G "$root/.pi/npm/node_modules/*/skills/*/$skill/SKILL.md" >/dev/null && return 0
   if [ -n "${HOME:-}" ]; then
     compgen -G "$HOME/.agents/skills/$skill/SKILL.md" >/dev/null && return 0
     compgen -G "$HOME/.agents/skills/*/$skill/SKILL.md" >/dev/null && return 0
@@ -360,23 +371,40 @@ fi
 # --- 9. Optional conveniences: reported, never fatal ------------------------------------
 
 if command -v graft >/dev/null 2>&1; then
+  # The lead reads structure from the primary checkout's graph (`apt-scout-lead.md`), so a
+  # task worktree legitimately has none of its own and that is not a problem to report.
+  primary_worktree=$(git -C "$root" worktree list --porcelain 2>/dev/null |
+    awk '/^worktree /{sub(/^worktree /, ""); print; exit}' || true)
   if [ -f "$root/graft/INDEX.md" ]; then
     pass "[9a] graft on PATH and this checkout has a graph ($root/graft/INDEX.md)"
+  elif [ -n "$primary_worktree" ] && [ "$primary_worktree" != "$root" ] && [ -f "$primary_worktree/graft/INDEX.md" ]; then
+    pass "[9a] graft on PATH; this worktree has no graph of its own and reads the primary checkout's ($primary_worktree/graft/INDEX.md)"
   else
-    warn "[9a] graft on PATH but $root has no graph" \
-      "run 'graft build' in this checkout; the lead reads structure from graft/INDEX.md and falls back to rg and git log without it"
+    warn "[9a] graft on PATH but no checkout has a graph" \
+      "run 'graft build' in $root; the lead reads structure from graft/INDEX.md and falls back to rg and git log without it"
   fi
 else
   warn "[9a] graft not on PATH" "install graft; the lead falls back to rg and git log for structure"
 fi
 
-if command -v cargo-deny >/dev/null 2>&1; then
-  pass "[9b] cargo-deny on PATH (deny.toml gate)"
+# The gate is 'cargo deny check'. cargo finds the subcommand through its own bin directory
+# ($CARGO_HOME/bin) even when that directory is not on PATH, so ask cargo first: testing
+# 'command -v cargo-deny' alone reported the gate missing on a machine that runs it.
+deny_version=$(cargo deny --version 2>/dev/null || true)
+if [ -z "$deny_version" ] && command -v cargo-deny >/dev/null 2>&1; then
+  deny_version=$(cargo-deny --version 2>/dev/null || true)
+fi
+if [ -n "$deny_version" ]; then
+  if command -v cargo-deny >/dev/null 2>&1; then
+    pass "[9b] $deny_version available (the Cargo.toml license and advisory gate can run here)"
+  else
+    pass "[9b] $deny_version available; cargo finds it through \$CARGO_HOME/bin, which is not on PATH"
+  fi
 else
-  # Deliberately a WARN and not a FAIL: CI runs 'cargo deny check' as a required status
-  # check, so a local absence leaves the gate verified by CI. Docker is a FAIL above
-  # because scripts/docker-test.sh never runs in CI, so nothing else can verify it.
-  warn "[9b] cargo-deny not on PATH" \
+  # WARN, not FAIL: CI runs 'cargo deny check' as a required status check, so a local
+  # absence leaves the gate verified by CI. Docker is a FAIL above because
+  # scripts/docker-test.sh never runs in CI, so nothing else can verify it.
+  warn "[9b] cargo-deny not available ('cargo deny --version' and 'command -v cargo-deny' both fail)" \
     "cargo install cargo-deny; the Cargo.toml license and advisory gate runs it in CI as a required check, so only a local run is missing"
 fi
 

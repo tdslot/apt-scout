@@ -76,8 +76,10 @@ carries the label the doctor prints, so its output maps to a paragraph here.
 - **`[2]` — each file's frontmatter `name:` equals its filename.** A mismatch breaks
   delegation by name, which is the only way the lead addresses an agent.
 - **`[3a]` — `pi` on `PATH`.** The doctor also prints the version it found.
-- **`[3b]` — the `pi-subagents` extension.** `pi install npm:pi-subagents`. Without that
-  extension there is no subagent tool and the lead cannot delegate at all.
+- **`[3b]` — the `pi-subagents` extension.** `pi install npm:pi-subagents`, user-wide
+  (`~/.pi/agent/npm/node_modules`) or for this project alone (`.pi/npm/node_modules`); the
+  doctor accepts either. Without that extension there is no subagent tool and the lead cannot
+  delegate at all.
 - **`[3c]`, `[3d]` — the two user-level files the agents defer to.** `~/.pi/agent/AGENTS.md`
   carries the machine-level model rule, and
   `~/.pi/agent/prompts/task-pipeline-orchestrator.md` is the template the lead names when it
@@ -93,9 +95,9 @@ carries the label the doctor prints, so its output maps to a paragraph here.
   that gate: start Docker Desktop, or `sudo systemctl start docker`.
 - **`[7a]`, `[7b]` — `gh` authenticated** (`gh auth login`) and `gh repo view` working from
   the clone — the loop opens and merges PRs through it.
-- **`[7c]` — a commit identity.** `git config user.name` and `user.email` must resolve in the
-  clone; every task ends in commits, and a missing identity either fails them or attributes
-  them wrong.
+- **`[7c]` — a commit identity.** git must resolve an author identity inside the clone
+  (`git var GIT_AUTHOR_IDENT`, which reads configuration and environment); every task ends in
+  commits, and a missing identity either fails them or attributes them wrong.
 - **`[7d]` — the repository permission `gh` reports.** `READ` and `TRIAGE` fail, because that
   token can neither push a branch nor merge. This is `gh`'s credential, not the one
   `git push` uses; see below.
@@ -106,12 +108,15 @@ carries the label the doctor prints, so its output maps to a paragraph here.
   `<clone>/.agents/skills`, one grouping folder deep, and the doctor accepts all of them.
   It reads the names out of `.pi/agents/*.md`, so it stays correct when an agent starts
   citing another skill.
-- **`[9a]`, `[9b]`, `[9c]` — optional, never fatal:** `graft` on `PATH` *and* a graph in this
-  checkout (`graft build`) for the lead's structural queries, `cargo-deny` on `PATH` for the
-  license and advisory gate, and `CARGO_TARGET_DIR=/tmp/apt-scout-target` exported so
-  worktrees share incremental builds. `cargo-deny` is a warning while Docker is a failure
-  because CI runs `cargo deny check` as a required status check, so the gate is still
-  verified there; `scripts/docker-test.sh` has no CI counterpart at all.
+- **`[9a]`, `[9b]`, `[9c]` — optional, never fatal:** `graft` on `PATH` plus a graph to
+  query — this checkout's `graft/INDEX.md`, or the primary checkout's when the doctor runs in
+  a task worktree, because that is the one the lead reads (`graft build` creates it);
+  the `cargo deny check` gate, which the doctor asks cargo for: cargo resolves the
+  `cargo-deny` subcommand through `$CARGO_HOME/bin` even when that directory is not on
+  `PATH`; and `CARGO_TARGET_DIR=/tmp/apt-scout-target` exported so worktrees share
+  incremental builds. `cargo-deny` is a warning while Docker is a failure because CI runs
+  `cargo deny check` as a required status check, so the gate is still verified there;
+  `scripts/docker-test.sh` has no CI counterpart at all.
 
 ### Project trust
 
@@ -161,9 +166,10 @@ says nothing about them:
   `project-trust.js`); a Pi release that changes those rules changes this document.
 - **`~/.pi/agent/settings.json`.** The doctor proves the extension is installed, not that it
   is enabled, and not what `defaultProjectTrust` or the default model is set to.
-- **`cargo deny check` on this machine.** `[9b]` reports whether `cargo-deny` is installed,
-  nothing more. Where it is not, the licence and advisory gate is unverified locally — not
-  passing — and CI's required `deny` check is the only evidence it gets.
+- **Whether the required gates produced a verdict.** The doctor proves the tooling exists,
+  not that it ran: `[9b]` says `cargo deny check` can run here, `[6]` says the daemon answers,
+  and neither is a result. A green doctor is not evidence that the licence and advisory scan
+  or the container suite passed.
 - **The trust prompt itself.** `[4a]`/`[4b]` report the decision Pi would read; they do not
   launch an interactive session to observe a prompt being shown or declined.
 
