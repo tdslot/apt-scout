@@ -10,6 +10,8 @@ use crate::http::{Fetch, HttpError};
 /// `Date:` is within the first lines of InRelease; 4 KiB is enough (measured on LT/NO mirrors).
 const HEAD_BYTES: u64 = 4096;
 const SAMPLE_BYTES: u64 = 1_048_576;
+/// Smaller bodies are not a usable throughput sample (the real file is several MB).
+const MIN_SAMPLE: u64 = 64 * 1024;
 
 #[derive(Debug, PartialEq)]
 pub struct Outcome {
@@ -18,6 +20,7 @@ pub struct Outcome {
     pub updates_lag_secs: i64,
     /// Informational only (SPEC step 8): `None` when the mirror has no `-security` InRelease.
     pub security_lag_secs: Option<i64>,
+    /// Time of the first request: DNS, TCP, TLS and one round trip (not pure connect latency).
     pub latency_ms: u64,
     pub throughput_bps: u64,
 }
@@ -27,13 +30,15 @@ pub enum ProbeError {
     Unreachable(HttpError),
     /// The deciding `-updates` InRelease is missing or unusable.
     BadUpdates(String),
+    /// The throughput sample is not a real file.
+    BadSample(String),
 }
 
 impl fmt::Display for ProbeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ProbeError::Unreachable(e) => write!(f, "{e}"),
-            ProbeError::BadUpdates(why) => write!(f, "{why}"),
+            ProbeError::BadUpdates(why) | ProbeError::BadSample(why) => write!(f, "{why}"),
         }
     }
 }
@@ -54,10 +59,41 @@ fn date_of(net: &dyn Fetch, base: &str, suite: &str) -> Result<(i64, u64), Strin
     Ok((date, got.elapsed.as_millis() as u64))
 }
 
-pub fn fetch_reference(net: &dyn Fetch, base: &str, codename: &str) -> Result<Reference, String> {
+#[derive(Debug, PartialEq)]
+pub enum ReferenceError {
+    /// The release is not on the canonical archive any more.
+    NotFound(String),
+    Other(String),
+}
+
+impl fmt::Display for ReferenceError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ReferenceError::NotFound(url) => write!(f, "{url} answered HTTP 404"),
+            ReferenceError::Other(why) => write!(f, "{why}"),
+        }
+    }
+}
+
+pub fn fetch_reference(
+    net: &dyn Fetch,
+    base: &str,
+    codename: &str,
+) -> Result<Reference, ReferenceError> {
+    let one = |suite: String| -> Result<i64, ReferenceError> {
+        let url = format!("{}/dists/{suite}/InRelease", base.trim_end_matches('/'));
+        let got = net
+            .get(&url, HEAD_BYTES, Some((0, HEAD_BYTES - 1)))
+            .map_err(|e| match e {
+                HttpError::Status(404, u) => ReferenceError::NotFound(u),
+                other => ReferenceError::Other(other.to_string()),
+            })?;
+        fresh::release_date(&String::from_utf8_lossy(&got.body))
+            .map_err(|e| ReferenceError::Other(format!("{url}: {e}")))
+    };
     Ok(Reference {
-        updates: date_of(net, base, &format!("{codename}-updates"))?.0,
-        security: date_of(net, base, &format!("{codename}-security"))?.0,
+        updates: one(format!("{codename}-updates"))?,
+        security: one(format!("{codename}-security"))?,
     })
 }
 
@@ -79,6 +115,14 @@ pub fn probe(
     let sample = net
         .get(&sample_url, SAMPLE_BYTES, Some((0, SAMPLE_BYTES - 1)))
         .map_err(ProbeError::Unreachable)?;
+    // A mirror's error page can come back as HTTP 200; only a real xz file counts as a sample.
+    const XZ_MAGIC: [u8; 6] = [0xFD, b'7', b'z', b'X', b'Z', 0];
+    if !sample.body.starts_with(&XZ_MAGIC) || (sample.body.len() as u64) < MIN_SAMPLE {
+        return Err(ProbeError::BadSample(format!(
+            "{sample_url} did not return an xz file ({} bytes read); the mirror may serve an error page with HTTP 200",
+            sample.body.len()
+        )));
+    }
     let secs = sample.elapsed.as_secs_f64().max(0.001);
     let throughput_bps = (sample.body.len() as f64 / secs) as u64;
 
@@ -100,6 +144,17 @@ mod tests {
     const UPD_OLD: &str = "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nOrigin: Ubuntu\nDate: Wed, 11 Nov 2026 22:06:33 UTC\n";
     const SEC: &str = "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nOrigin: Ubuntu\nDate: Thu, 12 Nov 2026  2:19:32 UTC\n";
 
+    /// A body that looks like the start of an xz file and is large enough to be a sample.
+    static XZ_OK: &[u8] = &{
+        let mut b = [0u8; 70_000];
+        b[0] = 0xFD;
+        b[1] = b'7';
+        b[2] = b'z';
+        b[3] = b'X';
+        b[4] = b'Z';
+        b
+    };
+
     fn reference() -> Reference {
         Reference {
             updates: fresh::release_date(UPD).unwrap(),
@@ -108,15 +163,36 @@ mod tests {
     }
 
     #[test]
+    fn reference_404_means_release_left_the_archive() {
+        let c = Canned(vec![(
+            "http://archive.ubuntu.com/ubuntu/dists/bionic-updates/InRelease",
+            Err(404),
+        )]);
+        assert!(matches!(
+            fetch_reference(&c, "http://archive.ubuntu.com/ubuntu", "bionic"),
+            Err(ReferenceError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn reference_network_error_is_not_notfound() {
+        let c = Canned(vec![]);
+        assert!(matches!(
+            fetch_reference(&c, "http://archive.ubuntu.com/ubuntu", "noble"),
+            Err(ReferenceError::Other(_))
+        ));
+    }
+
+    #[test]
     fn reference_from_archive() {
         let c = Canned(vec![
             (
                 "http://archive.ubuntu.com/ubuntu/dists/noble-updates/InRelease",
-                Ok(UPD),
+                Ok(UPD.as_bytes()),
             ),
             (
                 "http://archive.ubuntu.com/ubuntu/dists/noble-security/InRelease",
-                Ok(SEC),
+                Ok(SEC.as_bytes()),
             ),
         ]);
         let r = fetch_reference(&c, "http://archive.ubuntu.com/ubuntu/", "noble").unwrap();
@@ -128,15 +204,15 @@ mod tests {
         let c = Canned(vec![
             (
                 "http://m.example/ubuntu/dists/noble-updates/InRelease",
-                Ok(UPD),
+                Ok(UPD.as_bytes()),
             ),
             (
                 "http://m.example/ubuntu/dists/noble-security/InRelease",
-                Ok(SEC),
+                Ok(SEC.as_bytes()),
             ),
             (
                 "http://m.example/ubuntu/dists/noble/main/binary-amd64/Packages.xz",
-                Ok("0123456789"),
+                Ok(XZ_OK),
             ),
         ]);
         let o = probe(
@@ -158,15 +234,15 @@ mod tests {
         let c = Canned(vec![
             (
                 "http://m.example/ubuntu/dists/noble-updates/InRelease",
-                Ok(UPD_OLD),
+                Ok(UPD_OLD.as_bytes()),
             ),
             (
                 "http://m.example/ubuntu/dists/noble-security/InRelease",
-                Ok(SEC),
+                Ok(SEC.as_bytes()),
             ),
             (
                 "http://m.example/ubuntu/dists/noble/main/binary-amd64/Packages.xz",
-                Ok("x"),
+                Ok(XZ_OK),
             ),
         ]);
         let o = probe(
@@ -186,7 +262,7 @@ mod tests {
         let c = Canned(vec![
             (
                 "http://m.example/ubuntu/dists/noble-updates/InRelease",
-                Ok(UPD),
+                Ok(UPD.as_bytes()),
             ),
             (
                 "http://m.example/ubuntu/dists/noble-security/InRelease",
@@ -194,7 +270,7 @@ mod tests {
             ),
             (
                 "http://m.example/ubuntu/dists/noble/main/binary-amd64/Packages.xz",
-                Ok("x"),
+                Ok(XZ_OK),
             ),
         ]);
         let o = probe(
@@ -206,6 +282,62 @@ mod tests {
         )
         .unwrap();
         assert_eq!(o.security_lag_secs, None);
+    }
+
+    #[test]
+    fn html_error_page_with_200_is_not_a_sample() {
+        let c = Canned(vec![
+            (
+                "http://m.example/ubuntu/dists/noble-updates/InRelease",
+                Ok(UPD.as_bytes()),
+            ),
+            (
+                "http://m.example/ubuntu/dists/noble-security/InRelease",
+                Ok(SEC.as_bytes()),
+            ),
+            (
+                "http://m.example/ubuntu/dists/noble/main/binary-amd64/Packages.xz",
+                Ok(b"<html>404 not found</html>"),
+            ),
+        ]);
+        let e = probe(
+            &c,
+            "http://m.example/ubuntu",
+            "noble",
+            "amd64",
+            &reference(),
+        )
+        .unwrap_err();
+        assert!(matches!(e, ProbeError::BadSample(_)), "{e}");
+        assert!(e.to_string().contains("did not return an xz file"), "{e}");
+    }
+
+    #[test]
+    fn too_short_xz_is_not_a_sample() {
+        let c = Canned(vec![
+            (
+                "http://m.example/ubuntu/dists/noble-updates/InRelease",
+                Ok(UPD.as_bytes()),
+            ),
+            (
+                "http://m.example/ubuntu/dists/noble-security/InRelease",
+                Ok(SEC.as_bytes()),
+            ),
+            (
+                "http://m.example/ubuntu/dists/noble/main/binary-amd64/Packages.xz",
+                Ok(&[0xFD, b'7', b'z', b'X', b'Z', 0, 1, 2]),
+            ),
+        ]);
+        assert!(matches!(
+            probe(
+                &c,
+                "http://m.example/ubuntu",
+                "noble",
+                "amd64",
+                &reference()
+            ),
+            Err(ProbeError::BadSample(_))
+        ));
     }
 
     #[test]
@@ -230,7 +362,7 @@ mod tests {
     fn unparsable_date_rejects_the_mirror() {
         let c = Canned(vec![(
             "http://m.example/ubuntu/dists/noble-updates/InRelease",
-            Ok("<html>not a release</html>"),
+            Ok(b"<html>not a release</html>"),
         )]);
         let e = probe(
             &c,
@@ -248,11 +380,11 @@ mod tests {
         let c = Canned(vec![
             (
                 "http://m.example/ubuntu/dists/noble-updates/InRelease",
-                Ok(UPD),
+                Ok(UPD.as_bytes()),
             ),
             (
                 "http://m.example/ubuntu/dists/noble-security/InRelease",
-                Ok(SEC),
+                Ok(SEC.as_bytes()),
             ),
         ]);
         assert!(matches!(

@@ -6,7 +6,6 @@ mod mirrors;
 mod probe;
 
 use std::process::ExitCode;
-use std::sync::mpsc;
 use std::thread;
 
 use http::{Fetch, Net};
@@ -124,48 +123,58 @@ fn run() -> Result<(), (u8, String)> {
     }
     cands.truncate(MAX_CANDIDATES);
 
-    let reference = probe::fetch_reference(&net, REFERENCE, &codename).map_err(|e| {
-        (
-            1,
-            format!("cannot read the reference release from {REFERENCE}: {e}"),
-        )
-    })?;
+    let arch = architecture().map_err(|e| (4, e))?;
+    let reference = match probe::fetch_reference(&net, REFERENCE, &codename) {
+        Ok(r) => r,
+        Err(probe::ReferenceError::NotFound(url)) => {
+            return Err((
+                4,
+                format!(
+                    "{url} answered 404: {codename} is no longer on archive.ubuntu.com (older releases move to old-releases.ubuntu.com, which has no mirrors to choose from). Nothing to do for this release."
+                ),
+            ));
+        }
+        Err(e) => {
+            return Err((
+                1,
+                format!("cannot read the reference release from {REFERENCE}: {e}"),
+            ));
+        }
+    };
 
-    let arch = "amd64";
-    let (tx, rx) = mpsc::channel();
+    let mut probed: Vec<(mirrors::Mirror, probe::Outcome)> = Vec::new();
+    let mut rejected: Vec<(String, String)> = Vec::new();
     let handles: Vec<_> = cands
         .iter()
         .cloned()
         .map(|m| {
-            let tx = tx.clone();
-            let codename = codename.clone();
+            let (codename, arch) = (codename.clone(), arch.clone());
             let reference = probe::Reference {
                 updates: reference.updates,
                 security: reference.security,
             };
             thread::spawn(move || {
                 let net = Net::new();
-                let r = probe::probe(&net, &m.url, &codename, arch, &reference);
-                let _ = tx.send((m, r));
+                let r = probe::probe(&net, &m.url, &codename, &arch, &reference);
+                (m, r)
             })
         })
         .collect();
-    drop(tx);
-    let mut probed = Vec::new();
-    let mut rejected = Vec::new();
-    for (m, r) in rx {
-        match r {
-            Ok(o) if fresh::is_stale(o.updates_lag_secs) => rejected.push((
+    for (m, handle) in cands.iter().zip(handles) {
+        match handle.join() {
+            Ok((m, Ok(o))) if fresh::is_stale(o.updates_lag_secs) => rejected.push((
                 m.url,
-                format!("stale: {}h behind", o.updates_lag_secs / 3600),
+                format!(
+                    "stale: {} h behind the reference",
+                    o.updates_lag_secs / 3600
+                ),
             )),
-            Ok(o) => probed.push((m, o)),
-            Err(e) => rejected.push((m.url, e.to_string())),
+            Ok((m, Ok(o))) => probed.push((m, o)),
+            Ok((m, Err(e))) => rejected.push((m.url, e.to_string())),
+            Err(_) => rejected.push((m.url.clone(), "the probe crashed unexpectedly".to_string())),
         }
     }
-    for h in handles {
-        let _ = h.join();
-    }
+    rejected.sort();
 
     let ranked = fresh::rank(
         probed
@@ -205,6 +214,21 @@ fn run() -> Result<(), (u8, String)> {
         ));
     }
     Ok(())
+}
+
+/// `dpkg --print-architecture`; only amd64 and i386 have mirror choice (SPEC.md Scope).
+fn architecture() -> Result<String, String> {
+    let out = std::process::Command::new("dpkg")
+        .arg("--print-architecture")
+        .output()
+        .map_err(|e| format!("cannot run 'dpkg --print-architecture' to find the CPU architecture: {e}. Is dpkg installed?"))?;
+    let arch = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    match arch.as_str() {
+        "amd64" | "i386" => Ok(arch),
+        other => Err(format!(
+            "architecture '{other}' uses ports.ubuntu.com, which has no mirrors to choose from; apt-scout supports amd64 and i386 only."
+        )),
+    }
 }
 
 fn main() -> ExitCode {
