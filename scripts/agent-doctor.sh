@@ -2,6 +2,10 @@
 # Preflight for the apt-scout delivery team in .pi/agents/.
 # Checks everything the five agents need before they can run on this machine, prints one
 # PASS/FAIL/WARN line per check with a one-line fix, and exits 1 if a required check fails.
+# Project trust is a warning when the entry is merely missing, and a failure when a recorded
+# entry says `false`: Pi loads a project's configuration without any trust decision unless
+# the project carries a trust-requiring resource, but it still honours a recorded decision
+# (see section 4).
 # Usage: bash scripts/agent-doctor.sh
 set -euo pipefail
 
@@ -24,14 +28,27 @@ warn() { printf 'WARN  %s\n' "$1"; printf '      fix: %s\n' "$2"; warnings=$((wa
 canon() { ( cd -- "$1" 2>/dev/null && pwd -P ) || printf '%s\n' "$1"; }
 
 # Value of the `name:` key in a file's YAML frontmatter, empty when absent.
+# A leading UTF-8 BOM is skipped and a quoted value is unquoted, because both are valid
+# frontmatter that a hand-edited agent file ends up with. LC_ALL=C keeps the BOM pattern
+# three raw bytes instead of one character.
 frontmatter_name() {
-  awk '
-    NR == 1 { if ($0 !~ /^---[[:space:]]*$/) exit; next }
+  LC_ALL=C awk '
+    BEGIN { bom = sprintf("%c%c%c", 239, 187, 191) }
+    NR == 1 {
+      if (index($0, bom) == 1) $0 = substr($0, 4)
+      if ($0 !~ /^---[[:space:]]*$/) exit
+      next
+    }
     /^---[[:space:]]*$/ { exit }
     /^name:/ {
       sub(/^name:[[:space:]]*/, "")
       gsub(/\r$/, "")
       sub(/[[:space:]]+$/, "")
+      if (length($0) >= 2) {
+        q = substr($0, 1, 1)
+        if ((q == "\"" || q == sprintf("%c", 39)) && substr($0, length($0), 1) == q)
+          $0 = substr($0, 2, length($0) - 2)
+      }
       print
       exit
     }
@@ -107,7 +124,8 @@ fi
 # --- 3. Pi and the subagents extension ---------------------------------------------------
 
 if command -v pi >/dev/null 2>&1; then
-  pass "[3a] pi on PATH ($(command -v pi))"
+  pi_version=$(pi --version 2>/dev/null | head -n 1 || true)
+  pass "[3a] pi on PATH ($(command -v pi), version ${pi_version:-unreported})"
 else
   fail "[3a] pi not found on PATH" \
     "install Pi and put its binary on PATH; 'pi --version' must work in a new shell"
@@ -120,43 +138,108 @@ else
     "pi install npm:pi-subagents; without it there is no subagent tool and the team cannot run"
 fi
 
-# --- 4. Project trust: without it Pi ignores .pi/agents entirely -------------------------
-
-# Pi trusts a directory when the nearest entry walking up from it is true, so a trusted
-# ancestor counts exactly as Pi would count it during launch.
-trust_covered=""
-trust_denied=""
-dir=$root
-while :; do
-  entry=$(sed -E -n 's/^[[:space:]]*"(.*)"[[:space:]]*:[[:space:]]*(true|false).*$/\1|\2/p' "$trust_file" 2>/dev/null |
-    while IFS='|' read -r key decision; do
-      [ "$(canon "$key")" = "$dir" ] && printf '%s\n' "$decision"
-    done | head -n 1 || true)
-  case "$entry" in
-    true)
-      trust_covered=$dir
-      break
-      ;;
-    false)
-      trust_denied=$dir
-      break
-      ;;
-  esac
-  parent=$(dirname "$dir")
-  [ "$parent" = "$dir" ] && break
-  dir=$parent
-done
-if [ -n "$trust_covered" ] && [ "$trust_covered" = "$root" ]; then
-  pass "[4] project trusted in $trust_file ($root)"
-elif [ -n "$trust_covered" ]; then
-  pass "[4] project trusted through parent folder $trust_covered; launching Pi in $root itself is covered by it"
-elif [ -n "$trust_denied" ]; then
-  fail "[4] project marked untrusted in $trust_file ($trust_denied)" \
-    "launch pi in $trust_denied, run /trust and allow it; while it is refused Pi ignores .pi/agents and the team is invisible"
+# The agent files defer two things to user-level config that the repository cannot carry.
+# Both are reported, never fatal: the team still runs, with that discipline missing.
+machine_agents=$agent_dir/AGENTS.md
+if [ -f "$machine_agents" ]; then
+  pass "[3c] $machine_agents present (carries the machine-level model rule)"
 else
-  fail "[4] $root is not in $trust_file" \
-    "launch pi in $root, answer the trust prompt or run /trust; without trust Pi ignores .pi/agents and the team silently disappears"
+  warn "[3c] $machine_agents is missing" \
+    "the agent files pin no model on purpose and defer that rule to this file; without it children just inherit the caller's model and nothing states the machine's choice"
 fi
+
+plan_template=$agent_dir/prompts/task-pipeline-orchestrator.md
+if [ -f "$plan_template" ]; then
+  pass "[3d] $plan_template present (the lead's task-pipeline template)"
+else
+  warn "[3d] $plan_template is missing" \
+    "apt-scout-lead cites this global template by name; restore it so the lead plans from the same pipeline on every machine"
+fi
+
+# --- 4. Project trust: a recorded decision is better, not required for this checkout -----
+
+# Pi loads a project's configuration without any trust decision unless the project carries a
+# trust-requiring resource (`settings.json`, `mcp.json`, `extensions`, `skills`, `prompts`,
+# `themes`, `SYSTEM.md`, `APPEND_SYSTEM.md` under the project config folder, or an
+# `.agents/skills` folder above the launch directory other than the user's own). This
+# checkout carries agent files and docs only, so Pi shows no prompt here and needs no entry.
+# It still reads a recorded decision, though: `project-trusted = trust-store.get(cwd) ?? true`
+# in main.js, so a recorded `false` disables the project's agents and settings anyway, while
+# a missing entry is only worth a WARN. Hence: missing -> WARN, `false` -> FAIL.
+
+# Nearest decision Pi would use for a directory, printed as "<dir>|<decision>" when found.
+# Pi resolves the launch path to its real path and compares that to the keys exactly as
+# stored, and it stores the real path itself, so keys are compared as written here.
+nearest_trust_entry() {
+  local dir=$1 decision parent
+  while :; do
+    decision=$(sed -E -n 's/^[[:space:]]*"(.*)"[[:space:]]*:[[:space:]]*(true|false).*$/\1|\2/p' "$trust_file" 2>/dev/null |
+      while IFS='|' read -r key value; do
+        [ "$key" = "$dir" ] && printf '%s\n' "$value"
+      done | head -n 1 || true)
+    if [ -n "$decision" ]; then
+      printf '%s|%s\n' "$dir" "$decision"
+      return 0
+    fi
+    parent=$(dirname "$dir")
+    [ "$parent" = "$dir" ] && return 0
+    dir=$parent
+  done
+}
+
+# Trust-requiring resources Pi would find from a directory; empty when there are none.
+trust_requiring_resources() {
+  local dir=$1 entry found="" parent user_skills
+  for entry in settings.json mcp.json extensions skills prompts themes SYSTEM.md APPEND_SYSTEM.md; do
+    if [ -e "$dir/.pi/$entry" ]; then
+      found="${found:+$found }.pi/$entry"
+    fi
+  done
+  user_skills=$(canon "${HOME:-}/.agents/skills")
+  dir=$(canon "$dir")
+  while :; do
+    if [ -d "$dir/.agents/skills" ] && [ "$(canon "$dir/.agents/skills")" != "$user_skills" ]; then
+      found="${found:+$found }$dir/.agents/skills"
+      break
+    fi
+    parent=$(dirname "$dir")
+    [ "$parent" = "$dir" ] && break
+    dir=$parent
+  done
+  printf '%s\n' "$found"
+}
+
+report_trust() { # label dir
+  local label=$1 dir=$2 entry covered decision resources
+  entry=$(nearest_trust_entry "$dir")
+  covered=${entry%%|*}
+  decision=${entry#*|}
+  resources=$(trust_requiring_resources "$dir")
+  if [ "$decision" = true ]; then
+    if [ -n "$resources" ]; then
+      pass "[$label] project trusted in $trust_file ($covered); this checkout needs that decision ($resources)"
+    else
+      pass "[$label] trust recorded for $covered in $trust_file; Pi needs no decision here and loads project configuration without one too"
+    fi
+  elif [ "$decision" = false ]; then
+    fail "[$label] $covered is marked untrusted in $trust_file, so Pi loads no project agents or project settings from $dir (agentScope: project refuses outright)" \
+      "launch pi in $covered, run /trust and allow it, or delete that entry: Pi honours it whether or not the checkout carries a trust-requiring resource"
+  elif [ -n "$resources" ]; then
+    warn "[$label] no trust decision covers $dir and this checkout needs one ($resources); Pi asks at launch and answers no when the prompt cannot be shown (pi -p)" \
+      "launch pi in $dir and allow the prompt, or run /trust; the answer is saved to $trust_file and the prompt stops appearing"
+  else
+    warn "[$label] no trust entry for $dir in $trust_file; Pi needs none here, because this checkout carries no trust-requiring resource, and loads project configuration without a prompt" \
+      "run /trust in pi, or add \"$dir\": true to $trust_file: nothing changes today, and it keeps the team loading if a trust-requiring resource (.pi/settings.json, .agents/skills) is added or a false entry is recorded"
+  fi
+}
+
+report_trust "4a" "$root"
+# A Pi launched deeper inside the clone would use the nearest decision for that folder, so a
+# directory the user actually launches in is reported too when it is not the clone itself.
+launch_dir=$(canon "${PWD:-$root}")
+case "$launch_dir" in
+  "$root"/*) report_trust "4b" "$launch_dir" ;;
+esac
 
 # --- 5. Rust toolchain -------------------------------------------------------------------
 
@@ -191,7 +274,7 @@ else
     "start Docker (Docker Desktop, or 'sudo systemctl start docker'); only scripts/docker-test.sh needs it, but that is a pre-merge gate"
 fi
 
-# --- 7. GitHub CLI auth and repo access --------------------------------------------------
+# --- 7. Git and GitHub access, and the commit identity the loop commits under ------------
 
 if gh auth status >/dev/null 2>&1; then
   pass "[7a] gh authenticated"
@@ -204,10 +287,58 @@ if ( cd "$root" && gh repo view --json nameWithOwner -q .nameWithOwner >/dev/nul
   pass "[7b] gh repo view works from this checkout"
 else
   fail "[7b] gh repo view fails from $root" \
-    "check the origin remote and gh auth status; the loop needs a GitHub repository with push access"
+    "check the origin remote and gh auth status; the loop needs a GitHub repository it can push to"
 fi
 
+# Commits carry the identity git resolves here; the coder and the lead commit on every task.
+commit_name=$(git -C "$root" config user.name 2>/dev/null || true)
+commit_email=$(git -C "$root" config user.email 2>/dev/null || true)
+if [ -n "$commit_name" ] && [ -n "$commit_email" ]; then
+  pass "[7c] commit identity resolves in this checkout (user.name and user.email are set)"
+else
+  name_state=set
+  [ -n "$commit_name" ] || name_state=empty
+  email_state=set
+  [ -n "$commit_email" ] || email_state=empty
+  fail "[7c] no commit identity in $root (user.name is $name_state, user.email is $email_state)" \
+    "git config user.name '<name>' and git config user.email '<email>'; without them every commit the loop makes is rejected or attributed wrong"
+fi
+
+# gh's own permission on the repository. It is not the credential the git remote pushes
+# with, so a PASS here only rules out a read-only token, and the note says exactly that.
+push_perm=$( cd "$root" && gh repo view --json viewerPermission -q .viewerPermission 2>/dev/null || true )
+case "$push_perm" in
+  ADMIN | MAINTAIN | WRITE)
+    pass "[7d] gh reports $push_perm on the repository (its token can open and merge PRs; the git remote's own push credentials are not checked here)"
+    ;;
+  READ | TRIAGE)
+    fail "[7d] gh reports $push_perm on the repository" \
+      "re-auth with an account or token that can write: gh auth login; the loop cannot push a branch or merge a PR with $push_perm"
+    ;;
+  *)
+    warn "[7d] gh did not report a repository permission (got '${push_perm:-nothing}')" \
+      "check gh auth status and the origin remote by hand; this proves nothing either way"
+    ;;
+esac
+
 # --- 8. Skills the agent files reference -------------------------------------------------
+
+# Every place Pi loads skills from: the user's agent dir, its npm packages, and the Agent
+# Skills folders Pi also supports (docs/skills.md), one level of grouping allowed in each.
+skill_installed() { # skill
+  local skill=$1
+  compgen -G "$agent_dir/skills/$skill/SKILL.md" >/dev/null && return 0
+  compgen -G "$agent_dir/skills/*/$skill/SKILL.md" >/dev/null && return 0
+  compgen -G "$agent_dir/npm/node_modules/*/skills/$skill/SKILL.md" >/dev/null && return 0
+  compgen -G "$agent_dir/npm/node_modules/*/skills/*/$skill/SKILL.md" >/dev/null && return 0
+  if [ -n "${HOME:-}" ]; then
+    compgen -G "$HOME/.agents/skills/$skill/SKILL.md" >/dev/null && return 0
+    compgen -G "$HOME/.agents/skills/*/$skill/SKILL.md" >/dev/null && return 0
+  fi
+  compgen -G "$root/.agents/skills/$skill/SKILL.md" >/dev/null && return 0
+  compgen -G "$root/.agents/skills/*/$skill/SKILL.md" >/dev/null && return 0
+  return 1
+}
 
 skills=$(referenced_skills "$agents_dir"/*.md || true)
 if [ -z "$skills" ]; then
@@ -216,14 +347,10 @@ if [ -z "$skills" ]; then
 else
   missing_skills=0
   for skill in $skills; do
-    if compgen -G "$agent_dir/skills/$skill/SKILL.md" >/dev/null ||
-      compgen -G "$agent_dir/skills/*/$skill/SKILL.md" >/dev/null ||
-      compgen -G "$agent_dir/npm/node_modules/*/skills/$skill/SKILL.md" >/dev/null; then
-      continue
-    fi
+    skill_installed "$skill" && continue
     missing_skills=$((missing_skills + 1))
     fail "[8] skill not installed: $skill (belongs in $agent_dir/skills/$skill/SKILL.md)" \
-      "install it to $agent_dir/skills/$skill/SKILL.md; the agents that cite it lose that discipline"
+      "install it to $agent_dir/skills/$skill/SKILL.md; Pi also finds it in ~/.agents/skills or .agents/skills. The agents that cite it lose that discipline"
   done
   if [ "$missing_skills" -eq 0 ]; then
     pass "[8] all referenced skills installed ($(printf '%s' "$skills" | tr '\n' ' ' | sed 's/ $//'))"
@@ -233,7 +360,12 @@ fi
 # --- 9. Optional conveniences: reported, never fatal ------------------------------------
 
 if command -v graft >/dev/null 2>&1; then
-  pass "[9a] graft on PATH (the lead reads structure from the graph)"
+  if [ -f "$root/graft/INDEX.md" ]; then
+    pass "[9a] graft on PATH and this checkout has a graph ($root/graft/INDEX.md)"
+  else
+    warn "[9a] graft on PATH but $root has no graph" \
+      "run 'graft build' in this checkout; the lead reads structure from graft/INDEX.md and falls back to rg and git log without it"
+  fi
 else
   warn "[9a] graft not on PATH" "install graft; the lead falls back to rg and git log for structure"
 fi
@@ -241,8 +373,11 @@ fi
 if command -v cargo-deny >/dev/null 2>&1; then
   pass "[9b] cargo-deny on PATH (deny.toml gate)"
 else
+  # Deliberately a WARN and not a FAIL: CI runs 'cargo deny check' as a required status
+  # check, so a local absence leaves the gate verified by CI. Docker is a FAIL above
+  # because scripts/docker-test.sh never runs in CI, so nothing else can verify it.
   warn "[9b] cargo-deny not on PATH" \
-    "cargo install cargo-deny; the Cargo.toml license and advisory gate runs it in CI"
+    "cargo install cargo-deny; the Cargo.toml license and advisory gate runs it in CI as a required check, so only a local run is missing"
 fi
 
 if [ -n "${CARGO_TARGET_DIR:-}" ]; then
