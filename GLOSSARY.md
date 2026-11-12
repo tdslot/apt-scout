@@ -10,7 +10,7 @@
 
 **Lag**: How much older a mirror's `InRelease` `Date` is than the reference for the same pocket.
 
-**Freshness**: A mirror is fresh when its lag is within `MAX_LAG` for the `<codename>` and `<codename>-updates` pockets. `-security` lag is informational. Stale mirrors are rejected.
+**Freshness**: A mirror is fresh when its `<codename>-updates` lag is within `MAX_LAG` (24 hours). The release pocket is not compared and `-security` lag is informational. Stale mirrors are rejected; lagging but fresh mirrors rank lower.
 
 **Server AS**: The autonomous system of the machine running apt-scout, as reported by the first geolocation source that answers.
 
@@ -18,7 +18,7 @@
 
 **AS match**: A candidate whose AS equals the server AS. Wins ties within a speed band; it never overrides a clearly faster mirror.
 
-**Mirror list source**: Where the mirror list came from: Launchpad, `mirrors.ubuntu.com`, disk cache, or built-in snapshot.
+**Mirror list source**: Where the mirror list came from: Launchpad (primary), `mirrors.ubuntu.com`, disk cache, or built-in snapshot.
 
 **Dry-run**: Mode without TUI or `--apply`. Shows the ranking and the planned change; writes nothing.
 
