@@ -5,9 +5,10 @@ use std::fmt;
 
 use crate::fresh;
 use crate::http::{Fetch, HttpError};
+use crate::verify::{self, SignatureStatus};
 
-/// `Date:` is within the first lines of InRelease; 4 KiB is enough (measured on LT/NO mirrors).
-const HEAD_BYTES: u64 = 4096;
+/// Bounded full download; verification has a lower 512 KiB processing limit.
+const INRELEASE_BYTES: u64 = 2 * 1024 * 1024;
 const SAMPLE_BYTES: u64 = 1_048_576;
 /// Smaller bodies are not a usable throughput sample (the real file is several MB).
 const MIN_SAMPLE: u64 = 64 * 1024;
@@ -18,6 +19,9 @@ pub struct Outcome {
     /// The mirror's `-updates` InRelease `Date` (Unix seconds). Lag is computed by the caller against
     /// the reference, or against the newest candidate when the reference is unreachable.
     pub updates_date: i64,
+    /// OpenPGP status of the deciding `-updates` InRelease. Ranking can use unverified dates, but
+    /// write decisions must require `Verified`.
+    pub updates_signature: SignatureStatus,
     /// Informational only (SPEC step 8): `None` when the mirror has no `-security` InRelease.
     pub security_date: Option<i64>,
     /// Time of the first request: DNS, TCP, TLS and one round trip (not pure connect latency).
@@ -48,18 +52,27 @@ impl fmt::Display for ProbeError {
 /// Reference `Date`s from the canonical archive, fetched once before probing.
 pub struct Reference {
     pub updates: i64,
+    pub updates_signature: SignatureStatus,
     /// `None` when the archive has no readable `-security` InRelease; it is informational only.
     pub security: Option<i64>,
 }
 
-fn date_of(net: &dyn Fetch, base: &str, suite: &str) -> Result<(i64, u64, String), String> {
+type DateProbe = (i64, u64, String, SignatureStatus);
+
+fn date_of(net: &dyn Fetch, base: &str, suite: &str) -> Result<DateProbe, String> {
     let url = format!("{}/dists/{suite}/InRelease", base.trim_end_matches('/'));
     let got = net
-        .get(&url, HEAD_BYTES, Some((0, HEAD_BYTES - 1)))
+        .get(&url, INRELEASE_BYTES, None)
         .map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&got.body);
     let date = fresh::release_date(&text).map_err(|e| format!("{url}: {e}"))?;
-    Ok((date, got.elapsed.as_millis() as u64, got.final_url))
+    let signature = verify::verify_inrelease(&got.body);
+    Ok((
+        date,
+        got.elapsed.as_millis() as u64,
+        got.final_url,
+        signature,
+    ))
 }
 
 #[derive(Debug, PartialEq)]
@@ -87,19 +100,22 @@ pub fn fetch_reference(
         "{}/dists/{codename}-updates/InRelease",
         base.trim_end_matches('/')
     );
-    let got = net
-        .get(&url, HEAD_BYTES, Some((0, HEAD_BYTES - 1)))
-        .map_err(|e| match e {
-            // Only the deciding pocket decides whether the release left the archive.
-            HttpError::Status(404, u) => ReferenceError::NotFound(u),
-            other => ReferenceError::Other(other.to_string()),
-        })?;
+    let got = net.get(&url, INRELEASE_BYTES, None).map_err(|e| match e {
+        // Only the deciding pocket decides whether the release left the archive.
+        HttpError::Status(404, u) => ReferenceError::NotFound(u),
+        other => ReferenceError::Other(other.to_string()),
+    })?;
     let updates = fresh::release_date(&String::from_utf8_lossy(&got.body))
         .map_err(|e| ReferenceError::Other(format!("{url}: {e}")))?;
+    let updates_signature = verify::verify_inrelease(&got.body);
     let security = date_of(net, base, &format!("{codename}-security"))
         .ok()
-        .map(|(d, _, _)| d);
-    Ok(Reference { updates, security })
+        .map(|(d, _, _, _)| d);
+    Ok(Reference {
+        updates,
+        updates_signature,
+        security,
+    })
 }
 
 pub fn probe(
@@ -109,11 +125,11 @@ pub fn probe(
     arch: &str,
 ) -> Result<Outcome, ProbeError> {
     let base = mirror.trim_end_matches('/');
-    let (updates, latency_ms, updates_final) =
+    let (updates, latency_ms, updates_final, updates_signature) =
         date_of(net, base, &format!("{codename}-updates")).map_err(ProbeError::BadUpdates)?;
     let security_date = date_of(net, base, &format!("{codename}-security"))
         .ok()
-        .map(|(d, _, _)| d);
+        .map(|(d, _, _, _)| d);
 
     let sample_url = format!("{base}/dists/{codename}/main/binary-{arch}/Packages.xz");
     let sample = net
@@ -133,6 +149,7 @@ pub fn probe(
     Ok(Outcome {
         url: base.to_string(),
         updates_date: updates,
+        updates_signature,
         security_date,
         redirected_to: other_host(base, &updates_final),
         latency_ms,
@@ -178,6 +195,7 @@ mod tests {
     fn reference() -> Reference {
         Reference {
             updates: fresh::release_date(UPD).unwrap(),
+            updates_signature: SignatureStatus::Invalid("test fixture is unsigned".into()),
             security: Some(fresh::release_date(SEC).unwrap()),
         }
     }

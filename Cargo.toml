@@ -16,7 +16,7 @@ strip = true
 
 [package.metadata.deb]
 maintainer = "tdslot <tdslot@gmail.com>"
-depends = ""
+depends = "gpgv, ubuntu-keyring"
 section = "admin"
 priority = "optional"
 assets = [["target/release/apt-scout", "usr/bin/", "755"]]

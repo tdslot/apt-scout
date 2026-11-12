@@ -32,7 +32,7 @@ Deliver a safe Ubuntu-family CLI that discovers and ranks mirrors, lets the user
 - [x] D6. Formal Oracle audit completed. Accepted requirements recorded in SPEC and tasks D6a–D6c. [SPEC: Pipeline preflight, Pipeline 9, Security note, Apply testing]
 - [x] D6a. Reorder preflight so invalid/unknown `--country` and unsupported architecture fail before geo, HTTP, or DNS; Docker regression proves both cases are rejected without network attempts. Merged PR #18.
 - [x] D6b. Show mirror AS and same/different/unknown status in CLI output; tests cover status mapping and scheme/port handling. Merged PR #19.
-- [ ] **D6c — READY.** Decide keyring/signature implementation and add fail-closed `InRelease` signature checks before any apply decision. No apt write task may start before D6c is implemented. [SPEC: Security note, Apply]
+- [ ] **D6c — IN PROGRESS (`feat/inrelease-signatures`).** Verify full `InRelease` with fixed `/usr/bin/gpgv` and Ubuntu archive keyring; show verified/invalid/unavailable status, keep read-only ranking available, and require verified selected/reference data for future writes. Tests use real signed and tampered fixtures plus missing-`gpgv` Docker coverage. Local verification so far: 102 unit tests, fmt, Clippy `-D warnings`, `cargo deny check`, and Docker 19/19 including live Ubuntu 20.04–26.04. [SPEC: Security note, Apply]
 - [ ] **D6e — BLOCKED by D6c.** Oracle threat-model/design audit plus independent security review of the proposed privilege boundary; approve a trusted root handoff and security acceptance tests before any privileged implementation. Explicitly decide whether self-reexec is allowed. [SPEC: Privilege boundary and threat model]
 
 
@@ -40,7 +40,7 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, and D8 PR #23
 
 ## Milestone 2 — Apt source discovery, apply, backup, restore
 
-**Status: IN PROGRESS** — D6a/D6b, D7, and D8 are complete. D6c signature verification is next; D6c and D6e gate every privileged write.
+**Status: IN PROGRESS** — D6a/D6b, D7, and D8 are complete. D6c signature verification is in progress; D6c and D6e gate every privileged write.
 
 - [x] D7. Read-only apt source inventory and legacy/deb822 parsers; print eligible/skipped URIs and stop before probes if no eligible source exists. No apt writes. Tests cover comments/options, malformed/duplicate/missing fields, disabled/security stanzas, current mirrors, Pop!_OS mixed security suites, invalid URI ports/userinfo, root/file/directory symlinks, non-UTF8 files, third-party-only sources, and Docker CLI output. Merged PR #21.
 - [x] D8. Pure, byte-preserving rewrite plan for legacy/deb822 URI tokens; returns transformed contents and staged Pop!_OS security file without filesystem IO. Tests cover CRLF/comments/options, multi-URI/disabled/security stanzas, Pop split, round trips, and invalid selected URLs. Merged PR #23.
