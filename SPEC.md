@@ -151,8 +151,8 @@ Principle: the program solves its own problems when safe, and otherwise says exa
 
 ## Testing
 
-- Unit tests (`#[cfg(test)]`) cover pure logic on fixtures: `os-release`, Launchpad HTML, `mirrors.txt`, `InRelease` dates, freshness, ranking, sources rewrite. Saved fixtures come from real responses (the Launchpad page is ~316 KB; keep a trimmed copy with at least two countries and every status value seen).
-- Integration tests run inside Docker on real Ubuntu images, offline. The matrix covers every supported release; format measured on 2026-11-11:
+- Unit tests (`#[cfg(test)]`) cover pure logic on fixtures: `os-release`, Launchpad HTML, `mirrors.txt`, `InRelease` dates, freshness, ranking, and read-only apt source inventory/parsers. D8 must add pure source rewrite round-trip coverage. Saved fixtures come from real responses (the Launchpad page is ~316 KB; keep a trimmed copy with at least two countries and every status value seen).
+- Docker integration tests run inside disposable real Ubuntu images; offline cases and live-network smoke cases are both included. Live cases require internet and are manual, never part of CI. The matrix covers every supported release; format measured on 2026-11-11:
 
   | Release | Codename | Sources format |
   | --- | --- | --- |
