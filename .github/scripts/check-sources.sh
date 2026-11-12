@@ -7,7 +7,23 @@ set -uo pipefail
 fail=0
 ok()  { printf 'OK   %s\n' "$1"; }
 bad() { printf 'FAIL %s: %s\n' "$1" "$2"; fail=1; }
-get() { curl -fsSL --max-time 20 "$@"; }
+get() { curl -fsSL --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors "$@"; }
+skip() { printf 'SKIP %s: %s\n' "$1" "$2"; }
+# HTTP status of a URL ("000" when the request itself failed).
+code() { curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$1"; }
+# Public geo services may block or rate limit shared CI runner addresses (403/429): that is
+# not a contract break, so it is a SKIP. A 200 with a wrong body is a FAIL.
+geo() { # <name> <url> <extract-command>
+  local name=$1 url=$2 status cc
+  status=$(code "$url")
+  case "$status" in
+    403|429) skip "$name" "HTTP $status (blocked or rate limited)"; return ;;
+    200) ;;
+    *) bad "$name" "HTTP $status"; return ;;
+  esac
+  cc=$(get "$url" | eval "$3" | tr -d '[:space:]')
+  [[ "$cc" =~ ^[A-Z]{2}$ ]] && ok "$name ($cc)" || bad "$name" "unexpected answer '$cc'"
+}
 
 # Launchpad mirror list: country head rows, mirror rows, http(s) links, status spans.
 if page=$(get https://launchpad.net/ubuntu/+archivemirrors); then
@@ -35,12 +51,9 @@ else bad archive.ubuntu.com "no Date in noble-updates InRelease"; fi
 # Geo sources: country must be two letters.
 cc=$(get http://geoip.ubuntu.com/lookup | sed -n 's:.*<CountryCode>\([A-Z][A-Z]\)</CountryCode>.*:\1:p')
 [ -n "$cc" ] && ok "geoip.ubuntu.com ($cc)" || bad geoip.ubuntu.com "no CountryCode"
-cc=$(get https://ifconfig.co/country-iso 2>/dev/null | tr -d '[:space:]')
-[[ "$cc" =~ ^[A-Z]{2}$ ]] && ok "ifconfig.co ($cc)" || bad ifconfig.co "unexpected answer"
-cc=$(get https://ipinfo.io/country 2>/dev/null | tr -d '[:space:]')
-[[ "$cc" =~ ^[A-Z]{2}$ ]] && ok "ipinfo.io ($cc)" || bad ipinfo.io "unexpected answer"
-cc=$(get https://www.cloudflare.com/cdn-cgi/trace | sed -n 's/^loc=//p')
-[[ "$cc" =~ ^[A-Z]{2}$ ]] && ok "cloudflare trace ($cc)" || bad cloudflare "no loc=CC"
+geo ifconfig.co https://ifconfig.co/country-iso cat
+geo ipinfo.io https://ipinfo.io/country cat
+geo "cloudflare trace" https://www.cloudflare.com/cdn-cgi/trace "sed -n 's/^loc=//p'"
 
 # AS sources: Team Cymru DNS and RIPEstat for a known address.
 if command -v dig >/dev/null; then

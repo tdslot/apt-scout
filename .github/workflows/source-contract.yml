@@ -3,8 +3,10 @@ name: Source contract check
 # Advisory, never a required check. Weekly: confirm every live data source still
 # answers and still has the fields the parser needs. Opens or updates one issue
 # after two consecutive failures (runner IPs can be rate limited by single services).
-# Scheduled workflows on public repos are disabled after 60 days without repository
-# activity; re-enable from the Actions tab if that happens.
+# Scheduled workflows run only from the default branch (main): this file starts running
+# after the first release merges develop into main. Public-repo schedules are disabled
+# after 60 days without repository activity; re-enable from the Actions tab if that happens.
+# Manual runs (workflow_dispatch) never count as the "previous" weekly run.
 on:
   schedule:
     - cron: "17 6 * * 1"
@@ -26,7 +28,7 @@ jobs:
         id: check
         run: |
           set +e
-          .github/scripts/check-sources.sh | tee report.txt
+          bash .github/scripts/check-sources.sh | tee report.txt
           echo "status=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
       - name: Previous run result
         id: prev
@@ -34,7 +36,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          prev="$(gh run list --workflow source-contract.yml --status completed --limit 1 --json conclusion --jq '.[0].conclusion // "none"')"
+          prev="$(gh run list --workflow source-contract.yml --event schedule --status completed --limit 1 --json conclusion --jq '.[0].conclusion // "none"')"
           echo "conclusion=$prev" >> "$GITHUB_OUTPUT"
       - name: Open or update issue after two consecutive failures
         if: steps.check.outputs.status != '0' && steps.prev.outputs.conclusion == 'failure'
