@@ -14,7 +14,9 @@ use std::time::{Duration, Instant};
 
 pub const GPGV: &str = "/usr/bin/gpgv";
 pub const UBUNTU_KEYRING: &str = "/usr/share/keyrings/ubuntu-archive-keyring.gpg";
-const MAX_INRELEASE_BYTES: usize = 512 * 1024;
+/// Maximum `InRelease` accepted for verification. `probe` uses it as its download cap, so a body
+/// can never download successfully and then fail verification for being too large.
+pub const MAX_INRELEASE_BYTES: usize = 512 * 1024;
 const GPGV_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_STATUS_BYTES: u64 = 1024 * 1024;
 

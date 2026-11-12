@@ -8,8 +8,9 @@ use crate::fresh;
 use crate::http::{Fetch, HttpError};
 use crate::verify::{self, SignatureStatus};
 
-/// Bounded full download; verification has a lower 512 KiB processing limit.
-const INRELEASE_BYTES: u64 = 2 * 1024 * 1024;
+/// The deciding `-updates` pocket is verified, so the whole file is fetched. The cap is the
+/// verifier's own limit: a body that downloads but cannot be verified would only mislead.
+const INRELEASE_BYTES: u64 = verify::MAX_INRELEASE_BYTES as u64;
 /// `-security` is informational, so only the head is read (`Date:` sits in the first lines).
 const HEAD_BYTES: u64 = 4096;
 const SAMPLE_BYTES: u64 = 1_048_576;
@@ -65,8 +66,9 @@ fn inrelease_url(base: &str, suite: &str) -> String {
     format!("{}/dists/{suite}/InRelease", base.trim_end_matches('/'))
 }
 
-/// The deciding pocket: the whole file is fetched and its OpenPGP signature is checked. Returns the
-/// `Date`, the request's time to first byte, the final URL and the signature status.
+/// The deciding pocket: the whole file is fetched under the verification cap and its OpenPGP
+/// signature is checked. Returns the `Date`, the request's time to first byte, the final URL and
+/// the signature status.
 fn date_of_verified(
     net: &dyn Fetch,
     base: &str,
@@ -187,7 +189,7 @@ fn other_host(base: &str, final_url: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::Canned;
+    use crate::http::{Canned, Fetched, HttpError};
 
     const UPD: &str = "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nOrigin: Ubuntu\nDate: Thu, 12 Nov 2026  4:23:38 UTC\n";
     const UPD_OLD: &str = "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nOrigin: Ubuntu\nDate: Wed, 11 Nov 2026 22:06:33 UTC\n";
@@ -203,6 +205,74 @@ mod tests {
         b[4] = b'Z';
         b
     };
+
+    /// One recorded request: URL, byte cap and optional range.
+    type Call = (String, u64, Option<(u64, u64)>);
+
+    /// Records each request and rejects an oversized un-ranged body like `Net` does, so tests can
+    /// assert which pocket fetches what and that the size cap is really applied at download time.
+    struct Recording {
+        answers: Vec<(&'static str, Result<&'static [u8], u16>)>,
+        calls: std::cell::RefCell<Vec<Call>>,
+        ttfb: std::time::Duration,
+        elapsed: std::time::Duration,
+    }
+
+    impl Recording {
+        fn new(answers: Vec<(&'static str, Result<&'static [u8], u16>)>) -> Self {
+            Self {
+                answers,
+                calls: std::cell::RefCell::new(Vec::new()),
+                ttfb: std::time::Duration::from_millis(5),
+                elapsed: std::time::Duration::from_millis(5),
+            }
+        }
+
+        fn calls(&self) -> Vec<Call> {
+            self.calls.borrow().clone()
+        }
+    }
+
+    impl Fetch for Recording {
+        fn get(
+            &self,
+            url: &str,
+            max: u64,
+            range: Option<(u64, u64)>,
+        ) -> Result<Fetched, HttpError> {
+            self.calls.borrow_mut().push((url.to_string(), max, range));
+            match self.answers.iter().find(|(u, _)| *u == url) {
+                Some((_, Ok(body))) => {
+                    if range.is_none() && body.len() as u64 > max {
+                        return Err(HttpError::TooLarge(max, url.to_string()));
+                    }
+                    Ok(Fetched {
+                        body: body.to_vec(),
+                        elapsed: self.elapsed,
+                        ttfb: self.ttfb,
+                        final_url: url.to_string(),
+                    })
+                }
+                Some((_, Err(code))) => Err(HttpError::Status(*code, url.to_string())),
+                None => Err(HttpError::Transport(
+                    "no canned answer".into(),
+                    url.to_string(),
+                )),
+            }
+        }
+    }
+
+    const M_UPD: &str = "http://m.example/ubuntu/dists/noble-updates/InRelease";
+    const M_SEC: &str = "http://m.example/ubuntu/dists/noble-security/InRelease";
+    const M_SAMPLE: &str = "http://m.example/ubuntu/dists/noble/main/binary-amd64/Packages.xz";
+
+    fn recording() -> Recording {
+        Recording::new(vec![
+            (M_UPD, Ok(UPD.as_bytes())),
+            (M_SEC, Ok(SEC.as_bytes())),
+            (M_SAMPLE, Ok(XZ_OK)),
+        ])
+    }
 
     fn reference() -> Reference {
         Reference {
@@ -446,5 +516,58 @@ mod tests {
             probe(&c, "http://m.example/ubuntu", "noble", "amd64",),
             Err(ProbeError::Unreachable(_))
         ));
+    }
+
+    #[test]
+    fn updates_pocket_is_fetched_whole_and_security_pocket_only_reads_the_head() {
+        let rec = recording();
+        probe(&rec, "http://m.example/ubuntu", "noble", "amd64").unwrap();
+        let calls = rec.calls();
+        let find = |url: &str| {
+            calls
+                .iter()
+                .find(|(u, _, _)| u == url)
+                .unwrap_or_else(|| panic!("no request for {url}"))
+        };
+        let (_, max, range) = find(M_UPD);
+        assert_eq!(*range, None);
+        assert_eq!(*max, verify::MAX_INRELEASE_BYTES as u64);
+        let (_, max, range) = find(M_SEC);
+        assert_eq!(*range, Some((0, 4095)));
+        assert_eq!(*max, 4096);
+        let (_, _, range) = find(M_SAMPLE);
+        assert_eq!(*range, Some((0, 1_048_575)));
+
+        // the reference fetches the same two pockets, and `-security` is ranged there too
+        let rec = recording();
+        fetch_reference(&rec, "http://m.example/ubuntu", "noble").unwrap();
+        let calls = rec.calls();
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        let security = calls
+            .iter()
+            .find(|(u, _, _)| u == M_SEC)
+            .unwrap_or_else(|| panic!("no request for {M_SEC}"));
+        assert_eq!(security.2, Some((0, 4095)));
+    }
+
+    #[test]
+    fn latency_is_time_to_first_byte_not_the_download() {
+        let mut rec = recording();
+        rec.ttfb = std::time::Duration::from_millis(7);
+        rec.elapsed = std::time::Duration::from_millis(900);
+        let o = probe(&rec, "http://m.example/ubuntu", "noble", "amd64").unwrap();
+        assert_eq!(o.latency_ms, 7);
+    }
+
+    #[test]
+    fn an_inrelease_over_the_verification_cap_is_rejected_at_download() {
+        let big: &'static [u8] =
+            Box::leak(vec![b'x'; verify::MAX_INRELEASE_BYTES + 1].into_boxed_slice());
+        let rec = Recording::new(vec![(M_UPD, Ok(big))]);
+        let e = probe(&rec, "http://m.example/ubuntu", "noble", "amd64").unwrap_err();
+        let ProbeError::BadUpdates(msg) = &e else {
+            panic!("expected BadUpdates, got {e}");
+        };
+        assert!(msg.contains("524288"), "{msg}");
     }
 }
