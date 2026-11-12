@@ -1,5 +1,6 @@
 mod countries;
 mod cymru;
+mod digest;
 mod distro;
 mod fresh;
 mod geo;
