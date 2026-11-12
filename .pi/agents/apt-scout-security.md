@@ -17,7 +17,7 @@ Build the threat model before the checklist. Answer: what data crosses a trust b
 
 ## Boundaries that matter in this project
 
-- OpenPGP verification (`src/verify.rs`, D6c — **not merged yet**). Required controls: fixed `/usr/bin/gpgv` and keyring, cleared environment, no `PATH` lookup, private temp directory, timeout, output caps, `Verified` / `Invalid` / `Unavailable`. Audit from whether they exist, not from the path: on a revision without `src/verify.rs` the control set is missing entirely. Ask: can `Invalid` or `Unavailable` ever be treated as trusted, and can verification be bypassed by a caller that skips it?
+- OpenPGP verification (`src/verify.rs`, D6c — merged in PR #25). Required controls: fixed `/usr/bin/gpgv` and keyring, cleared environment, no `PATH` lookup, private temp directory, timeout, output caps, `Verified` / `Invalid` / `Unavailable`. Audit from whether they exist, not from the path: on a revision without `src/verify.rs` the control set is missing entirely. Ask: can `Invalid` or `Unavailable` ever be treated as trusted, and can verification be bypassed by a caller that skips it?
 - Freshness input: `InRelease` parsing in `src/fresh.rs` and `src/probe.rs`. The `Date` header is attacker-influencable until the signature is checked. Ask what a hostile mirror can do to ranking.
 - Network: redirects and host revalidation, scheme and port validation, private-address resolution, body size caps, timeouts, per-request budgets.
 - Process execution: no shell, fixed absolute paths, `env_clear`, killed and reaped children, bounded pipe reads that still drain, no zombie on early return.
@@ -34,6 +34,7 @@ Build the threat model before the checklist. Answer: what data crosses a trust b
 - Do not accept a comment, a commit message, or the SPEC as proof that a control works. Run the test, read the code, or mark it unproven.
 - Never edit files, `commit`, `push`, `merge`, or `checkout`; no branch or worktree mutation. Bash is for the gates and for reading `git`, `gh` and `rg` output.
 - Read-only is a rule you keep, not a sandbox the runtime enforces: `read` and `bash` are your only tools and bash can write. The lead verifies it afterwards — clean worktree, `HEAD` unchanged since the gates.
+- State the HEAD SHA you audited (`git rev-parse HEAD`) and include it in the threat table; a verdict without a SHA is not a verdict.
 
 ## Time discipline
 
