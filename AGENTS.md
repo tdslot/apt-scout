@@ -93,7 +93,7 @@ When the user requests a durable behavior change, record it here or in the relev
 - `Cargo.toml` / `Cargo.lock`: crate manifest and lockfile
 - `SPEC.md`: source of truth for behavior (scope, CLI, pipeline, apply rules, exit codes); update it before changing behavior
 - `GLOSSARY.md`: project vocabulary only, no implementation detail
-- `src/main.rs`: entry point, currently hello-world stub
+- `src/main.rs`: entry point; `src/distro.rs`: os-release detection (Ubuntu family, codename); `scripts/docker-test.sh`: container integration tests
 - `target/`: build output, never edit
 - Repo: https://github.com/tdslot/apt-scout (public, `tdslot`); license MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`)
 - Branches: `develop` collects work, `main` = last release. Feature branches `feat/*`, `fix/*`, `chore/*` -> PR into `develop` (squash). Never push directly to `main` or `develop`.
@@ -103,7 +103,7 @@ When the user requests a durable behavior change, record it here or in the relev
 - `.github/`: `workflows/{ci,pr-title,prepare-release,release-pr,release,source-contract}.yml`, `scripts/changelog.sh`, `scripts/check-sources.sh`, `CODEOWNERS`, `dependabot.yml` (weekly, targets `develop`), PR and issue templates. Required status checks on `main`/`develop`: `check` (fmt, clippy -D warnings, test, release build), `pr-title` (Conventional Commit title). Also required: `deny` (cargo-deny: advisories, licenses, no OpenSSL), `musl-build` (static binary), `docs-and-conventions` (English-only guard via `rg`)
 - CI scope: `.rs`, Cargo manifests/lockfiles, toolchain/rustfmt/clippy/deny configuration, `.cargo/`, `.github/workflows/`, and `.github/scripts/` run full CI. Other changes skip `check`, `deny`, and `musl-build` at job level (GitHub accepts skipped jobs as passing required statuses). Documentation and PR-title checks still run. Manual dispatch and initial pushes run full CI. Diff detection errors fail the `changes` job and default downstream jobs to full CI; never use workflow-level path filters for required checks.
 - Musl builds (CI and releases) use `cross` with its prebuilt target container, installed via `taiki-e/install-action`; do not install `musl-tools` through runner apt mirrors. Docker and access to the cross container registry are required on the runner.
-- Testing: unit tests on fixtures; integration tests in Docker (Ubuntu 20.04, 22.04 legacy; 24.04, 26.04 deb822) through the shared Dockerfile and `scripts/docker-test.sh`, offline, run locally before any PR that changes `.rs` or build configuration; see `SPEC.md` Testing. Live-network tests are manual only
+- Testing: unit tests on fixtures; integration tests in Docker (Ubuntu 20.04, 22.04 legacy; 24.04, 26.04 deb822) through `scripts/docker-test.sh` (builds a static amd64 binary in a container, runs it in real Ubuntu images, offline; CI job `docker-test` runs the same script), run locally before any PR that changes `.rs` or build configuration; see `SPEC.md` Testing. Live-network tests are manual only
 - `source-contract.yml` (weekly, advisory, never required): runs `scripts/check-sources.sh` against the live data sources and opens one issue after two consecutive failures. Run `scripts/check-sources.sh` locally to verify sources before changing a parser
 - Toolchain files: `rust-toolchain.toml` (stable + rustfmt + clippy), `rustfmt.toml`, `deny.toml`
 - Use `rg` (ripgrep), not `grep`, for searching
@@ -111,7 +111,7 @@ When the user requests a durable behavior change, record it here or in the relev
 - Rust rules: no `unwrap()`/`expect()` outside tests; errors carry context (see `SPEC.md` Errors and self-healing); `unsafe` only with a `// SAFETY:` comment; std over new dependencies; `rustls`, never OpenSSL; pure logic separate from IO; tests use fixtures, never live network
 - Commits: Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`, `feat!:` breaking); the changelog is generated from subjects
 - Agent-local skill `apt-scout-dev-workflow` (outside the repo, in the agent's project memory) mirrors these rules; the repo files are authoritative
-- Verification: `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (no tests yet)
+- Verification: `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, `scripts/docker-test.sh` (needs Docker)
 
 ## Child DOX Index
 
