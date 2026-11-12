@@ -93,6 +93,45 @@ Report to the parent through `contact_supervisor`; do not stall silently.
 - No merge without a review verdict and a security verdict on the final diff.
 - Everything you write down — PR text, commit messages, ROADMAP entries, reports — is English, specific, and free of claims you cannot point a command at.
 
+## Quality is the only currency
+
+- Never merge two roadmap tasks into one PR to save time, and never weaken a gate for speed: the full Docker matrix, the independent review, the security audit and Gate 2 stay as they are. Speed comes from removing fixed cost only.
+- A smaller diff that is fully reviewed beats a big diff that is not. If you are behind on wall clock, report and stop; do not cut verification.
+
+## Speed
+
+Wall-clock is the scarce resource. These are not optional optimisations; they are how a task gets done inside one run.
+
+- **Shared build cache.** Every cargo command runs with `CARGO_TARGET_DIR=/tmp/apt-scout-target`, exported once at the start of the task. All worktrees then reuse the same incremental artefacts instead of compiling a fresh 228 MB target each time. Never delete that directory, never point it inside a worktree.
+- **`scripts/docker-test.sh` is not a per-task gate.** CI does not run it, it takes four to five minutes, and it only proves runtime behaviour. Run it once, before merge, and only when the task changes something the containers actually exercise: CLI output, network handling, filesystem or apt-source behaviour, packaging. A docs, comment, or pure-parser-with-unit-tests task does not run it — say in the report that you skipped it and why.
+- **Docs-only tasks run no cargo at all.** CI's `changes` job already skips the code jobs for them.
+- **Parallel where it is free.** `apt-scout-reviewer` and `apt-scout-security` are read-only. The runtime rejects two `subagent` calls in one message, so launch them back to back in separate turns with `async: true`; they then run concurrently. Never serialise them by waiting for the first result before starting the second.
+- **Delta-only briefs.** Tell every reviewer and auditor exactly which diff range to judge and forbid re-reading earlier verdict files or re-auditing commits already reviewed. This is the single biggest source of wasted child time in this repo.
+- **Bounded children.** Give each child `timeoutMs` of 600000 or less. A child that cannot finish a delta review in ten minutes is reading the wrong thing.
+- **One gate pass.** `cargo fmt --check`, clippy and `cargo test` once each at the end, not after every edit. The coder runs focused `cargo test <name>` while iterating; you run the full set once.
+
+
+## Waiting (the rule that keeps being broken)
+
+A `sleep` is never a wait — it is a bug. Concretely:
+
+- **If you need a child's result before your next step, launch it blocking**: `subagent({ agent: "apt-scout-reviewer", task: "...", async: false })`. The call returns the result. No polling, no sleep.
+- **If a child is already running async**, call `subagent({ action: "status", id: "<id>" })` once. If it is not done, do independent work (read the diff, write the next brief, run a check that does not touch the same tree), then check again. A second check is fine; a `sleep` between checks is not.
+- **If nothing independent is left to do**, that is the signal to launch the child blocking next time, or to report and stop. Sleeping does not create progress.
+- **Banned outright**: `sleep <n>`, `timeout <n> sleep <n>`, `gh run watch`, and any command whose only job is to pass time. If you catch yourself writing one, delete it and use `async: false` instead.
+
+
+## Phase budget (learned the hard way)
+
+Wall-clock per phase, not just per run. Exceeding these is a signal about the task shape, not about effort.
+
+- **Planning: 20 minutes.** If a plan is not written and reviewed by then, the plan is too big — split the task in the ROADMAP instead of rewriting the plan a second time. A 75 KB plan and a 15 KB plan were both wrong for D9; the answer was four tasks.
+- **First commit: 30 minutes** into a task. No commit by then means the work is still being planned, however busy it looks.
+- **One child per unit of work.** Give the coder ONE file or module, with the requirements inlined in the brief, and tell it explicitly not to read the plan document. A child cannot implement 1,100 lines in a 600 s call; three children in a row hit that ceiling and produced nothing until the brief was narrowed to a single file.
+- **300 changed lines is a ceiling per child.** Above that, split the unit before delegating.
+- **Three timeouts in a row without a commit means stop**: split the task, record the split, hand it back. Do not relaunch the same brief a fourth time.
+
+
 ## Time discipline
 
 - Never leave an open-ended command running. Anything that can exceed ~120 s gets an explicit bound and a log file:
