@@ -1,6 +1,8 @@
 mod countries;
+mod cymru;
 mod distro;
 mod fresh;
+mod geo;
 mod http;
 mod mirrors;
 mod probe;
@@ -20,19 +22,26 @@ struct Args {
     country: Option<String>,
     top: usize,
     https_only: bool,
+    no_geo: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
+    parse_args_from(std::env::args().skip(1))
+}
+
+fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let mut a = Args {
         country: None,
         top: 5,
         https_only: false,
+        no_geo: false,
     };
-    let mut it = std::env::args().skip(1);
+    let mut it = args.into_iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--list" => {}
             "--https-only" => a.https_only = true,
+            "--no-geo" => a.no_geo = true,
             "--country" => {
                 let cc = it
                     .next()
@@ -57,7 +66,7 @@ fn parse_args() -> Result<Args, String> {
             }
             "-h" | "--help" => {
                 println!(
-                    "apt-scout --country <CC> [--top N] [--https-only] [--list]\nShows the freshest, fastest Ubuntu mirrors for a country. Read-only: nothing is written."
+                    "apt-scout [--country <CC>] [--no-geo] [--top N] [--https-only] [--list]\nShows the freshest, fastest Ubuntu mirrors for your country (detected, or given with --country). --no-geo skips every geolocation lookup and needs --country. Read-only: nothing is written."
                 );
                 std::process::exit(0);
             }
@@ -65,6 +74,13 @@ fn parse_args() -> Result<Args, String> {
         }
     }
     Ok(a)
+}
+
+fn validate_geo_args(args: &Args) -> Result<(), String> {
+    if args.no_geo && args.country.is_none() {
+        return Err("--no-geo needs --country <CC>, because nothing else can tell which country you are in. Example: --no-geo --country LT".to_string());
+    }
+    Ok(())
 }
 
 fn run() -> Result<(), (u8, String)> {
@@ -83,10 +99,32 @@ fn run() -> Result<(), (u8, String)> {
     let codename = d.codename.ok_or_else(|| {
         (1, format!("{source} contains neither UBUNTU_CODENAME nor VERSION_CODENAME, so the Ubuntu release cannot be determined. Check that the distribution's os-release file is intact; report this error with its ID and codename fields at https://github.com/tdslot/apt-scout/issues."))
     })?;
-    let country = args.country.ok_or((
+    validate_geo_args(&args).map_err(|e| (2, e))?;
+    let net = Net::new();
+    // Geolocation is optional (SPEC.md, Resilience): failures are reported and the run continues.
+    let mut geo = geo::Geo::default();
+    if !args.no_geo {
+        let (found, notes) = geo::detect(&net);
+        for n in &notes {
+            eprintln!("note: geolocation: {n}");
+        }
+        geo = found;
+        if let (None, Some(ip)) = (&geo.asn, geo.ip.as_deref().and_then(|i| i.parse().ok())) {
+            match cymru::lookup(ip) {
+                Ok(asn) => geo.asn = Some(asn),
+                Err(e) => eprintln!("note: server AS lookup via Team Cymru DNS failed: {e}"),
+            }
+        }
+    }
+    let country = args.country.clone().or(geo.country.clone()).ok_or((
         2,
-        "no country given. Geolocation is not implemented yet: pass --country <CC>, for example --country LT".to_string(),
+        "cannot tell which country you are in (every geolocation source failed or was skipped). Pass it with --country <CC>, for example --country LT.".to_string(),
     ))?;
+    let country_origin = if args.country.is_some() {
+        "from --country"
+    } else {
+        "detected"
+    };
 
     let country_name = countries::launchpad_name(&country).ok_or_else(|| {
         (
@@ -96,7 +134,6 @@ fn run() -> Result<(), (u8, String)> {
     })?;
     let arch = architecture()?;
 
-    let net = Net::new();
     let (mut cands, list_source) = load_candidates(&net, &country, country_name, args.https_only)?;
     // Different list sources can name the same mirror twice (with and without a trailing slash).
     let mut seen = std::collections::HashSet::new();
@@ -158,6 +195,19 @@ fn run() -> Result<(), (u8, String)> {
             )
         })
         .unwrap_or(0);
+    // AS of each candidate (SPEC step 5): informational, never a reason to fail; skipped with --no-geo.
+    let server_asn = geo.asn.clone();
+    let mirror_asn: std::collections::HashMap<String, String> =
+        if args.no_geo || server_asn.is_none() {
+            Default::default()
+        } else {
+            resolve_mirror_asns(
+                &results
+                    .iter()
+                    .map(|(m, _)| m.url.clone())
+                    .collect::<Vec<_>>(),
+            )
+        };
     let mut probed: Vec<fresh::Probed> = Vec::new();
     let mut notes: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for (m, r) in results {
@@ -190,7 +240,8 @@ fn run() -> Result<(), (u8, String)> {
                         lag_secs: lag,
                         throughput_bps: o.throughput_bps,
                         latency_ms: o.latency_ms,
-                        same_as: false,
+                        same_as: server_asn.is_some()
+                            && mirror_asn.get(&m.url) == server_asn.as_ref(),
                     });
                 }
             }
@@ -205,7 +256,8 @@ fn run() -> Result<(), (u8, String)> {
         "newest mirror (reference unreachable)"
     };
     println!(
-        "Ubuntu {codename}, country {country_name}, mirror list: {list_source}, baseline {baseline_name}\n"
+        "Ubuntu {codename}, country {country_name} ({country_origin}), server {}, mirror list: {list_source}, baseline {baseline_name}\n",
+        geo.asn.as_deref().unwrap_or("AS unknown")
     );
     println!(
         "{:>2}  {:<48} {:>7} {:>9} {:>8}",
@@ -253,6 +305,89 @@ fn architecture() -> Result<String, (u8, String)> {
             ),
         )),
     }
+}
+
+fn mirror_host(url: &str) -> Option<String> {
+    let authority = url.split_once("://")?.1.split(['/', '?', '#']).next()?;
+    let authority = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    if let Some(v6) = authority.strip_prefix('[') {
+        return Some(v6.split_once(']')?.0.to_string());
+    }
+    Some(
+        authority
+            .rsplit_once(':')
+            .map_or(authority, |(host, _)| host)
+            .to_string(),
+    )
+}
+
+/// AS of each mirror host via Team Cymru DNS, at most 8 lookups at a time and one total 20 s
+/// budget for all resolution and queries. Standard-library hostname resolution is offloaded to a
+/// worker thread because it cannot be interrupted; after the budget, results are discarded.
+/// Mirrors without AS data are left out (AS is informational).
+fn resolve_mirror_asns(urls: &[String]) -> std::collections::HashMap<String, String> {
+    use std::net::ToSocketAddrs;
+    use std::time::{Duration, Instant};
+    const AS_BUDGET: Duration = Duration::from_secs(20);
+    let deadline = Instant::now() + AS_BUDGET;
+    let mut out = std::collections::HashMap::new();
+    for chunk in urls.chunks(8) {
+        if Instant::now() >= deadline {
+            eprintln!(
+                "note: AS lookup time budget ({} s) exhausted; remaining mirrors ranked without AS preference",
+                AS_BUDGET.as_secs()
+            );
+            break;
+        }
+        let handles: Vec<_> = chunk
+            .iter()
+            .cloned()
+            .map(|url| {
+                thread::spawn(move || {
+                    let host = mirror_host(&url)?;
+                    let ip = (host.as_str(), 80)
+                        .to_socket_addrs()
+                        .ok()?
+                        .map(|addr| addr.ip())
+                        .find(|ip| !mirrors::is_private(*ip))?;
+                    let asn = cymru::lookup(ip).ok()?;
+                    Some((url, asn))
+                })
+            })
+            .collect();
+        let (tx, rx) = std::sync::mpsc::channel();
+        for h in handles {
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let _ = tx.send(h.join().ok().flatten());
+            });
+        }
+        drop(tx);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match rx.recv_timeout(remaining) {
+                Ok(Some((url, asn))) => {
+                    out.insert(url, asn);
+                }
+                Ok(None) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        if Instant::now() >= deadline {
+            eprintln!(
+                "note: AS lookup time budget ({} s) exhausted; remaining mirrors ranked without AS preference",
+                AS_BUDGET.as_secs()
+            );
+            break;
+        }
+    }
+    out
 }
 
 /// Baseline when the canonical archive is unreachable: the newest mirror date, but a date that is
@@ -349,6 +484,40 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
     use crate::http::Canned;
+
+    #[test]
+    fn no_geo_requires_country() {
+        let args = parse_args_from(["--no-geo"].into_iter().map(str::to_string)).unwrap();
+        assert_eq!(
+            validate_geo_args(&args).unwrap_err(),
+            "--no-geo needs --country <CC>, because nothing else can tell which country you are in. Example: --no-geo --country LT"
+        );
+        let args = parse_args_from(
+            ["--no-geo", "--country", "LT"]
+                .into_iter()
+                .map(str::to_string),
+        )
+        .unwrap();
+        assert!(args.no_geo);
+        assert_eq!(args.country.as_deref(), Some("LT"));
+    }
+
+    #[test]
+    fn mirror_host_handles_ports_and_ipv6() {
+        assert_eq!(
+            mirror_host("https://example.org:8443/ubuntu"),
+            Some("example.org".into())
+        );
+        assert_eq!(
+            mirror_host("http://[2001:4860:4860::8888]:8080/ubuntu"),
+            Some("2001:4860:4860::8888".into())
+        );
+        assert_eq!(
+            mirror_host("https://example.org/ubuntu"),
+            Some("example.org".into())
+        );
+        assert_eq!(mirror_host("not-a-url"), None);
+    }
 
     #[test]
     fn fallback_baseline_ignores_a_bogus_future_date() {

@@ -30,8 +30,8 @@ status=0
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1"; status=1; }
 
-# 1. Offline: the release codename is detected on every supported Ubuntu, and the program stops
-#    with the "no country" usage error (exit 2) before any network call.
+# 1. Offline: the release codename is detected on every supported Ubuntu, and geolocation fails
+#    gracefully before the program asks for an explicit country (exit 2).
 matrix="20.04 focal
 22.04 jammy
 24.04 noble
@@ -41,7 +41,7 @@ while read -r v codename; do
   if [ $# -gt 0 ]; then case " $* " in *" $v "*) ;; *) continue ;; esac; fi
   ran=$((ran + 1))
   rc=0; got=$(run none "ubuntu:$v" /apt-scout 2>&1) || rc=$?
-  if [ "$rc" -eq 2 ] && [[ "$got" == *"no country given"* ]]; then pass "ubuntu:$v offline -> reaches country check (exit 2)"; else fail "ubuntu:$v offline -> exit $rc: $got"; fi
+  if [ "$rc" -eq 2 ] && [[ "$got" == *"cannot tell which country"* ]]; then pass "ubuntu:$v offline -> graceful geolocation fallback (exit 2)"; else fail "ubuntu:$v offline -> exit $rc: $got"; fi
 done <<EOF
 $matrix
 EOF
@@ -50,27 +50,31 @@ if [ "$ran" -eq 0 ]; then echo "FAIL no Ubuntu version matched: $*" >&2; exit 1;
 # 2. Offline: Mint-style os-release is accepted (ID_LIKE has ubuntu).
 rc=0; got=$(run none ubuntu:24.04 sh -c \
   'printf "ID=linuxmint\nID_LIKE=\"ubuntu debian\"\nVERSION_CODENAME=wilma\nUBUNTU_CODENAME=noble\n" > /etc/os-release; /apt-scout' 2>&1) || rc=$?
-if [ "$rc" -eq 2 ] && [[ "$got" == *"no country given"* ]]; then pass "mint os-release accepted"; else fail "mint -> exit $rc: $got"; fi
+if [ "$rc" -eq 2 ] && [[ "$got" == *"cannot tell which country"* ]]; then pass "mint os-release accepted"; else fail "mint -> exit $rc: $got"; fi
 
-# 3. Offline: missing codename names the source and does not suggest an unsupported flag.
+# 3. Offline: --no-geo requires explicit country and does not access network.
+rc=0; got=$(run none ubuntu:24.04 /apt-scout --no-geo 2>&1) || rc=$?
+if [ "$rc" = 2 ] && [[ "$got" == *"--no-geo needs --country"* ]]; then pass "--no-geo without country -> clear usage error"; else fail "--no-geo without country -> exit $rc: $got"; fi
+
+# 4. Offline: missing codename names the source and does not suggest an unsupported flag.
 rc=0; got=$(run none ubuntu:24.04 sh -c 'printf "ID=ubuntu\n" > /etc/os-release; /apt-scout' 2>&1) || rc=$?
 if [ "$rc" -eq 1 ] && [[ "$got" == *"/etc/os-release contains neither"* ]] && [[ "$got" != *"--codename"* ]]; then pass "missing codename -> actionable error, exit 1"; else fail "missing codename -> exit $rc: $got"; fi
 
-# 4. Offline: Debian is rejected with exit 4.
+# 5. Offline: Debian is rejected with exit 4.
 rc=0; run none debian:12 /apt-scout >/dev/null 2>&1 || rc=$?
 [ "$rc" = 4 ] && pass "debian -> exit 4" || fail "debian -> exit $rc"
 
-# 5. Offline: bad arguments are usage errors (exit 2) that say what to do.
+# 6. Offline: bad arguments are usage errors (exit 2) that say what to do.
 rc=0; got=$(run none ubuntu:24.04 /apt-scout --country LTU 2>&1) || rc=$?
 [ "$rc" = 2 ] && [[ "$got" == *"not a two-letter country code"* ]] && pass "bad --country -> exit 2" || fail "bad --country -> exit $rc: $got"
 rc=0; got=$(run none ubuntu:24.04 /apt-scout --bogus 2>&1) || rc=$?
 [ "$rc" = 2 ] && [[ "$got" == *"unknown option '--bogus'"* ]] && pass "unknown option -> exit 2" || fail "unknown option -> exit $rc: $got"
 
-# 6. Offline: a network failure names the URL and the cause and exits 1 (no panic, no hang).
+# 7. Offline: a network failure names the URL and the cause and exits 1 (no panic, no hang).
 rc=0; got=$(run none ubuntu:24.04 /apt-scout --country LT 2>&1) || rc=$?
 if [ "$rc" = 1 ] && [[ "$got" == *"no mirror list is available"* ]] && [[ "$got" == *"launchpad.net"* ]] && [[ "$got" == *"mirrors.ubuntu.com/LT.txt"* ]]; then pass "no network -> clear error, exit 1"; else fail "no network -> exit $rc: $got"; fi
 
-# 7. Live (needs internet): real Launchpad + real mirrors, every supported Ubuntu release.
+# 8. Live (needs internet): real Launchpad + real mirrors, every supported Ubuntu release.
 #    Checks shape, not specific mirrors: a ranked table with at least one fresh mirror.
 for v in 20.04 22.04 24.04 26.04; do
   if [ $# -gt 0 ]; then case " $* " in *" $v "*) ;; *) continue ;; esac; fi
