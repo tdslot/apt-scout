@@ -280,14 +280,17 @@ fn run() -> Result<(), (u8, String)> {
         geo.asn.as_deref().unwrap_or("AS unknown")
     );
     println!(
-        "{:>2}  {:<48} {:>7} {:>9} {:>8}",
-        "#", "mirror", "lag", "speed", "latency"
+        "{:>2}  {:<48} {:>12} {:>9} {:>7} {:>9} {:>8}",
+        "#", "mirror", "mirror AS", "AS status", "lag", "speed", "latency"
     );
     for (i, r) in ranked.iter().take(args.top).enumerate() {
+        let mirror_asn = mirror_asn.get(&r.url).map(String::as_str);
         println!(
-            "{:>2}  {:<48} {:>6}m {:>6.1} MB/s {:>6} ms",
+            "{:>2}  {:<48.48} {:>12} {:>9} {:>6}m {:>6.1} MB/s {:>6} ms",
             i + 1,
             r.url,
+            mirror_asn.unwrap_or("unknown"),
+            as_status(server_asn.as_deref(), mirror_asn),
             r.lag_secs / 60,
             r.throughput_bps as f64 / 1e6,
             r.latency_ms
@@ -327,20 +330,40 @@ fn architecture() -> Result<String, (u8, String)> {
     }
 }
 
-fn mirror_host(url: &str) -> Option<String> {
-    let authority = url.split_once("://")?.1.split(['/', '?', '#']).next()?;
+fn as_status(server_asn: Option<&str>, mirror_asn: Option<&str>) -> &'static str {
+    match (server_asn, mirror_asn) {
+        (Some(server), Some(mirror)) if server == mirror => "same",
+        (Some(_), Some(_)) => "different",
+        _ => "unknown",
+    }
+}
+
+fn mirror_host_port(url: &str) -> Option<(String, u16)> {
+    let (scheme, rest) = url.split_once("://")?;
+    let default_port = match scheme {
+        "http" => 80,
+        "https" => 443,
+        _ => return None,
+    };
+    let authority = rest.split(['/', '?', '#']).next()?;
     let authority = authority
         .rsplit_once('@')
         .map_or(authority, |(_, host)| host);
     if let Some(v6) = authority.strip_prefix('[') {
-        return Some(v6.split_once(']')?.0.to_string());
+        let (host, tail) = v6.split_once(']')?;
+        let port = match tail {
+            "" => default_port,
+            tail => tail.strip_prefix(':')?.parse().ok()?,
+        };
+        return Some((host.to_string(), port));
     }
-    Some(
-        authority
-            .rsplit_once(':')
-            .map_or(authority, |(host, _)| host)
-            .to_string(),
-    )
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) if port.bytes().all(|b| b.is_ascii_digit()) => {
+            (host, port.parse().ok()?)
+        }
+        _ => (authority, default_port),
+    };
+    Some((host.to_string(), port))
 }
 
 /// AS of each mirror host via Team Cymru DNS, at most 8 lookups at a time and one total 20 s
@@ -366,8 +389,8 @@ fn resolve_mirror_asns(urls: &[String]) -> std::collections::HashMap<String, Str
             .cloned()
             .map(|url| {
                 thread::spawn(move || {
-                    let host = mirror_host(&url)?;
-                    let ip = (host.as_str(), 80)
+                    let (host, port) = mirror_host_port(&url)?;
+                    let ip = (host.as_str(), port)
                         .to_socket_addrs()
                         .ok()?
                         .map(|addr| addr.ip())
@@ -544,20 +567,38 @@ mod tests {
     }
 
     #[test]
-    fn mirror_host_handles_ports_and_ipv6() {
+    fn as_status_reports_same_different_and_unknown() {
+        assert_eq!(as_status(Some("AS64500"), Some("AS64500")), "same");
+        assert_eq!(as_status(Some("AS64500"), Some("AS64501")), "different");
+        assert_eq!(as_status(Some("AS64500"), None), "unknown");
+        assert_eq!(as_status(None, Some("AS64500")), "unknown");
+        // Lookup unavailable: no ASN values, so never imply an AS preference.
+        assert_eq!(as_status(None, None), "unknown");
+    }
+
+    #[test]
+    fn mirror_host_uses_url_scheme_and_explicit_port() {
         assert_eq!(
-            mirror_host("https://example.org:8443/ubuntu"),
-            Some("example.org".into())
+            mirror_host_port("https://example.org:8443/ubuntu"),
+            Some(("example.org".into(), 8443))
         );
         assert_eq!(
-            mirror_host("http://[2001:4860:4860::8888]:8080/ubuntu"),
-            Some("2001:4860:4860::8888".into())
+            mirror_host_port("http://[2001:4860:4860::8888]:8080/ubuntu"),
+            Some(("2001:4860:4860::8888".into(), 8080))
         );
         assert_eq!(
-            mirror_host("https://example.org/ubuntu"),
-            Some("example.org".into())
+            mirror_host_port("https://[2001:4860:4860::8888]/ubuntu"),
+            Some(("2001:4860:4860::8888".into(), 443))
         );
-        assert_eq!(mirror_host("not-a-url"), None);
+        assert_eq!(
+            mirror_host_port("https://example.org/ubuntu"),
+            Some(("example.org".into(), 443))
+        );
+        assert_eq!(
+            mirror_host_port("http://example.org/ubuntu"),
+            Some(("example.org".into(), 80))
+        );
+        assert_eq!(mirror_host_port("not-a-url"), None);
     }
 
     #[test]
