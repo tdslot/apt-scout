@@ -6,7 +6,7 @@ mod geo;
 mod http;
 mod mirrors;
 mod probe;
-mod sources;
+pub mod sources;
 
 use std::process::ExitCode;
 use std::thread;

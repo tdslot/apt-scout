@@ -32,6 +32,21 @@ pub struct Inventory {
     pub files: Vec<FileReport>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedFile {
+    pub path: PathBuf,
+    pub content: String,
+    /// `true` means a later apply step may create this path; this module never does so.
+    pub create_new: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RewritePlan {
+    /// Pure output only. No path in this plan is read or written by the rewrite function.
+    pub files: Vec<PlannedFile>,
+    pub skipped: Vec<String>,
+}
+
 impl Inventory {
     pub fn has_rewritable_uri(&self) -> bool {
         self.files
@@ -508,10 +523,550 @@ pub fn inventory(root: &Path, archive_hosts: &[String], pop_os: bool) -> Invento
     Inventory { files }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PhysicalLine {
+    start: usize,
+    body_end: usize,
+    end: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ValueToken {
+    range: std::ops::Range<usize>,
+    line: std::ops::Range<usize>,
+    continuation: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RawField {
+    key: String,
+    range: std::ops::Range<usize>,
+    values: Vec<ValueToken>,
+}
+
+fn physical_lines(text: &str) -> Vec<PhysicalLine> {
+    let mut result = Vec::new();
+    let mut start = 0;
+    for raw in text.split_inclusive('\n') {
+        let end = start + raw.len();
+        let mut body_end = end;
+        if raw.ends_with('\n') {
+            body_end -= 1;
+        }
+        if body_end > start && text.as_bytes()[body_end - 1] == b'\r' {
+            body_end -= 1;
+        }
+        result.push(PhysicalLine {
+            start,
+            body_end,
+            end,
+        });
+        start = end;
+    }
+    result
+}
+
+fn value_tokens(
+    value: &str,
+    base: usize,
+    line: std::ops::Range<usize>,
+    continuation: bool,
+) -> Vec<ValueToken> {
+    let mut result = Vec::new();
+    let mut token_start = None;
+    for (i, ch) in value.char_indices() {
+        if ch.is_whitespace() {
+            if let Some(start) = token_start.take() {
+                result.push(ValueToken {
+                    range: base + start..base + i,
+                    line: line.clone(),
+                    continuation,
+                });
+            }
+        } else if token_start.is_none() {
+            token_start = Some(i);
+        }
+    }
+    if let Some(start) = token_start {
+        result.push(ValueToken {
+            range: base + start..base + value.len(),
+            line,
+            continuation,
+        });
+    }
+    result
+}
+
+fn token_ranges(value: &str) -> Vec<std::ops::Range<usize>> {
+    value_tokens(value, 0, 0..value.len(), false)
+        .into_iter()
+        .map(|t| t.range)
+        .collect()
+}
+
+fn field_spans(text: &str) -> Vec<RawField> {
+    let mut result = Vec::new();
+    let mut current: Option<RawField> = None;
+    for line in physical_lines(text) {
+        let body = &text[line.start..line.body_end];
+        if body.trim().is_empty() {
+            if let Some(mut field) = current.take() {
+                field.range.end = line.start;
+                result.push(field);
+            }
+            continue;
+        }
+        if body.trim_start().starts_with('#') {
+            continue;
+        }
+        if body.starts_with([' ', '\t']) {
+            if let Some(field) = current.as_mut() {
+                let leading = body.len() - body.trim_start().len();
+                field.values.extend(value_tokens(
+                    &body[leading..],
+                    line.start + leading,
+                    line.start..line.end,
+                    true,
+                ));
+            }
+            continue;
+        }
+        if let Some((key, value)) = body.split_once(':') {
+            if let Some(mut field) = current.take() {
+                field.range.end = line.start;
+                result.push(field);
+            }
+            let value_start = key.len() + 1;
+            let mut field = RawField {
+                key: key.trim().to_ascii_lowercase(),
+                range: line.start..text.len(),
+                values: Vec::new(),
+            };
+            field.values.extend(value_tokens(
+                value,
+                line.start + value_start,
+                line.start..line.end,
+                false,
+            ));
+            current = Some(field);
+        } else if let Some(mut field) = current.take() {
+            field.range.end = line.start;
+            result.push(field);
+        }
+    }
+    if let Some(mut field) = current {
+        field.range.end = text.len();
+        result.push(field);
+    }
+    result
+}
+
+fn stanza_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut result = Vec::new();
+    let mut start = 0;
+    for line in physical_lines(text) {
+        if text[line.start..line.body_end].trim().is_empty() {
+            if start < line.start && !text[start..line.start].trim().is_empty() {
+                result.push(start..line.start);
+            }
+            start = line.end;
+        }
+    }
+    if start < text.len() && !text[start..].trim().is_empty() {
+        result.push(start..text.len());
+    }
+    result
+}
+
+fn locate_legacy_uri(line: &str) -> Option<std::ops::Range<usize>> {
+    let tokens = token_ranges(line);
+    if tokens.is_empty() || !matches!(&line[tokens[0].clone()], "deb" | "deb-src") {
+        return None;
+    }
+    let mut i = 1;
+    if tokens
+        .get(i)
+        .is_some_and(|r| line[r.clone()].starts_with('['))
+    {
+        while i < tokens.len() && !line[tokens[i].clone()].ends_with(']') {
+            i += 1;
+        }
+        if i == tokens.len() {
+            return None;
+        }
+        i += 1;
+    }
+    let uri = tokens.get(i)?.clone();
+    let suite = tokens.get(i + 1)?;
+    if line[suite.clone()].starts_with('#') {
+        return None;
+    }
+    Some(uri)
+}
+
+fn apply_replacements(
+    text: &str,
+    mut replacements: Vec<(std::ops::Range<usize>, String)>,
+) -> String {
+    replacements.sort_by_key(|(range, _)| range.start);
+    let mut output = text.to_string();
+    for (range, value) in replacements.into_iter().rev() {
+        output.replace_range(range, &value);
+    }
+    output
+}
+
+fn security_suite_removals(
+    text: &str,
+    tokens: &[ValueToken],
+    suites: &[String],
+) -> Vec<(std::ops::Range<usize>, String)> {
+    let mut replacements = Vec::new();
+    let mut start = 0;
+    while start < tokens.len() {
+        let line = tokens[start].line.clone();
+        let mut end = start + 1;
+        while end < tokens.len() && tokens[end].line == line {
+            end += 1;
+        }
+        let indices: Vec<_> = (start..end)
+            .filter(|&i| suites.get(i).is_some_and(|s| s.ends_with("-security")))
+            .collect();
+        if !indices.is_empty() {
+            let all_on_line_are_security = indices.len() == end - start;
+            if tokens[start].continuation && all_on_line_are_security {
+                replacements.push((line.clone(), String::new()));
+            } else {
+                let mut run_start = indices[0];
+                let mut previous = indices[0];
+                for &index in indices.iter().skip(1).chain(std::iter::once(&usize::MAX)) {
+                    if index != previous + 1 {
+                        let first = &tokens[run_start];
+                        let last = &tokens[previous];
+                        let range = if run_start > start {
+                            tokens[run_start - 1].range.end..last.range.end
+                        } else if previous + 1 < end {
+                            first.range.start..tokens[previous + 1].range.start
+                        } else {
+                            first.range.clone()
+                        };
+                        replacements.push((range, String::new()));
+                        if index != usize::MAX {
+                            run_start = index;
+                        }
+                    }
+                    previous = index;
+                }
+            }
+        }
+        start = end;
+    }
+    let _ = text;
+    replacements
+}
+
+fn pop_security_content(
+    stanza: &str,
+    fields: &[RawField],
+    uris: &[String],
+    security_suites: &[String],
+) -> String {
+    let newline = if stanza.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let mut output = String::new();
+    let append_raw = |output: &mut String, field: Option<&RawField>| {
+        if let Some(field) = field {
+            let raw = &stanza[field.range.clone()];
+            output.push_str(raw);
+            if !raw.ends_with('\n') {
+                output.push_str(newline);
+            }
+        }
+    };
+    append_raw(&mut output, fields.iter().find(|f| f.key == "types"));
+    output.push_str(&format!("URIs: {}{newline}", uris.join(" ")));
+    output.push_str(&format!("Suites: {}{newline}", security_suites.join(" ")));
+    append_raw(&mut output, fields.iter().find(|f| f.key == "components"));
+    append_raw(&mut output, fields.iter().find(|f| f.key == "enabled"));
+    append_raw(&mut output, fields.iter().find(|f| f.key == "signed-by"));
+    output.push_str(&format!("X-Repolib-Name: Pop_OS Security{newline}"));
+    output
+}
+
+/// Produce a byte-preserving apt source rewrite plan. This function performs no filesystem IO.
+pub fn rewrite_source(
+    text: &str,
+    file: &Path,
+    selected_uri: &str,
+    archive_hosts: &[String],
+    pop_os: bool,
+) -> Result<RewritePlan, String> {
+    crate::mirrors::validate_url(selected_uri)
+        .map_err(|e| format!("selected mirror URI is invalid: {e}"))?;
+    let is_deb822 = file.extension().and_then(|e| e.to_str()) == Some("sources");
+    let is_pop_system = pop_os && file.file_name().is_some_and(|n| n == "system.sources");
+    let mut replacements = Vec::new();
+    let mut skipped = Vec::new();
+    let mut created_security = String::new();
+
+    if !is_deb822 {
+        let entries = parse_legacy(text, file, archive_hosts, false);
+        let lines = physical_lines(text);
+        for entry in entries {
+            let Some(uri) = entry.uris.first() else {
+                if let Some(issue) = entry.issue {
+                    skipped.push(format!("{}:{}: {issue}", file.display(), entry.line));
+                }
+                continue;
+            };
+            if !entry.rewritable.first().copied().unwrap_or(false) {
+                skipped.push(format!(
+                    "{}:{}: {uri} was not changed",
+                    file.display(),
+                    entry.line
+                ));
+                continue;
+            }
+            let Some(line) = lines.get(entry.line.saturating_sub(1)) else {
+                continue;
+            };
+            let body = &text[line.start..line.body_end];
+            if let Some(range) = locate_legacy_uri(body) {
+                replacements.push((
+                    line.start + range.start..line.start + range.end,
+                    selected_uri.to_string(),
+                ));
+            }
+        }
+    } else {
+        for stanza_range in stanza_ranges(text) {
+            let stanza = &text[stanza_range.clone()];
+            let entries = parse_deb822(stanza, file, archive_hosts, is_pop_system);
+            if entries.len() != 1 {
+                continue;
+            }
+            let entry = &entries[0];
+            if entry.uris.is_empty() {
+                skipped.push(format!(
+                    "{}:{}: {}",
+                    file.display(),
+                    entry.line,
+                    entry.issue.as_deref().unwrap_or("no URI field")
+                ));
+                continue;
+            }
+            let fields = field_spans(stanza);
+            let uri_tokens: Vec<_> = fields
+                .iter()
+                .filter(|f| f.key == "uris")
+                .flat_map(|f| f.values.iter())
+                .collect();
+            if uri_tokens.len() != entry.uris.len() {
+                skipped.push(format!(
+                    "{}:{}: malformed URIs field; left unchanged",
+                    file.display(),
+                    entry.line
+                ));
+                continue;
+            }
+            for (i, token) in uri_tokens.iter().enumerate() {
+                if entry.rewritable.get(i).copied().unwrap_or(false) {
+                    replacements.push((
+                        stanza_range.start + token.range.start
+                            ..stanza_range.start + token.range.end,
+                        selected_uri.to_string(),
+                    ));
+                } else if let Some(uri) = entry.uris.get(i) {
+                    skipped.push(format!(
+                        "{}:{}: {uri} was not changed",
+                        file.display(),
+                        entry.line
+                    ));
+                }
+            }
+            let has_security = entry.suites.iter().any(|s| s.ends_with("-security"));
+            let has_non_security = entry.suites.iter().any(|s| !s.ends_with("-security"));
+            let pop_split = is_pop_system
+                && entry.enabled
+                && has_security
+                && has_non_security
+                && entry.uris.len() == entry.rewritable.len()
+                && entry.rewritable.iter().all(|v| *v);
+            if pop_split {
+                let suite_tokens: Vec<_> = fields
+                    .iter()
+                    .filter(|f| f.key == "suites")
+                    .flat_map(|f| f.values.iter())
+                    .cloned()
+                    .collect();
+                if suite_tokens.len() != entry.suites.len() {
+                    return Err(format!(
+                        "{}:{}: cannot safely split Pop!_OS security suites",
+                        file.display(),
+                        entry.line
+                    ));
+                }
+                let local_removals = security_suite_removals(stanza, &suite_tokens, &entry.suites);
+                replacements.extend(local_removals.into_iter().map(|(range, value)| {
+                    (
+                        stanza_range.start + range.start..stanza_range.start + range.end,
+                        value,
+                    )
+                }));
+                if !created_security.is_empty() {
+                    created_security.push_str(if stanza.contains("\r\n") {
+                        "\r\n"
+                    } else {
+                        "\n"
+                    });
+                }
+                created_security.push_str(&pop_security_content(
+                    stanza,
+                    &fields,
+                    &entry.uris,
+                    &entry
+                        .suites
+                        .iter()
+                        .filter(|s| s.ends_with("-security"))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                ));
+            }
+        }
+    }
+
+    let content = apply_replacements(text, replacements);
+    let mut files = vec![PlannedFile {
+        path: file.to_path_buf(),
+        content,
+        create_new: false,
+    }];
+    if !created_security.is_empty() {
+        let security_path = file
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("system-security.sources");
+        files.push(PlannedFile {
+            path: security_path,
+            content: created_security,
+            create_new: true,
+        });
+    }
+    Ok(RewritePlan { files, skipped })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     const HOSTS: &[String] = &[];
+
+    #[test]
+    fn rewrite_legacy_changes_only_eligible_uri_and_round_trips() {
+        let input = "# Keep header\r\ndeb [arch=amd64 signed-by=/key] http://archive.ubuntu.com/ubuntu noble main # keep comment\r\ndeb-src https://security.ubuntu.com/ubuntu noble-security main\r\ndeb https://ppa.example/ubuntu noble main\r\n";
+        let expected = "# Keep header\r\ndeb [arch=amd64 signed-by=/key] https://mirror.example/ubuntu/ noble main # keep comment\r\ndeb-src https://security.ubuntu.com/ubuntu noble-security main\r\ndeb https://ppa.example/ubuntu noble main\r\n";
+        let path = Path::new("/etc/apt/sources.list");
+        let hosts = vec!["archive.ubuntu.com".into(), "mirror.example".into()];
+        let result =
+            rewrite_source(input, path, "https://mirror.example/ubuntu/", &hosts, false).unwrap();
+        assert_eq!(result.files.len(), 1);
+        assert_eq!(result.files[0].content, expected);
+        assert!(!result.files[0].create_new);
+        let round_trip = rewrite_source(
+            expected,
+            path,
+            "http://archive.ubuntu.com/ubuntu",
+            &hosts,
+            false,
+        )
+        .unwrap();
+        assert_eq!(round_trip.files[0].content, input);
+    }
+
+    #[test]
+    fn rewrite_deb822_changes_only_uri_tokens_and_preserves_bytes() {
+        let input = "# top\r\nTypes: deb\r\nURIs: http://archive.ubuntu.com/ubuntu\r\n https://ppa.example/ubuntu\r\nSuites: noble noble-updates\r\nComponents: main\r\nSigned-By: /usr/share/keyrings/ubuntu.gpg\r\n\r\nTypes: deb\r\nURIs: http://archive.ubuntu.com/ubuntu\r\nSuites: noble\r\nEnabled: no\r\n\r\nTypes: deb\r\nURIs: http://archive.ubuntu.com/ubuntu\r\nSuites: noble-security\r\n";
+        let expected = "# top\r\nTypes: deb\r\nURIs: https://mirror.example/ubuntu/\r\n https://ppa.example/ubuntu\r\nSuites: noble noble-updates\r\nComponents: main\r\nSigned-By: /usr/share/keyrings/ubuntu.gpg\r\n\r\nTypes: deb\r\nURIs: http://archive.ubuntu.com/ubuntu\r\nSuites: noble\r\nEnabled: no\r\n\r\nTypes: deb\r\nURIs: http://archive.ubuntu.com/ubuntu\r\nSuites: noble-security\r\n";
+        let hosts = vec!["archive.ubuntu.com".into(), "mirror.example".into()];
+        let path = Path::new("ubuntu.sources");
+        let result =
+            rewrite_source(input, path, "https://mirror.example/ubuntu/", &hosts, false).unwrap();
+        assert_eq!(result.files[0].content, expected);
+        let round_trip = rewrite_source(
+            expected,
+            path,
+            "http://archive.ubuntu.com/ubuntu",
+            &hosts,
+            false,
+        )
+        .unwrap();
+        assert_eq!(round_trip.files[0].content, input);
+    }
+
+    #[test]
+    fn rewrite_pop_os_purely_splits_security_file_and_preserves_default_mirror() {
+        let input = "# Pop source\r\nTypes: deb\r\nURIs: http://apt.pop-os.org/ubuntu\r\nSuites: jammy jammy-security jammy-updates jammy-backports\r\nComponents: main\r\nX-Repolib-Default-Mirror: http://apt.pop-os.org/ubuntu\r\nEnabled: yes\r\nSigned-By: /usr/share/keyrings/pop-archive-keyring.gpg\r\nX-Repolib-Name: Pop_OS\r\n";
+        let expected_main = "# Pop source\r\nTypes: deb\r\nURIs: https://mirror.example/ubuntu/\r\nSuites: jammy jammy-updates jammy-backports\r\nComponents: main\r\nX-Repolib-Default-Mirror: http://apt.pop-os.org/ubuntu\r\nEnabled: yes\r\nSigned-By: /usr/share/keyrings/pop-archive-keyring.gpg\r\nX-Repolib-Name: Pop_OS\r\n";
+        let expected_security = "Types: deb\r\nURIs: http://apt.pop-os.org/ubuntu\r\nSuites: jammy-security\r\nComponents: main\r\nEnabled: yes\r\nSigned-By: /usr/share/keyrings/pop-archive-keyring.gpg\r\nX-Repolib-Name: Pop_OS Security\r\n";
+        let path = Path::new("/etc/apt/sources.list.d/system.sources");
+        let hosts = vec!["apt.pop-os.org".into(), "mirror.example".into()];
+        let result =
+            rewrite_source(input, path, "https://mirror.example/ubuntu/", &hosts, true).unwrap();
+        assert_eq!(result.files.len(), 2);
+        assert_eq!(result.files[0].path, path);
+        assert_eq!(result.files[0].content, expected_main);
+        assert!(!result.files[0].create_new);
+        assert_eq!(
+            result.files[1].path,
+            Path::new("/etc/apt/sources.list.d/system-security.sources")
+        );
+        assert_eq!(result.files[1].content, expected_security);
+        assert!(result.files[1].create_new);
+
+        let security_only = "Types: deb\nURIs: http://apt.pop-os.org/ubuntu\nSuites: jammy-security\nComponents: main\n";
+        let unchanged = rewrite_source(
+            security_only,
+            path,
+            "https://mirror.example/ubuntu/",
+            &hosts,
+            true,
+        )
+        .unwrap();
+        assert_eq!(unchanged.files.len(), 1);
+        assert_eq!(unchanged.files[0].content, security_only);
+    }
+
+    #[test]
+    fn rewrite_plan_does_not_create_source_files() {
+        let root =
+            std::env::temp_dir().join(format!("apt-scout-rewrite-plan-{}", std::process::id()));
+        let path = root.join("sources.list");
+        let input = "deb http://archive.ubuntu.com/ubuntu noble main\n";
+        let result =
+            rewrite_source(input, &path, "https://mirror.example/ubuntu/", &[], false).unwrap();
+        assert_eq!(
+            result.files[0].content,
+            "deb https://mirror.example/ubuntu/ noble main\n"
+        );
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn rewrite_rejects_an_invalid_selected_uri_without_modifying_input() {
+        let input = "deb http://archive.ubuntu.com/ubuntu noble main\n";
+        assert!(
+            rewrite_source(
+                input,
+                Path::new("sources.list"),
+                "http://user@evil.example/",
+                HOSTS,
+                false
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn inventory_report_lists_files_and_rewrite_decisions() {
