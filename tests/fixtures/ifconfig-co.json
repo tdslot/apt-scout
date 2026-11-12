@@ -1,0 +1,17 @@
+{
+  "ip": "203.0.113.7",
+  "ip_decimal": 3405803783,
+  "country": "Example",
+  "country_iso": "NO",
+  "country_eu": false,
+  "latitude": 0.0,
+  "longitude": 0.0,
+  "time_zone": "Europe/Example",
+  "asn": "AS64496",
+  "asn_org": "Example Network AS",
+  "user_agent": {
+    "product": "curl",
+    "version": "8.7.1",
+    "raw_value": "curl/8.7.1"
+  }
+}
