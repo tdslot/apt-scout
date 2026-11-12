@@ -57,7 +57,7 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
   - The musl build the suite uses reuses a cache shared between worktrees instead of rebuilding per run, and a run refuses a cache entry whose key does not match the worktree it is running in — the key is the branch plus the hash of every tracked file that reaches the build — so no case can exercise a binary built in another worktree; the PR states the measured wall-clock difference.
   - Docker emulation cost on Apple Silicon applies only to the live set; the offline set on the developer's arm64 laptop runs without QEMU, which the PR shows in its timing evidence.
   [SPEC: Testing, Errors and self-healing]
-- [x] **D23 — DONE.** Root `AGENTS.md` no longer describes `src/` truthfully: D9a added `digest.rs`, `plan.rs` and `manifest.rs` and the root Project list names none of them. `AGENTS.md` is closed to every delivery agent — the delivery-team contract makes agent paths human-owned — so no agent may fix it and this needs a human `chore:` PR that adds exactly these three bullets to the root Project list, one clause each, and changes nothing else:
+- [x] **D23 — DONE.** Root `AGENTS.md` described `src/` as it was before D9a, which added `digest.rs`, `plan.rs` and `manifest.rs` while the root Project list named none of them. `AGENTS.md` is closed to every delivery agent, so a human authorization was needed to add exactly these three bullets to the root Project list, one clause each, changing nothing else. Merged in PR #32.
 
   Paste-ready lines:
 
