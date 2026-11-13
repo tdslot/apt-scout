@@ -1,6 +1,7 @@
 //! OpenPGP verification for `InRelease` using the system `gpgv` and Ubuntu archive keyring.
 //!
-//! Ranking may use an unverified `Date`; any future write decision must require `Verified`.
+//! Ranking may use an unverified `Date`; a write decision requires `Verified`, and `Verified`
+//! cannot be built without this module's `gpgv` pass (D25).
 //! No shell is used, the executable and keyring paths are fixed, and the environment is cleared.
 
 use std::fmt;

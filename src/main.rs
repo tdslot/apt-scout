@@ -29,6 +29,8 @@ const REFERENCE: &str = "http://archive.ubuntu.com/ubuntu";
 const TEXT_LIST: &str = "http://mirrors.ubuntu.com";
 /// Candidates probed per run (SPEC step 4).
 const MAX_CANDIDATES: usize = 30;
+/// The `--top` default (SPEC.md CLI: `--top <N>` shows N best mirrors, default 5).
+const DEFAULT_TOP: usize = 5;
 
 struct Args {
     country: Option<String>,
@@ -46,7 +48,7 @@ fn parse_args() -> Result<Args, String> {
 fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let mut a = Args {
         country: None,
-        top: 5,
+        top: DEFAULT_TOP,
         https_only: false,
         no_geo: false,
         list: false,
@@ -125,7 +127,7 @@ fn sudo_command(args: &Args) -> String {
     if args.no_geo {
         line.push_str(" --no-geo");
     }
-    if args.top != 5 {
+    if args.top != DEFAULT_TOP {
         line.push_str(&format!(" --top {}", args.top));
     }
     if args.https_only {
@@ -137,25 +139,61 @@ fn sudo_command(args: &Args) -> String {
     line
 }
 
+/// What `build_plan` found (SPEC.md Apply): either the writes a run must make, or that every
+/// eligible URI already points at the selected mirror — which is success, not an error, so that
+/// re-running a run whose write already happened does not fail.
+#[derive(Debug)]
+struct PlannedChange {
+    /// `None` when there is nothing to change: `Plan::validate` refuses an empty plan, and an empty
+    /// plan is the one case that is not an error.
+    plan: Option<plan::Plan>,
+    /// Every file, stanza and URI the rewrite refused, with its reason, for the caller to report
+    /// whatever the mode (SPEC.md Apply: report each skipped entry and why).
+    skipped: Vec<String>,
+}
+
+/// True when `file` already carries the selected mirror as an eligible URI: `rewrite_source` then
+/// replaces that URI with itself, so the file yields no write and the run has nothing to do.
+fn already_at_mirror(file: &sources::FileReport, selected_uri: &str) -> bool {
+    file.entries.iter().any(|entry| {
+        entry
+            .uris
+            .iter()
+            .zip(&entry.rewritable)
+            .any(|(uri, rewritable)| *rewritable && uri == selected_uri)
+    })
+}
+
+/// Every skipped entry, one line each, with the reason the rewrite refused it.
+fn report_skipped(skipped: &[String]) {
+    for reason in skipped {
+        println!("skipped {reason}");
+    }
+}
+
 /// Build the plan a write needs, from the source inventory and the selected mirror.
 ///
 /// This is where the CLI reads the apt files it may later replace, and it writes nothing: each
 /// inspected file is rewritten purely, the bytes on disk are captured as the `FileState` the
 /// writer re-checks before its first byte, and the whole set goes through `Plan::for_apply`, which
 /// refuses a mirror without a verified `-updates` proof. A file that would not change produces no
-/// write, so an inventory with nothing eligible refuses instead of planning an empty write.
+/// write: when every eligible URI already points at the selected mirror the plan is empty and that is
+/// reported as success, and when nothing eligible exists at all the plan is refused.
 fn build_plan(
     root: &Path,
     inventory: &sources::Inventory,
     archive_hosts: &[String],
     selected: &fresh::Probed,
     platform: plan::Platform,
-) -> Result<plan::Plan, (u8, String)> {
+) -> Result<PlannedChange, (u8, String)> {
     let nothing_written = "Nothing was written.";
     let mut writes = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
     for file in &inventory.files {
-        if file.issue.is_some() {
+        // A file the inventory could not read is never inspected silently: SPEC.md Apply requires
+        // every skipped file to be reported with its reason.
+        if let Some(issue) = &file.issue {
+            skipped.push(format!("{}: {issue}", file.path.display()));
             continue;
         }
         if !file.path.starts_with(root) {
@@ -240,22 +278,29 @@ fn build_plan(
         }
     }
     if writes.is_empty() {
+        // Already at the selected mirror: nothing to change, and that is success. Every eligible URI
+        // was replaced by itself, so a second run of the same command must not report a failure.
+        if inventory
+            .files
+            .iter()
+            .any(|file| already_at_mirror(file, selected.url.as_str()))
+        {
+            return Ok(PlannedChange {
+                plan: None,
+                skipped,
+            });
+        }
         let why = if skipped.is_empty() {
             "no eligible official archive URI was found".to_string()
         } else {
-            skipped
-                .iter()
-                .take(3)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("; ")
+            skipped.join("; ")
         };
         return Err((
             1,
             format!("no apt source file would change: {why}. {nothing_written}"),
         ));
     }
-    plan::Plan::for_apply(selected, platform, writes).map_err(|e| match e {
+    let plan = plan::Plan::for_apply(selected, platform, writes).map_err(|e| match e {
         plan::PlanError::NoProof => (
             1,
             format!(
@@ -267,6 +312,10 @@ fn build_plan(
             1,
             format!("cannot write {}: {other}. {nothing_written}", selected.url),
         ),
+    })?;
+    Ok(PlannedChange {
+        plan: Some(plan),
+        skipped,
     })
 }
 
@@ -296,7 +345,7 @@ fn file_state(path: &Path) -> Result<plan::FileState, (u8, String)> {
             ),
         ));
     }
-    let bytes = std::fs::read(path).map_err(|e| {
+    let on_disk = std::fs::read(path).map_err(|e| {
         (
             1,
             format!(
@@ -311,8 +360,22 @@ fn file_state(path: &Path) -> Result<plan::FileState, (u8, String)> {
         mode: meta.mode() & MODE_MASK,
         uid: meta.uid(),
         gid: meta.gid(),
-        bytes,
+        bytes: reread(path, on_disk),
     })
+}
+
+/// The bytes the writer will re-check, which is the second read of a planned file. Identical to the
+/// disk in the shipped binary: `#[cfg(test)]` `reread` only lets a test seal in different bytes for
+/// one path, which is the only way to reproduce "the file changed while the plan was built" without
+/// racing the disk.
+#[cfg(test)]
+fn reread(path: &Path, on_disk: Vec<u8>) -> Vec<u8> {
+    tests::reread_override(path).unwrap_or(on_disk)
+}
+
+#[cfg(not(test))]
+fn reread(_path: &Path, on_disk: Vec<u8>) -> Vec<u8> {
+    on_disk
 }
 
 /// The planned change, one line per changed line of a file, for the confirmation and `--list`.
@@ -426,6 +489,38 @@ fn validate_preflight(args: &Args, arch: &str) -> Result<(), (u8, String)> {
     Ok(())
 }
 
+/// No apt source file holds an official Ubuntu archive URI, so the run stops before probing. SPEC.md
+/// Apply: `--list` exits 0, a non-root run prints the `sudo` line and exits 3, and a root run that was
+/// going to write exits 1.
+fn no_eligible_uri(mode: Mode, args: &Args) -> Result<u8, (u8, String)> {
+    match mode {
+        // `--list` is read-only whatever the uid and exits 0 (SPEC.md Apply).
+        Mode::List => Ok(0),
+        Mode::Recommend => {
+            println!(
+                "\nNothing was written: this run is not root and apt sources need root to change.\nRun:\n  {}",
+                sudo_command(args)
+            );
+            Ok(3)
+        }
+        Mode::Write { .. } => Err((
+            1,
+            "no official Ubuntu apt source URI can be changed, so the write has nothing to do. Nothing was written. Run with --list to see every file that was inspected."
+                .to_string(),
+        )),
+    }
+}
+
+/// Nothing survived the freshness and reachability checks (SPEC step 9): there is no mirror to
+/// recommend, and a run that cannot recommend writes nothing.
+fn no_fresh_mirror() -> (u8, String) {
+    (
+        1,
+        "no mirror passed the freshness and reachability checks; see the rejected list above"
+            .to_string(),
+    )
+}
+
 fn run() -> Result<u8, (u8, String)> {
     let args = parse_args().map_err(|e| (2, e))?;
     let (d, source) = distro::detect().map_err(|e| (1, e))?;
@@ -510,22 +605,7 @@ fn run() -> Result<u8, (u8, String)> {
         println!(
             "No official Ubuntu apt source URI can be changed; stopping before mirror probes."
         );
-        return match mode {
-            // `--list` is read-only whatever the uid and exits 0 (SPEC.md Apply).
-            Mode::List => Ok(0),
-            Mode::Recommend => {
-                println!(
-                    "\nNothing was written: this run is not root and apt sources need root to change.\nRun:\n  {}",
-                    sudo_command(&args)
-                );
-                Ok(3)
-            }
-            Mode::Write { .. } => Err((
-                1,
-                "no official Ubuntu apt source URI can be changed, so the write has nothing to do. Nothing was written. Run with --list to see every file that was inspected."
-                    .to_string(),
-            )),
-        };
+        return no_eligible_uri(mode, &args);
     }
 
     let reference = match probe::fetch_reference(&net, REFERENCE, &codename) {
@@ -698,11 +778,7 @@ fn run() -> Result<u8, (u8, String)> {
         println!("rejected {url}: {why}");
     }
     let Some(best) = ranked.first() else {
-        return Err((
-            1,
-            "no mirror passed the freshness and reachability checks; see the rejected list above"
-                .to_string(),
-        ));
+        return Err(no_fresh_mirror());
     };
     let best_asn = mirror_asn.get(&best.url).map(String::as_str);
     println!(
@@ -730,14 +806,26 @@ fn run() -> Result<u8, (u8, String)> {
                 best,
                 platform,
             ) {
-                Ok(plan) => {
-                    println!("\nA write would make this change:");
-                    for line in plan_report(&plan) {
-                        println!("{line}");
+                // Every skipped entry is listed in `--list` too: the mode shows the whole change,
+                // including what the write would leave as it is (SPEC.md Apply).
+                Ok(change) => {
+                    match &change.plan {
+                        Some(plan) => {
+                            println!("\nA write would make this change:");
+                            for line in plan_report(plan) {
+                                println!("{line}");
+                            }
+                        }
+                        None => println!(
+                            "\nA write would change nothing: the apt sources already point at {}.",
+                            best.url
+                        ),
                     }
+                    report_skipped(&change.skipped);
                 }
+                // A refused plan names the entries it refused, so there is nothing left to list.
                 Err((_code, why)) => println!("\nA write would be refused: {why}"),
-            }
+            };
             Ok(0)
         }
         // A run that may not write prints the one line that repeats it under `sudo`, and exits 3.
@@ -749,13 +837,22 @@ fn run() -> Result<u8, (u8, String)> {
             Ok(3)
         }
         Mode::Write { confirm } => {
-            let plan = build_plan(
+            let change = build_plan(
                 Path::new(apply::APT_DIR),
                 &apt_sources,
                 &archive_hosts,
                 best,
                 platform,
             )?;
+            let Some(plan) = change.plan else {
+                // Re-running a run whose write already happened is success, not a failure.
+                println!(
+                    "\nNothing to change: the apt sources already point at {}. Nothing was written.",
+                    best.url
+                );
+                report_skipped(&change.skipped);
+                return Ok(0);
+            };
             // The backup id is fixed before the confirmation so the prompt can name the directory
             // the write will create; the writer is then handed the same instant.
             let now = now_secs()?;
@@ -777,6 +874,8 @@ fn run() -> Result<u8, (u8, String)> {
                 backup_id.as_str()
             );
             println!("  alternatives: none (extra mirrors as comments are a TUI option)");
+            // The prompt lists what will stay as it is, too: the user confirms the whole change.
+            report_skipped(&change.skipped);
             if confirm {
                 confirm_write(&mut io::stdin().lock(), "\nApply this change? [y/N] ")?;
             }
@@ -787,11 +886,20 @@ fn run() -> Result<u8, (u8, String)> {
                 apply::BACKUP_ROOT,
                 outcome.backup_id.as_str()
             );
-            for target in &outcome.written {
-                println!("wrote {}/{}", apply::APT_DIR, target.relative().display());
+            let written: Vec<String> = outcome
+                .written
+                .iter()
+                .map(|target| format!("{}/{}", apply::APT_DIR, target.relative().display()))
+                .collect();
+            for path in &written {
+                println!("wrote {path}");
             }
+            // The skipped entries are listed again after the write, where the user reads the result.
+            report_skipped(&change.skipped);
             println!(
-                "apt sources now point at {}. Next: run 'apt update' to refresh the package lists.",
+                "\nchanged {}: every eligible official archive URI in those files now points at {}.\n\
+                 Next: run 'apt update' to refresh the package lists.",
+                written.join(", "),
                 plan.selected_uri()
             );
             Ok(0)
@@ -799,12 +907,16 @@ fn run() -> Result<u8, (u8, String)> {
     }
 }
 
-/// `dpkg --print-architecture`; only amd64 and i386 have mirror choice (SPEC.md Scope).
+/// `dpkg --print-architecture`; only amd64 and i386 have mirror choice (SPEC.md Scope). The path is
+/// fixed rather than resolved through `PATH`, because this run reaches the write and SPEC.md's
+/// Privilege boundary forbids a write-path command resolved from the environment.
+const DPKG: &str = "/usr/bin/dpkg";
+
 fn architecture() -> Result<String, (u8, String)> {
-    let out = std::process::Command::new("dpkg")
+    let out = std::process::Command::new(DPKG)
         .arg("--print-architecture")
         .output()
-        .map_err(|e| (1, format!("cannot run 'dpkg --print-architecture' to find the CPU architecture: {e}. Is dpkg installed?")))?;
+        .map_err(|e| (1, format!("cannot run '{DPKG} --print-architecture' to find the CPU architecture: {e}. Is dpkg installed?")))?;
     let arch = String::from_utf8_lossy(&out.stdout).trim().to_string();
     match arch.as_str() {
         "amd64" | "i386" => Ok(arch),
@@ -1049,6 +1161,29 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
     use crate::http::Canned;
+
+    /// The one hook into `build_plan`'s second read of a planned file: `(path, the bytes to hand back
+    /// instead of the disk's)`. It is consumed by the next read of that path, so it cannot leak into
+    /// another test, and no shipped build compiles it at all.
+    static REREAD: std::sync::Mutex<Option<(std::path::PathBuf, Vec<u8>)>> =
+        std::sync::Mutex::new(None);
+
+    pub(super) fn reread_override(path: &Path) -> Option<Vec<u8>> {
+        let mut armed = REREAD.lock().ok()?;
+        match armed.as_ref() {
+            Some((armed_path, bytes)) if armed_path == path => {
+                let bytes = bytes.clone();
+                *armed = None;
+                Some(bytes)
+            }
+            _ => None,
+        }
+    }
+
+    /// Arm the seam for the next read of `path`.
+    fn reread_with(path: std::path::PathBuf, bytes: Vec<u8>) {
+        *REREAD.lock().expect("the seam is not poisoned") = Some((path, bytes));
+    }
 
     /// The harness is compiled out unless `--cfg apt_scout_write_harness` is passed, so a
     /// `build.rs` that ever set the cfg unconditionally fails here instead of silently shipping
@@ -1420,6 +1555,127 @@ mod tests {
     const MIRROR: &str = "https://mirror.example/ubuntu/";
 
     #[test]
+    fn a_rerun_at_the_selected_mirror_is_success_not_a_failure() {
+        // The file already points at the mirror this run selected: the rewrite replaces the URI with
+        // itself, so the plan is empty. An empty plan here is the re-run, not "nothing eligible".
+        let apt = TempApt::new("already");
+        let current = format!("deb {MIRROR} noble main\n");
+        apt.write("sources.list", &current);
+        let hosts = vec!["mirror.example".to_string()];
+        let inventory = sources::inventory(&apt.0, &hosts, false);
+        assert!(inventory.has_rewritable_uri());
+        let change = build_plan(
+            &apt.0,
+            &inventory,
+            &hosts,
+            &probed(MIRROR, verify::SignatureStatus::verified_for_test()),
+            plan::Platform::Ubuntu,
+        )
+        .expect("a run whose write already happened must not fail");
+        assert!(change.plan.is_none(), "nothing to change, so no plan");
+        assert!(change.skipped.is_empty(), "{:?}", change.skipped);
+        // Success is still a run that writes nothing.
+        assert_eq!(apt.read("sources.list"), current);
+    }
+
+    #[test]
+    fn the_plan_reports_every_skipped_entry_with_its_reason() {
+        let apt = TempApt::new("skipped");
+        apt.write(
+            "sources.list",
+            "deb http://archive.ubuntu.com/ubuntu noble main\ndeb https://security.ubuntu.com/ubuntu noble-security main\n",
+        );
+        // Not valid UTF-8: the inventory reports the file instead of dropping it, and the plan has to
+        // pass that report on (SPEC.md Apply: every skipped file with its reason).
+        std::fs::write(apt.0.join("sources.list.d/bad.list"), [0xff, 0xfe]).expect("fixture file");
+        let hosts = vec![
+            "archive.ubuntu.com".to_string(),
+            "mirror.example".to_string(),
+        ];
+        let inventory = sources::inventory(&apt.0, &hosts, false);
+        let change = build_plan(
+            &apt.0,
+            &inventory,
+            &hosts,
+            &probed(MIRROR, verify::SignatureStatus::verified_for_test()),
+            plan::Platform::Ubuntu,
+        )
+        .expect("one URI is rewritable");
+        assert!(change.plan.is_some(), "the archive URI is rewritten");
+        let skipped = change.skipped.join("\n");
+        assert!(
+            skipped.contains("bad.list: file is not valid UTF-8"),
+            "{skipped}"
+        );
+        assert!(
+            skipped.contains("https://security.ubuntu.com/ubuntu was not changed"),
+            "{skipped}"
+        );
+    }
+
+    #[test]
+    fn the_plan_refuses_a_file_that_changed_while_it_was_built() {
+        let apt = TempApt::new("changed");
+        let original = "deb http://archive.ubuntu.com/ubuntu noble main\n";
+        apt.write("sources.list", original);
+        let hosts = vec![
+            "archive.ubuntu.com".to_string(),
+            "mirror.example".to_string(),
+        ];
+        let inventory = sources::inventory(&apt.0, &hosts, false);
+        // The rewrite is computed from one read; the plan is bound by a second one. Hand that second
+        // read different bytes, which is what a file edited between the two reads looks like.
+        reread_with(
+            apt.0.join("sources.list"),
+            b"deb http://archive.ubuntu.com/ubuntu noble main universe\n".to_vec(),
+        );
+        let (code, msg) = build_plan(
+            &apt.0,
+            &inventory,
+            &hosts,
+            &probed(MIRROR, verify::SignatureStatus::verified_for_test()),
+            plan::Platform::Ubuntu,
+        )
+        .expect_err("a file that changed under the plan must be refused");
+        assert_eq!(code, 1);
+        assert!(
+            msg.contains(
+                "changed while the plan was built, so the planned bytes no longer match the disk"
+            ),
+            "{msg}"
+        );
+        assert!(msg.contains("Nothing was written"), "{msg}");
+        assert!(msg.contains("sources.list"), "{msg}");
+        // A refusal writes nothing.
+        assert_eq!(apt.read("sources.list"), original);
+    }
+
+    #[test]
+    fn the_run_level_exit_codes_are_pinned() {
+        let args = parse_args_from(["--country", "LT"].into_iter().map(str::to_string)).unwrap();
+        // No eligible URI, `--list`: read-only whatever the uid (SPEC.md CLI table).
+        assert_eq!(no_eligible_uri(Mode::List, &args), Ok(0));
+        // No eligible URI, non-root: the `sudo` line and exit 3.
+        assert_eq!(no_eligible_uri(Mode::Recommend, &args), Ok(3));
+        // No eligible URI, root that was going to write: exit 1, and it says nothing was written.
+        let (code, msg) = no_eligible_uri(Mode::Write { confirm: true }, &args)
+            .expect_err("a root run with nothing to write must fail");
+        assert_eq!(code, 1);
+        assert!(
+            msg.contains("no official Ubuntu apt source URI can be changed"),
+            "{msg}"
+        );
+        assert!(msg.contains("Nothing was written"), "{msg}");
+        // Nothing survived the checks: exit 1 with the reason, never a panic on an empty ranking.
+        let (code, msg) = no_fresh_mirror();
+        assert_eq!(code, 1);
+        assert!(
+            msg.contains("no mirror passed the freshness and reachability checks"),
+            "{msg}"
+        );
+    }
+
+    #[test]
     fn the_plan_is_refused_when_the_selected_mirror_is_not_verified() {
         let apt = TempApt::new("no-proof");
         let original = "deb http://archive.ubuntu.com/ubuntu noble main\n";
@@ -1488,7 +1744,9 @@ mod tests {
             &probed(MIRROR, verify::SignatureStatus::verified_for_test()),
             plan::Platform::Ubuntu,
         )
-        .expect("both inspected files have a rewritable URI");
+        .expect("both inspected files have a rewritable URI")
+        .plan
+        .expect("both inspected files are written");
         assert_eq!(plan.selected_uri(), MIRROR);
         assert_eq!(plan.proof().seconds(), 1000);
         let targets: Vec<String> = plan
@@ -1553,7 +1811,9 @@ mod tests {
             &probed(MIRROR, verify::SignatureStatus::verified_for_test()),
             plan::Platform::PopOs,
         )
-        .expect("the Pop!_OS split is planned");
+        .expect("the Pop!_OS split is planned")
+        .plan
+        .expect("the Pop!_OS split is written");
         assert_eq!(plan.writes().len(), 2);
         let created = plan
             .writes()
