@@ -338,6 +338,10 @@ fn run(
     let id = BackupId::from_secs(now_secs).map_err(|_| ApplyError::Time { secs: now_secs })?;
     backup(backup_root, owner_uid, owner_gid, &id, &captured)?;
     validate_targets(&captured)?;
+    // S6's pause: present only in a harness build, at the last point before the sweep, where every
+    // refusal except a TOCTOU one is behind us. It reads no environment and no path of its own.
+    #[cfg(apt_scout_write_harness)]
+    crate::harness::pause_after_validation();
     sweep_targets(&captured, owner_uid)?;
     let written = write_targets(&captured, owner_uid, owner_gid)?;
     Ok(Outcome {
@@ -1249,6 +1253,15 @@ mod tests {
                 Err(ApplyError::NotRoot)
             ));
         }
+    }
+
+    /// The write harness spells `/etc/apt` and `/var/backups/apt-scout` out itself, so the two
+    /// compiled defaults are the contract its cases read back. Weak on its own: only the container
+    /// cases prove the paths a run actually touches.
+    #[test]
+    fn apt_dir_and_backup_root_are_the_compiled_defaults() {
+        assert_eq!(APT_DIR, "/etc/apt");
+        assert_eq!(BACKUP_ROOT, "/var/backups/apt-scout");
     }
 
     /// Criterion 2: a recorded mode loses the file-type bits, and a set-gid mode survives the

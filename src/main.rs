@@ -5,6 +5,8 @@ mod digest;
 mod distro;
 mod fresh;
 mod geo;
+#[cfg(apt_scout_write_harness)]
+mod harness;
 mod http;
 mod manifest;
 mod mirrors;
@@ -601,6 +603,14 @@ fn load_candidates(
 }
 
 fn main() -> ExitCode {
+    // The write harness exists only in a `--cfg apt_scout_write_harness` build, and it is
+    // dispatched before argument parsing. A plain build therefore parses `__write-harness` as an
+    // ordinary argument and fails it as an unknown option (W2), so the harness cannot be reached
+    // by accident.
+    #[cfg(apt_scout_write_harness)]
+    if let Some(code) = harness::main(std::env::args().skip(1).collect()) {
+        return code;
+    }
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err((code, msg)) => {
@@ -614,6 +624,19 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
     use crate::http::Canned;
+
+    /// The harness is compiled out unless `--cfg apt_scout_write_harness` is passed, so a
+    /// `build.rs` that ever set the cfg unconditionally fails here instead of silently shipping
+    /// the write cases in a release binary. Weak on its own: the built binaries are what W1/W2
+    /// check.
+    #[test]
+    fn harness_cfg_is_off_in_a_default_build() {
+        let compiled_in = cfg!(apt_scout_write_harness);
+        assert!(
+            !compiled_in,
+            "a default build must not carry the write harness"
+        );
+    }
 
     #[test]
     fn preflight_rejects_unknown_country_and_architecture_before_network() {
