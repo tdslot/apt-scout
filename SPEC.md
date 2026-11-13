@@ -16,17 +16,20 @@ Single command, no subcommands: `apt-scout [flags]`
 
 No flag is required. The uid decides whether the run writes: it discovers, ranks and recommends, and a non-root run prints the one line that repeats the run under `sudo` and exits 3, while the same command under `sudo` writes the best mirror. Every flag below is an override, never a step in the workflow.
 
+A short form exists for every flag that is implemented today: `-c`, `-n`, `-s`, `-t`, `-v`, `-l`, `-y` and `-h`. `-a`, `-r` and `-R` are reserved for `--any`, `--restore` and `--refresh` and are rejected until those flags exist. Short flags are never bundled: `-lyc NO` is an unknown option. The line a non-root run prints always spells the long forms, so a copied command is unambiguous.
+
 | Flag | Meaning |
 | --- | --- |
-| `--country <CC>` | ISO 3166 alpha-2 override. Always wins over detection. |
+| `-c`, `--country <CC>` | ISO 3166 alpha-2 override. Always wins over detection. |
 | `--refresh` | Ignore the geo, mirror list and AS caches for this run (and rewrite them). |
-| `--no-geo` | No geolocation lookups at all. Requires `--country`; AS preference is skipped. Offline-friendly for the server lookup. |
-| `--top <N>` | Show N best mirrors (default 5). |
-| `--https-only` | Only consider https mirrors. |
+| `-n`, `--no-geo` | No geolocation lookups at all. Requires `--country`; AS preference is skipped. Offline-friendly for the server lookup. |
+| `-t`, `--top <N>` | Show N best mirrors (default 5). |
+| `-s`, `--https-only` | Only consider https mirrors. |
 | `--tui` | Interactive mode: ranked table, selection, detail panel, confirmation. Opt-in; the default run is not interactive. |
-| `--list` | Table and planned change only; never writes, whatever the uid. |
-| `--yes` | Skip the one confirmation before a write in a root run. |
+| `-l`, `--list` | Table and planned change only; never writes, whatever the uid. |
+| `-y`, `--yes` | Skip the one confirmation before a write in a root run. |
 | `--restore` | Restore the newest backup instead of applying a mirror. Root is needed for the read of the backup and for the write. |
+| `--verbose` | Per-mirror detail and full rejection reasons. Display only; it changes no decision. |
 
 Command, uid, and whether apt sources change:
 
