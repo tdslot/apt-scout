@@ -88,6 +88,10 @@ WFIXTURE=apt-scout-fixture:local          # the committed read-only fixture, mad
 # replace target is sources.list.d/ubuntu.sources (no sources.list, exactly one *.sources).
 FIX_DEB822='rm -f /etc/apt/sources.list; rm -rf /etc/apt/sources.list.d; mkdir -p /etc/apt/sources.list.d; printf "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu\nSuites: noble noble-updates\nComponents: main universe\n" > /etc/apt/sources.list.d/ubuntu.sources; chmod 0644 /etc/apt/sources.list.d/ubuntu.sources'
 
+# The legacy pin, for the case whose target is sources.list rather than an entry of sources.list.d:
+# no sources.list.d at all, one single-line sources.list.
+FIX_LEGACY='rm -rf /etc/apt/sources.list.d; rm -f /etc/apt/sources.list; printf "deb http://archive.ubuntu.com/ubuntu jammy main universe\n" > /etc/apt/sources.list; chmod 0644 /etc/apt/sources.list'
+
 # The only way a write case runs: the harness binary, read-only, offline, and no other mount. A
 # write case that names the network mode itself is the one thing this file must never grow.
 wrun() { docker run --rm --network none --platform "$platform" -v "$PWD/$wharness":/apt-scout:ro "$@"; }
@@ -269,6 +273,110 @@ if [ "$rc" -eq 0 ] && [[ "$got" == HARNESS* ]] && [[ "$got" == *"stale=yes"* ]];
   pass "W4 selftest -> $(echo "$got" | head -1)"
 else
   fail "W4 selftest -> exit $rc: $(echo "$got" | head -3)"
+fi
+
+# W5 (S1) Offline: the non-root half of S1. `setpriv` drops to uid 1000 inside the root container,
+#   because the pin needs root and uid 1000 cannot write /etc/apt. A missing `setpriv` fails the
+#   case loudly: skipping the only non-root case here would leave S1 half-unproven.
+rc=0; got=$(wcase ubuntu:24.04 \
+  "$FIX_DEB822; command -v setpriv >/dev/null || { echo WPIN setpriv missing; exit 1; }" \
+  "setpriv --reuid=1000 --regid=1000 --clear-groups /apt-scout __write-harness apply" 2>&1) || rc=$?
+if [[ "$got" == *"WPIN setpriv missing"* ]]; then
+  fail "W5 ubuntu:24.04 ships no setpriv, so the non-root half of S1 could not run"
+elif [ "$rc" -eq 0 ] && [[ "$got" == *"rc=3"* ]] && [[ "$got" == *"sudo apt-scout"* ]] \
+  && [[ "$got" == *"same=yes"* ]] && [[ "$got" == *"backups=no"* ]]; then
+  pass "W5 non-root run -> sudo apt-scout, exit 3, /etc/apt identical"
+else
+  fail "W5 non-root run -> exit $rc: $(echo "$got" | head -6)"
+fi
+
+# The digest of the canary every symlink case writes: `printf 'canary-v1\n'`, so the assertion
+# compares bytes that exist before the link does, never an ENOENT that would fail the setup.
+canary=3a0995af8316bca3b555be990b0f759ed9539f0211d3095e11d939252003cb82
+
+# W6 (S5) Offline: the target itself is a symlink out of the tree. `read_state`'s `lstat` sees the
+#   link, so the refusal names the target and the reason instead of following it to the canary.
+rc=0; got=$(WCASE_DIGESTS=/tmp/canary wcase ubuntu:24.04 \
+  "$FIX_DEB822; printf 'canary-v1\n' > /tmp/canary; rm -f /etc/apt/sources.list.d/ubuntu.sources; ln -s /tmp/canary /etc/apt/sources.list.d/ubuntu.sources" \
+  "/apt-scout __write-harness apply" 2>&1) || rc=$?
+if [ "$rc" -eq 0 ] && [[ "$got" == *"rc=1"* ]] \
+  && [[ "$got" == *"ERR Target: refusing /etc/apt/sources.list.d/ubuntu.sources: it is a symlink"* ]] \
+  && [[ "$got" == *"same=yes"* ]] && [[ "$got" == *"digests=unchanged"* ]] \
+  && [[ "$got" == *"$canary  /tmp/canary"* ]] && [[ "$got" == *"backups=no"* ]]; then
+  pass "W6 symlinked target -> ERR Target, exit 1, canary and /etc/apt identical"
+else
+  fail "W6 symlinked target -> exit $rc: $(echo "$got" | head -6)"
+fi
+
+# W7 (S5) Offline: the same refusal on the legacy single-file layout, where the target is
+#   sources.list rather than an entry of sources.list.d.
+rc=0; got=$(WCASE_DIGESTS=/tmp/canary wcase ubuntu:22.04 \
+  "$FIX_LEGACY; printf 'canary-v1\n' > /tmp/canary; rm -f /etc/apt/sources.list; ln -s /tmp/canary /etc/apt/sources.list" \
+  "/apt-scout __write-harness apply" 2>&1) || rc=$?
+if [ "$rc" -eq 0 ] && [[ "$got" == *"rc=1"* ]] \
+  && [[ "$got" == *"ERR Target: refusing /etc/apt/sources.list: it is a symlink"* ]] \
+  && [[ "$got" == *"same=yes"* ]] && [[ "$got" == *"digests=unchanged"* ]] \
+  && [[ "$got" == *"$canary  /tmp/canary"* ]] && [[ "$got" == *"backups=no"* ]]; then
+  pass "W7 symlinked sources.list -> ERR Target, exit 1, canary and /etc/apt identical"
+else
+  fail "W7 symlinked sources.list -> exit $rc: $(echo "$got" | head -6)"
+fi
+
+# W8 (S5) Offline: sources.list.d itself is a symlink to a directory outside the tree, so the
+#   planned target would resolve through it. `check_parent` refuses the directory, not the file,
+#   and the one pinned file beside the link keeps its digest.
+evil=6eff4af09971bfade12236da91531b406f28c2b1ad1a487fbbddd1cbb634d3d7  # digest of the evil.sources bytes the setup writes
+rc=0; got=$(WCASE_DIGESTS='/tmp/attacker/*' wcase ubuntu:24.04 \
+  "$FIX_DEB822; rm -rf /etc/apt/sources.list.d; mkdir -p /tmp/attacker; printf 'deb http://archive.ubuntu.com/ubuntu noble main\n' > /tmp/attacker/evil.sources; ln -s /tmp/attacker /etc/apt/sources.list.d" \
+  "/apt-scout __write-harness apply" 2>&1) || rc=$?
+if [ "$rc" -eq 0 ] && [[ "$got" == *"rc=1"* ]] \
+  && [[ "$got" == *"ERR Target: refusing /etc/apt/sources.list.d: it is a symlink"* ]] \
+  && [[ "$got" == *"same=yes"* ]] && [[ "$got" == *"digests=unchanged"* ]] \
+  && [[ "$got" == *"$evil  /tmp/attacker/evil.sources"* ]] && [[ "$got" == *"backups=no"* ]]; then
+  pass "W8 symlinked sources.list.d -> ERR Target, exit 1, attacker's file identical"
+else
+  fail "W8 symlinked sources.list.d -> exit $rc: $(echo "$got" | head -6)"
+fi
+
+# W9 (S6) Offline: the target is substituted, new inode and new bytes, while the run is paused at
+#   its last checkpoint, so only the re-check inside `replace_one` can refuse it. The handshake is
+#   bounded and its absence fails the case; a harness that exits 97 (never released) is not a pass.
+sub=5b68ea6734c4f9888a9d33cdaec832aa50fc5a1cc75e3fe83c3788f99d8a1f6e  # 'substituted-v2\n'
+rc=0; got=$(wrun ubuntu:24.04 sh -c "WCASE_DIGESTS=
+$WCASE_PRE
+$FIX_DEB822
+cp /etc/apt/sources.list.d/ubuntu.sources /tmp/pre
+snapshot /tmp/before
+( /apt-scout __write-harness apply-pause > /tmp/out 2>&1; echo \$? > /tmp/hrc ) &
+i=0
+while [ ! -e /tmp/apt-scout-harness/paused ] && [ \$i -lt 150 ]; do sleep 0.1; i=\$((i + 1)); done
+if [ -e /tmp/apt-scout-harness/paused ]; then echo paused=yes; else echo PAUSE_MARKER_MISSING; fi
+mkdir -p /tmp/apt-scout-harness
+printf 'substituted-v2\n' > /etc/apt/sources.list.d/.sub
+chmod 0644 /etc/apt/sources.list.d/.sub
+mv /etc/apt/sources.list.d/.sub /etc/apt/sources.list.d/ubuntu.sources
+echo sub=\$(sha256sum < /etc/apt/sources.list.d/ubuntu.sources | cut -d' ' -f1)
+printf 'go\n' > /tmp/apt-scout-harness/go
+wait
+echo rc=\$(cat /tmp/hrc)
+snapshot /tmp/after
+if cmp -s /tmp/before /tmp/after; then echo same=yes; else echo same=no; fi
+diff /tmp/before /tmp/after | grep '^[<>]' > /tmp/dl
+echo diff-lines=\$(wc -l < /tmp/dl) others=\$(grep -vc 'sources.list.d/ubuntu.sources' /tmp/dl)
+if [ -f /var/backups/apt-scout/20261112T000000Z/sources.list.d/ubuntu.sources ]; then echo backup=yes; else echo backup=no; fi
+pre=\$(sha256sum < /tmp/pre | cut -d' ' -f1)
+bck=\$(sha256sum < /var/backups/apt-scout/20261112T000000Z/sources.list.d/ubuntu.sources 2>/dev/null | cut -d' ' -f1)
+if [ -n \"\$pre\" ] && [ \"\$pre\" = \"\$bck\" ]; then echo backup-copy=same; else echo \"backup-copy=different pre=\$pre bck=\$bck\"; fi
+echo tmp=\$(ls -a /etc/apt/sources.list.d | grep -c '\\.apt-scout-tmp-')
+cat /tmp/out" 2>&1) || rc=$?
+if [ "$rc" -eq 0 ] && [[ "$got" == *"paused=yes"* ]] && [[ "$got" != *"PAUSE_MARKER_MISSING"* ]] \
+  && [[ "$got" == *"rc=1"* ]] && [[ "$got" == *"same=no"* ]] && [[ "$got" != *"diff-lines=0"* ]] \
+  && [[ "$got" == *"others=0"* ]] && [[ "$got" == *"sub=$sub"* ]] \
+  && [[ "$got" == *"ERR Changed: /etc/apt/sources.list.d/ubuntu.sources changed since the plan was built"* ]] \
+  && [[ "$got" == *"backup=yes"* ]] && [[ "$got" == *"backup-copy=same"* ]] && [[ "$got" == *"tmp=0"* ]]; then
+  pass "W9 substituted while paused -> ERR Changed, exit 1, substitution kept, backup pre-run"
+else
+  fail "W9 substituted while paused -> exit $rc: $(echo "$got" | head -12)"
 fi
 
 exit $status
