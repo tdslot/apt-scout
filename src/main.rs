@@ -1170,7 +1170,8 @@ fn run() -> Result<u8, (u8, String)> {
                         throughput_bps: o.throughput_bps,
                         latency_ms: o.latency_ms,
                         same_as: server_asn.is_some()
-                            && mirror_asn.get(&m.url).map(|a| &a.asn) == server_asn.as_ref(),
+                            && mirror_asn.get(as_key(&m.url)).map(|a| &a.asn)
+                                == server_asn.as_ref(),
                         signature: o.updates_signature,
                     });
                 }
@@ -1404,7 +1405,7 @@ fn as_match(
     url: &str,
 ) -> Option<&'static str> {
     resolved
-        .get(url)
+        .get(as_key(url))
         .map(|found| as_status(server_asn, Some(&found.asn)))
 }
 
@@ -1446,6 +1447,13 @@ fn mirror_host_port(url: &str) -> Option<(String, u16)> {
 
 /// Once public address and the AS Team Cymru names for one candidate (SPEC step 5). The holder
 /// name is `--verbose` detail and is looked up only when that flag asks for it.
+/// The spelling every AS answer is keyed and looked up by. The probe reports a mirror without its
+/// trailing slash, the mirror list may carry one, and a map keyed on the other spelling answers
+/// `unknown` for every row it is asked about.
+fn as_key(url: &str) -> &str {
+    url.trim_end_matches('/')
+}
+
 struct ResolvedAs {
     ip: std::net::IpAddr,
     asn: String,
@@ -1498,7 +1506,7 @@ fn resolve_mirror_asns(
             }
             match rx.recv_timeout(remaining) {
                 Ok(Some((url, Ok(resolved)))) => {
-                    out.insert(url, resolved);
+                    out.insert(as_key(&url).to_string(), resolved);
                 }
                 Ok(Some((url, Err(why)))) => {
                     failures.insert(url, why);
@@ -2834,5 +2842,46 @@ mod tests {
             "  stale             mirror.pit.teraswitch.com (162 h)".to_string(),
         ];
         assert_eq!(report.0, expected);
+    }
+
+    /// The AS map is keyed by `as_key`, which is the spelling the probe reports. A mirror listed
+    /// with a trailing slash must still find its answer, or the column reads `unknown` for every
+    /// row while the lookup succeeded.
+    #[test]
+    fn the_as_column_finds_a_mirror_listed_with_a_trailing_slash() {
+        let mut resolved = std::collections::HashMap::new();
+        resolved.insert(
+            as_key("http://a.example/ubuntu/").to_string(),
+            ResolvedAs {
+                ip: "192.0.2.10".parse().expect("a fixture address"),
+                asn: "AS64500".to_string(),
+                name: None,
+            },
+        );
+        assert_eq!(
+            as_key("http://a.example/ubuntu/"),
+            "http://a.example/ubuntu"
+        );
+        assert_eq!(
+            as_match(&resolved, Some("AS64500"), "http://a.example/ubuntu"),
+            Some("same")
+        );
+        assert_eq!(
+            as_match(&resolved, Some("AS64500"), "http://a.example/ubuntu/"),
+            Some("same")
+        );
+        assert_eq!(
+            as_match(&resolved, Some("AS64501"), "http://a.example/ubuntu"),
+            Some("diff")
+        );
+        // No answer for that host at all: no column value, so the note explains the gap.
+        assert_eq!(
+            as_match(&resolved, Some("AS64500"), "http://b.example/ubuntu"),
+            None
+        );
+        assert_eq!(
+            as_match(&resolved, None, "http://a.example/ubuntu"),
+            Some("unknown")
+        );
     }
 }
