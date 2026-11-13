@@ -1768,11 +1768,38 @@ fn write_baseline(
 /// and the run's mirror roots (see `load_candidates` for the contract between the first and last).
 type LoadedCandidates = (Vec<mirrors::Mirror>, &'static str, Vec<sources::MirrorRoot>);
 
-/// The `(host, path)` pairs of `urls`, in the order the list gave them; the caller sorts and dedups.
-/// A URL whose authority or path does not parse contributes nothing, so a tree is never guessed from
-/// a broken link.
-fn mirror_roots<'a>(urls: impl Iterator<Item = &'a str>) -> Vec<sources::MirrorRoot> {
-    urls.filter_map(sources::mirror_root).collect()
+/// The `(host, path)` pairs of `urls`, in the order the list gave them, plus every URL that failed
+/// candidate validation. A URL whose authority or path does not parse contributes nothing, so a tree
+/// is never guessed from a broken link.
+fn mirror_roots<'a>(
+    urls: impl Iterator<Item = &'a str>,
+) -> (Vec<sources::MirrorRoot>, Vec<String>) {
+    let mut roots = Vec::new();
+    let mut rejected = Vec::new();
+    for url in urls {
+        match mirrors::validate_url(url) {
+            Ok(()) => match sources::mirror_root(url) {
+                Some(root) => roots.push(root),
+                None => rejected.push(url.to_string()),
+            },
+            Err(_) => rejected.push(url.to_string()),
+        }
+    }
+    (roots, rejected)
+}
+
+/// Report the entries a list named that never entered the rewrite set. An entry that fails candidate
+/// validation is left out **and said so**, on the same channel as the fallback warning, rather than
+/// silently trusted (SPEC: Apply).
+fn report_rejected(list: &str, rejected: &[String]) {
+    if rejected.is_empty() {
+        return;
+    }
+    eprintln!(
+        "warning: {list} names {} mirror URL(s) that cannot make an apt source rewritable, so they are left out of that set: {}",
+        rejected.len(),
+        rejected.join(", ")
+    );
 }
 
 /// SPEC step 3: Launchpad first, then `mirrors.ubuntu.com/<CC>.txt`. Returns the candidates, the
@@ -1799,8 +1826,9 @@ fn load_candidates(
         Ok(page) => match mirrors::parse_launchpad(&String::from_utf8_lossy(&page.body)) {
             Ok(all) => {
                 // Every country's entry, not only this run's, and before `keep`: eligibility answers
-                // recognizability, never use.
-                let roots = mirror_roots(all.iter().map(|m| m.url.as_str()));
+                // recognizability, never use. Both list sources pass the same validation here.
+                let (roots, rejected) = mirror_roots(all.iter().map(|m| m.url.as_str()));
+                report_rejected("Launchpad", &rejected);
                 let found: Vec<_> = all
                     .into_iter()
                     .filter(|m| m.country == country_name && keep(m))
@@ -1831,15 +1859,12 @@ fn load_candidates(
                     status: mirrors::Status::Unknown,
                 })
                 .collect();
-            // Validated, not `keep`: `--https-only` picks what may be selected, never what may be
-            // recognized, so a mirror written over `http` stays rewritable in a later run. This
-            // list arrives over plain HTTP, so a host that fails candidate validation is still
-            // dropped and never becomes rewritable.
-            let roots = mirror_roots(
-                all.iter()
-                    .filter(|m| mirrors::validate_url(&m.url).is_ok())
-                    .map(|m| m.url.as_str()),
-            );
+            // One validation for both sources: `mirror_roots` is the only place an entry enters the
+            // set, so a list cannot skip the candidate check the other list applies. `--https-only`
+            // still does not narrow it — it picks what may be selected, never what may be recognized,
+            // so a mirror written over `http` stays rewritable in a later run.
+            let (roots, rejected) = mirror_roots(all.iter().map(|m| m.url.as_str()));
+            report_rejected("mirrors.ubuntu.com", &rejected);
             let found: Vec<_> = all.into_iter().filter(keep).collect();
             if !found.is_empty() {
                 eprintln!(
@@ -2177,6 +2202,63 @@ mod tests {
                 host: "ok.example".to_string(),
                 path: "/ubuntu/".to_string(),
             }]
+        );
+    }
+
+    /// The real page with one mirror's only `http` link pointed at a loopback address: a list entry
+    /// that fails candidate validation. Fixture-derived on purpose, so the page keeps the shape the
+    /// parser reads instead of being a hand-written one that could drift from it.
+    fn launchpad_one_bad() -> &'static [u8] {
+        Box::leak(
+            String::from_utf8_lossy(LAUNCHPAD_OK)
+                .replace("http://ftp.litnet.lt/ubuntu/", "http://127.0.0.1/ubuntu/")
+                .into_bytes()
+                .into_boxed_slice(),
+        )
+    }
+
+    /// An entry that fails candidate validation never enters the rewrite set, and the run reports it
+    /// instead of trusting it: one `validate_url` filter for the Launchpad page and the fallback
+    /// alike (SPEC: Apply).
+    #[test]
+    fn mirror_roots_drops_and_reports_invalid_entries() {
+        let (roots, rejected) = mirror_roots(
+            [
+                "http://mirror.example/ubuntu/",
+                "http://127.0.0.1/ubuntu/",
+                "http://2130706433/ubuntu/",
+                "http://mirror.example:0/ubuntu/",
+            ]
+            .into_iter(),
+        );
+        assert_eq!(
+            roots,
+            [sources::MirrorRoot {
+                host: "mirror.example".to_string(),
+                path: "/ubuntu/".to_string(),
+            }]
+        );
+        assert_eq!(
+            rejected,
+            [
+                "http://127.0.0.1/ubuntu/",
+                "http://2130706433/ubuntu/",
+                "http://mirror.example:0/ubuntu/",
+            ]
+        );
+
+        // The same rule on the Launchpad side: its valid entries are still in the set, the invalid
+        // one is in neither the set nor silence.
+        let net = Canned(vec![(LAUNCHPAD, Ok(launchpad_one_bad()))]);
+        let (_, src, roots) = load_candidates(&net, "DE", "Germany", false).unwrap();
+        assert_eq!(src, "Launchpad");
+        assert!(
+            roots.iter().all(|r| r.host != "127.0.0.1"),
+            "a loopback entry must not enter the set: {roots:?}"
+        );
+        assert!(
+            roots.iter().any(|r| r.host == "ubuntu.uib.no"),
+            "its valid entries are still there: {roots:?}"
         );
     }
 
