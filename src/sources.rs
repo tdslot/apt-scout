@@ -99,7 +99,8 @@ impl Inventory {
 }
 
 /// Parse legacy apt source lines. Comments/blank lines are ignored. Every active deb/deb-src line
-/// becomes one entry. `archive_hosts` includes the canonical archive and currently known mirrors.
+/// becomes one entry. `archive_hosts` is every host this run can recognize as an Ubuntu archive
+/// mirror, from any country, plus the canonical archive.
 pub fn parse_legacy(
     text: &str,
     file: &Path,
@@ -316,6 +317,10 @@ fn invalid(file: &Path, line: usize, format: Format, issue: String) -> Entry {
     }
 }
 
+/// Whether this URI token may be replaced by the selected mirror. Membership in `archive_hosts`
+/// answers recognizability only: `security.ubuntu.com`, `ports.ubuntu.com` and the Pop!_OS path and
+/// suite conditions are decided first, whatever the list names, and a `-security` suite is refused
+/// by the caller.
 fn is_rewritable(uri: &str, archive_hosts: &[String], pop_os_system_sources: bool) -> bool {
     if uri.chars().any(|c| c.is_whitespace() || c.is_control()) || uri.contains(['\\', '@']) {
         return false;
@@ -379,6 +384,9 @@ fn is_rewritable(uri: &str, archive_hosts: &[String], pop_os_system_sources: boo
 }
 
 /// Discover apt source files without following symlinks. Non-UTF8 files are reported, not guessed.
+/// `archive_hosts` is every host this run can recognize as an Ubuntu archive mirror, from any
+/// country, plus the canonical archive: membership makes a URI eligible for replacement and
+/// nothing else, and `is_rewritable` still refuses the hosts that are never replaced.
 pub fn inventory(root: &Path, archive_hosts: &[String], pop_os: bool) -> Inventory {
     match std::fs::symlink_metadata(root) {
         Ok(meta) if meta.file_type().is_dir() => {}
@@ -797,6 +805,9 @@ fn pop_security_content(
 }
 
 /// Produce a byte-preserving apt source rewrite plan. This function performs no filesystem IO.
+/// `archive_hosts` is every host this run can recognize as an Ubuntu archive mirror, from any
+/// country, plus the canonical archive; `is_rewritable` decides membership and keeps refusing the
+/// hosts that are never replaced, whatever a list names.
 pub fn rewrite_source(
     text: &str,
     file: &Path,
@@ -983,6 +994,61 @@ mod tests {
         )
         .unwrap();
         assert_eq!(round_trip.files[0].content, input);
+    }
+
+    /// A host another country's Launchpad entry names is eligible for replacement, so a mirror this
+    /// tool wrote stays rewritable after a `--country` change. The exceptions still come first: a
+    /// PPA, a third-party host, a `-security` stanza and a `mirror://` URI are reported and left
+    /// byte for byte, and `security.ubuntu.com` is refused even while it is in the host set.
+    #[test]
+    fn rewrite_recognizes_a_foreign_mirror_host() {
+        let input = "# keep\ndeb http://ubuntu.uib.no/archive/ noble main\ndeb https://ppa.example.net/ubuntu noble main\ndeb http://security.ubuntu.com/ubuntu noble-security main\ndeb mirror://mirror.example/ubuntu noble main\n";
+        let expected = "# keep\ndeb https://mirror.example/ubuntu/ noble main\ndeb https://ppa.example.net/ubuntu noble main\ndeb http://security.ubuntu.com/ubuntu noble-security main\ndeb mirror://mirror.example/ubuntu noble main\n";
+        // `security.ubuntu.com` is in the set on purpose: the exception is checked before the set,
+        // so this test cannot pass because the host happened to be missing from it.
+        let hosts = vec![
+            "archive.ubuntu.com".to_string(),
+            "ubuntu.uib.no".to_string(),
+            "security.ubuntu.com".to_string(),
+        ];
+        let path = Path::new("/etc/apt/sources.list");
+        let plan = rewrite_source(input, path, "https://mirror.example/ubuntu/", &hosts, false)
+            .expect("the selected mirror is valid");
+        assert_eq!(plan.files.len(), 1);
+        assert_eq!(plan.files[0].content, expected);
+        // Each refusal names the file, the line and the host, so the printed report is actionable
+        // on its own and a `skip` can never be silent.
+        assert_eq!(
+            plan.skipped,
+            [
+                "/etc/apt/sources.list:3: https://ppa.example.net/ubuntu was not changed",
+                "/etc/apt/sources.list:4: http://security.ubuntu.com/ubuntu was not changed",
+                "/etc/apt/sources.list:5: mirror://mirror.example/ubuntu was not changed",
+            ]
+        );
+        assert!(is_rewritable(
+            "http://ubuntu.uib.no/archive/",
+            &hosts,
+            false
+        ));
+        assert!(!is_rewritable(
+            "http://security.ubuntu.com/ubuntu",
+            &hosts,
+            false
+        ));
+        assert!(!is_rewritable(
+            "http://ports.ubuntu.com/ubuntu-ports",
+            &[
+                "archive.ubuntu.com".to_string(),
+                "ports.ubuntu.com".to_string()
+            ],
+            false
+        ));
+        assert!(!is_rewritable(
+            "https://ppa.example.net/ubuntu",
+            &hosts,
+            false
+        ));
     }
 
     #[test]

@@ -653,4 +653,75 @@ else
   fail "W22 positive write -> exit $rc diff=$diffchanged others=$others: $(echo "$got" | head -14)"
 fi
 
+# W23 Live (needs internet): a mirror this tool wrote survives a country change. One container, one
+#   pinned /etc/apt, two runs, and nothing between them edits the file: the first run writes a
+#   Norwegian mirror, the second asks for a German one. Shape-tolerant per D29 — it never names the
+#   mirror either run picks, only that run 2 recognized the host run 1 wrote (its `Sources` line
+#   reads `rewrite` for that host), exited 0, and changed the file. A write needs a verified
+#   `-updates`, so the keyring is installed first; a failed install is named as the live-network
+#   reason instead of passing quietly.
+rc=0; got=$(run bridge ubuntu:24.04 sh -c "$FIX_DEB822
+apt-get update -qq >/dev/null 2>&1
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gpgv ubuntu-keyring >/dev/null 2>&1 || { echo DEPENDENCY_INSTALL_FAILED; exit 9; }
+rc1=0; /apt-scout --country NO --yes > /tmp/run1 2>&1 || rc1=\$?
+echo run1-rc=\$rc1
+host=\$(grep -oE 'URIs: [a-z]+://[^ /]+' /etc/apt/sources.list.d/ubuntu.sources | head -n 1 | sed -E 's|^URIs: [a-z]+://||; s|/.*||')
+echo run1-host=\$host
+before=\$(sha256sum < /etc/apt/sources.list.d/ubuntu.sources | cut -d' ' -f1)
+# One second apart, so the two runs cannot land in the same backup second (the writer refuses that).
+sleep 1
+rc2=0; /apt-scout --country DE --yes > /tmp/run2 2>&1 || rc2=\$?
+echo run2-rc=\$rc2
+after=\$(sha256sum < /etc/apt/sources.list.d/ubuntu.sources | cut -d' ' -f1)
+if [ \"\$before\" = \"\$after\" ]; then echo changed=no; else echo changed=yes; fi
+echo RUN1; cat /tmp/run1
+echo RUN2; cat /tmp/run2" 2>&1) || rc=$?
+run1_host=$(printf '%s\n' "$got" | sed -n 's/^run1-host=//p')
+run2_out=${got#*RUN2}
+if [[ "$got" == *"DEPENDENCY_INSTALL_FAILED"* ]]; then
+  fail "W23 country change -> apt-get install gpgv ubuntu-keyring failed in the container (live-network reason)"
+elif [ "$rc" -ne 0 ] || ! printf '%s\n' "$got" | grep -qx 'run1-rc=0'; then
+  fail "W23 country change -> run 1 (--country NO) did not write on the live network: $(printf '%s\n' "$got" | head -6)"
+elif [ -n "$run1_host" ] && printf '%s\n' "$got" | grep -qx 'run2-rc=0' \
+  && [[ "$run2_out" != *"No official Ubuntu apt source URI can be changed"* ]] \
+  && printf '%s\n' "$got" | grep -qx 'changed=yes' \
+  && printf '%s\n' "$run2_out" | grep -qE "^ +sources\.list\.d/ubuntu\.sources +rewrite  line [0-9]+  ${run1_host//./\\.}$"; then
+  pass "W23 a NO mirror stays rewritable under --country DE -> run 2 rewrote $run1_host"
+else
+  fail "W23 country change -> exit $rc host='$run1_host': $(printf '%s\n' "$got" | head -14)"
+fi
+
+# W24 Live: the wider host set never reaches a third-party host or a PPA. Both lines are seeded
+#   beside the vendor line, both countries run, and the two seeded lines are byte-identical at the
+#   end while run 2's `Sources` section reports each one `skip` with the host it names.
+rc=0; got=$(run bridge ubuntu:24.04 sh -c "rm -rf /etc/apt/sources.list.d
+printf 'deb http://archive.ubuntu.com/ubuntu noble main universe\\ndeb http://deb.example.com/stable ./\\ndeb https://ppa.launchpadcontent.net/x/y/ubuntu noble main\\n' > /etc/apt/sources.list
+chmod 0644 /etc/apt/sources.list
+apt-get update -qq >/dev/null 2>&1
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gpgv ubuntu-keyring >/dev/null 2>&1 || { echo DEPENDENCY_INSTALL_FAILED; exit 9; }
+seeded() { grep -E '^deb (http://deb\\.example\\.com|https://ppa\\.launchpadcontent\\.net)' /etc/apt/sources.list; }
+seeded > /tmp/seeded-before
+rc1=0; /apt-scout --country NO --yes > /tmp/run1 2>&1 || rc1=\$?
+echo run1-rc=\$rc1
+sleep 1
+rc2=0; /apt-scout --country DE --yes > /tmp/run2 2>&1 || rc2=\$?
+echo run2-rc=\$rc2
+seeded > /tmp/seeded-after
+if cmp -s /tmp/seeded-before /tmp/seeded-after; then echo seeded=same; else echo seeded=changed; diff /tmp/seeded-before /tmp/seeded-after; fi
+echo RUN1; cat /tmp/run1
+echo RUN2; cat /tmp/run2" 2>&1) || rc=$?
+run2_out=${got#*RUN2}
+if [[ "$got" == *"DEPENDENCY_INSTALL_FAILED"* ]]; then
+  fail "W24 third-party and PPA lines -> apt-get install gpgv ubuntu-keyring failed in the container (live-network reason)"
+elif [ "$rc" -ne 0 ] || ! printf '%s\n' "$got" | grep -qx 'run1-rc=0'; then
+  fail "W24 third-party and PPA lines -> run 1 (--country NO) did not write on the live network: $(printf '%s\n' "$got" | head -6)"
+elif printf '%s\n' "$got" | grep -qx 'run2-rc=0' \
+  && printf '%s\n' "$got" | grep -qx 'seeded=same' \
+  && printf '%s\n' "$run2_out" | grep -qE '^ +sources\.list +skip +line [0-9]+  deb\.example\.com — ' \
+  && printf '%s\n' "$run2_out" | grep -qE '^ +sources\.list +skip +line [0-9]+  ppa\.launchpadcontent\.net — '; then
+  pass "W24 third-party and PPA lines survive two country changes and are reported skip"
+else
+  fail "W24 third-party and PPA lines -> exit $rc: $(printf '%s\n' "$got" | head -14)"
+fi
+
 exit $status
