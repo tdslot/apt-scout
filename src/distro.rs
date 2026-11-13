@@ -10,6 +10,8 @@ pub struct Distro {
     pub id_like: Vec<String>,
     /// `UBUNTU_CODENAME` when present, else `VERSION_CODENAME` (Mint reports wilma, apt uses noble).
     pub codename: Option<String>,
+    /// `VERSION_ID` (for example `24.04`), shown in the run's header and nothing else.
+    pub version_id: Option<String>,
 }
 
 impl Distro {
@@ -33,6 +35,7 @@ pub fn parse(text: &str) -> Distro {
             .map(|v| v.split_whitespace().map(String::from).collect())
             .unwrap_or_default(),
         codename: get("UBUNTU_CODENAME").or_else(|| get("VERSION_CODENAME")),
+        version_id: get("VERSION_ID"),
     }
 }
 
@@ -58,10 +61,11 @@ mod tests {
     #[test]
     fn ubuntu() {
         let d = parse(
-            "NAME=\"Ubuntu\"\nID=ubuntu\nID_LIKE=debian\nVERSION_CODENAME=noble\nUBUNTU_CODENAME=noble\n",
+            "NAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nID=ubuntu\nID_LIKE=debian\nVERSION_CODENAME=noble\nUBUNTU_CODENAME=noble\n",
         );
         assert!(d.is_ubuntu_family());
         assert_eq!(d.codename.as_deref(), Some("noble"));
+        assert_eq!(d.version_id.as_deref(), Some("24.04"));
     }
 
     #[test]
@@ -103,5 +107,7 @@ mod tests {
     #[test]
     fn missing_codename() {
         assert_eq!(parse("ID=ubuntu\n").codename, None);
+        // A release file without VERSION_ID is shown by codename alone, never guessed.
+        assert_eq!(parse("ID=ubuntu\n").version_id, None);
     }
 }

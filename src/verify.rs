@@ -56,6 +56,9 @@ pub enum SignatureStatus {
 }
 
 impl SignatureStatus {
+    /// A test-only convenience: the shipped code decides through the variants themselves, because
+    /// only `Verified` carries the proof a write needs.
+    #[cfg(test)]
     pub fn is_verified(&self) -> bool {
         matches!(self, SignatureStatus::Verified(_))
     }
