@@ -1,6 +1,7 @@
 //! Team Cymru IP-to-ASN lookup over plain DNS TXT (SPEC.md, Pipeline step 2 and 5). std has no TXT
 //! API and an async resolver crate contradicts the no-async rule, so this is a small UDP client.
-//! The packet builder and the answer parser are pure and tested; only `lookup` touches the network.
+//! The packet builder and the answer parser are pure and tested; only `lookup`, `lookup_name` and
+//! their one shared query loop touch the network.
 
 use std::net::{IpAddr, UdpSocket};
 use std::time::{Duration, Instant};
@@ -174,6 +175,27 @@ pub fn asn_from_txt(txt: &str) -> Option<String> {
     normalize_asn(txt.split('|').next()?.trim())
 }
 
+/// `AS64496` -> `64496.asn.cymru.com.`, the query that names the AS holder (SPEC step 2: AS data
+/// comes from DNS, never from a web API). `None` for a value that is not `AS<digits>`.
+pub fn asn_query_name(asn: &str) -> Option<String> {
+    let digits = asn.strip_prefix("AS")?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(format!("{digits}.asn.cymru.com."))
+}
+
+/// The holder from a Cymru AS answer: `64496 | US | arin | 2010-01-01 | EXAMPLE-AS, US` ->
+/// `EXAMPLE-AS, US`. Empty or whitespace-only last field means the name is unknown.
+pub fn asn_name_from_txt(txt: &str) -> Option<String> {
+    let fields: Vec<&str> = txt.split('|').collect();
+    if fields.len() < 2 {
+        return None;
+    }
+    let name = fields.last()?.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 /// Nameservers from `/etc/resolv.conf`, at most three, IPv4 and IPv6 literals only.
 pub fn nameservers(resolv_conf: &str) -> Vec<IpAddr> {
     resolv_conf
@@ -200,6 +222,20 @@ fn unpredictable_id() -> Result<u16, DnsError> {
 /// AS for `ip` via Cymru DNS through the system resolver. A missing `resolv.conf` or no answer
 /// means unknown (the caller falls back to the next source). Total UDP wait is bounded.
 pub fn lookup(ip: IpAddr) -> Result<String, DnsError> {
+    let txt = query_txt(&query_name(ip))?;
+    asn_from_txt(&txt).ok_or(DnsError::Malformed("answer has no AS number"))
+}
+
+/// The name of `asn` (`AS64496`) via Cymru DNS, for `--verbose` only: a display detail, never a
+/// ranking input. `None` when the answer carries no holder.
+pub fn lookup_name(asn: &str) -> Result<String, DnsError> {
+    let name = asn_query_name(asn).ok_or(DnsError::Malformed("not an AS number"))?;
+    let txt = query_txt(&name)?;
+    asn_name_from_txt(&txt).ok_or(DnsError::Malformed("answer has no AS name"))
+}
+
+/// One TXT query for `name` through the system resolver, bounded in total.
+fn query_txt(name: &str) -> Result<String, DnsError> {
     let conf = std::fs::read_to_string("/etc/resolv.conf")
         .map_err(|_| DnsError::Malformed("cannot read /etc/resolv.conf"))?;
     let servers = nameservers(&conf);
@@ -207,8 +243,7 @@ pub fn lookup(ip: IpAddr) -> Result<String, DnsError> {
         return Err(DnsError::Malformed("no nameserver in /etc/resolv.conf"));
     }
     let id = unpredictable_id()?;
-    let name = query_name(ip);
-    let query = build_query(&name, id);
+    let query = build_query(name, id);
     let deadline = Instant::now() + TOTAL_BUDGET;
     let mut last = DnsError::Malformed("no nameserver answered");
     for server in servers {
@@ -230,10 +265,8 @@ pub fn lookup(ip: IpAddr) -> Result<String, DnsError> {
         }
         let mut buf = [0u8; 512];
         let Ok(n) = sock.recv(&mut buf) else { continue };
-        match parse_answer(&buf[..n], id, &name) {
-            Ok(txt) => {
-                return asn_from_txt(&txt).ok_or(DnsError::Malformed("answer has no AS number"));
-            }
+        match parse_answer(&buf[..n], id, name) {
+            Ok(txt) => return Ok(txt),
             Err(DnsError::NxDomain) => return Err(DnsError::NxDomain),
             Err(e) => last = e,
         }
@@ -378,6 +411,25 @@ mod tests {
             Some(Duration::from_secs(2))
         );
         assert_eq!(nameserver_timeout(Duration::ZERO), None);
+    }
+
+    #[test]
+    fn as_name_query_and_answer() {
+        assert_eq!(
+            asn_query_name("AS64496").as_deref(),
+            Some("64496.asn.cymru.com.")
+        );
+        // Anything that is not an AS number has no holder to ask for.
+        assert_eq!(asn_query_name("64496"), None);
+        assert_eq!(asn_query_name("AS"), None);
+        assert_eq!(asn_query_name("AS12x"), None);
+        // The holder is the last field of the real answer's shape; an empty one is unknown.
+        assert_eq!(
+            asn_name_from_txt("64496 | US | arin | 2010-01-01 | EXAMPLE-AS, US").as_deref(),
+            Some("EXAMPLE-AS, US")
+        );
+        assert_eq!(asn_name_from_txt("64496 | US | arin | 2010-01-01 | "), None);
+        assert_eq!(asn_name_from_txt("64496"), None);
     }
 
     #[test]
