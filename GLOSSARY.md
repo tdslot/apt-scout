@@ -30,6 +30,14 @@
 
 **Backup**: Timestamped copy of every apt sources file changed by a write, stored under `/var/backups/apt-scout/`.
 
+**Manifest**: The record inside a backup that lists, for each changed apt source file, its original path, SHA-256 digest, mode and owner, so a restore re-derives what to write from the backup instead of being told.
+
+**Plan**: The validated description of a pending apt change: the exact bytes of every file to write and the proof that they come from verified data. The run builds and validates it, it is never a file, and it never crosses a process boundary.
+
+**Privileged phase**: The part of a run that holds root. It validates the plan against the state on disk and performs the file operations; nothing else runs there.
+
+**Write proof**: The value that ties a mirrored `InRelease` date to a successful signature verification. It is the only thing that authorizes a write.
+
 **Official archive URI**: An apt source URI pointing at `archive.ubuntu.com` or a host in the current mirror list. The only kind apt-scout rewrites.
 
 **Recommended**: Badge on the best-ranked fresh mirror; it is pre-checked in the TUI.
