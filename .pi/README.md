@@ -16,7 +16,8 @@ where a script can see it and lists where it cannot.
 | `apt-scout-security` | Trust-boundary audit of the diff. Read-only. |
 
 `oracle` is not a file here: it is builtin, and the lead uses it for the milestone audit
-and for the threat model before any privileged task.
+and for a new threat model when a privileged surface is not already ruled by
+`docs/threat-model.md`.
 
 ## Running the loop
 
@@ -39,6 +40,11 @@ opens the PR, merges into `develop` when every check is green, records the evide
 approval) or Gate 2 (diff before merge) for complex work: anything reaching the
 privilege boundary, a trust boundary, network input, product behavior the SPEC does not
 settle, or a new dependency.
+
+One exception, recorded in the lead's own file: when the human has asked for unattended
+work and the design is already settled by `SPEC.md` and `docs/threat-model.md`, the two
+approvals are replaced by a record in `ROADMAP.md` — the section that settles the design
+and the two verdict `HEAD` SHAs. Every other merge condition still binds.
 
 Project agents resolve under the default `agentScope: "both"`; pass
 `options: { agentScope: "project" }` if you want to be explicit and exclude user-level
