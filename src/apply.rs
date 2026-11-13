@@ -123,9 +123,9 @@ impl ApplyError {
     /// The write phase can reach three groups of variants. `Write` and `Exists` are its own, and
     /// they never claim a clean system: the creations run first, so a failed replacement can
     /// follow a landed creation. The re-validation before the rename can also raise `Changed`,
-    /// `Target`, `Read` or `TooLarge`, whose own messages say nothing was written; that is true
-    /// while no target has landed, and false afterwards, so past that point the finding moves into
-    /// a `Write` refusal. Everything else is unreachable here.
+    /// `Target`, `Read` or `TooLarge`, whose own messages say nothing was written *to `/etc/apt`*;
+    /// that is true while no target has landed, and false afterwards, so past that point the
+    /// finding moves into a `Write` refusal. Everything else is unreachable here.
     fn after_writing(self, written: &[Target]) -> Self {
         let landed = if written.is_empty() {
             "No file under /etc/apt had been written before this failure".to_string()
@@ -175,6 +175,24 @@ impl ApplyError {
             other => other,
         }
     }
+
+    /// Fold a failed cleanup of a half-written creation into the reason that reports it.
+    ///
+    /// The caller that removes a partial file at the target path cannot stay silent about a
+    /// removal that failed: the error would then describe a clean `/etc/apt` with a partial file
+    /// in it. Only a `Write` refusal can reach here, and it already names the target path.
+    fn cleanup_failed(self, e: io::Error) -> Self {
+        match self {
+            Self::Write { path, reason } => Self::Write {
+                path,
+                reason: format!(
+                    "{reason}. Removing the partial file this run created then failed too: {e}, \
+                     so a half-written file is still in place at that path"
+                ),
+            },
+            other => other,
+        }
+    }
 }
 
 impl fmt::Display for ApplyError {
@@ -208,37 +226,37 @@ impl fmt::Display for ApplyError {
             ),
             Self::Read { path, reason } => write!(
                 f,
-                "cannot read {}: {reason}. Nothing was written. Check that root can read the file \
-                 and re-run",
+                "cannot read {}: {reason}. Nothing was written to /etc/apt. Check that root can \
+                 read it and re-run",
                 path.display()
             ),
             Self::TooLarge { path, limit } => write!(
                 f,
                 "cannot read {}: it is larger than the {limit} byte limit apt-scout reads for an \
-                 apt source file. Nothing was written. The limit is about size and not about \
-                 access, so no chmod or chown makes it readable: find what wrote a file this large \
-                 to that path and re-run",
+                 apt source file. Nothing was written to /etc/apt. The limit is about size and not \
+                 about access, so no chmod or chown makes it readable: find what wrote a file this \
+                 large to that path and re-run",
                 path.display()
             ),
             Self::Target { path, reason } => write!(
                 f,
-                "refusing {}: {reason}. Nothing was written. apt-scout only replaces a plain \
-                 regular file it can reach without following a link, so move the link or the \
-                 special file aside and re-run",
+                "refusing {}: {reason}. Nothing was written to /etc/apt. apt-scout only replaces a \
+                 plain regular file it can reach without following a link, so move the link or \
+                 the special file aside and re-run",
                 path.display()
             ),
             Self::Owner { path, reason } => write!(
                 f,
                 "refusing {}: {reason}. apt-scout will not rewrite a file it cannot describe in a \
                  restorable manifest, because --restore must be able to put the original back. \
-                 Nothing was written. Make that file owned by the user this run writes as, and \
-                 re-run",
+                 Nothing was written to /etc/apt. Make that file owned by the user this run writes \
+                 as, and re-run",
                 path.display()
             ),
             Self::Changed { path, reason } => write!(
                 f,
-                "{} changed since the plan was built: {reason}. Nothing was written. Re-run \
-                 apt-scout so its plan is built from what is on disk now",
+                "{} changed since the plan was built: {reason}. Nothing was written to /etc/apt. \
+                 Re-run apt-scout so its plan is built from what is on disk now",
                 path.display()
             ),
             // The reason carries this site's own case and its own fix: a file that appeared where
@@ -730,20 +748,24 @@ fn sweep_targets(captured: &[Captured], owner_uid: u32) -> Result<(), ApplyError
 /// conditions bound what a privileged `unlink` may be steered to by a name: this program's prefix,
 /// a regular file, the run's own uid, and at most `TEMP_TRIES` names per directory. An entry that
 /// fails one of them is left alone and never reused.
+///
+/// A directory that cannot be listed is reported as a read refusal that names that directory as
+/// itself: this step is a sweep of the run's own leftovers, not a write into the directory, and the
+/// fix for a listing that fails is not "make the directory holding it writable".
 fn sweep_temp(dir: &Path, owner_uid: u32) -> Result<(), ApplyError> {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         // A missing directory holds no leftovers of ours; the write reports it if it cannot write
         // there either.
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(write_failed(dir, e)),
+        Err(e) => return Err(read_failed(dir, e)),
     };
     let mut considered = 0;
     for entry in entries {
         if considered == TEMP_TRIES {
             break;
         }
-        let entry = entry.map_err(|e| write_failed(dir, e))?;
+        let entry = entry.map_err(|e| read_failed(dir, e))?;
         let name = entry.file_name();
         // A name that is not UTF-8 cannot be one this program wrote.
         let Some(name) = name.to_str() else {
@@ -770,6 +792,10 @@ fn sweep_temp(dir: &Path, owner_uid: u32) -> Result<(), ApplyError> {
 /// The order is the security property: a creation that finds the path taken aborts the whole run
 /// while every other target is still untouched. Every failure here is reported through
 /// `after_writing`, because from the first landed creation on, "nothing was written" is false.
+///
+/// Each target's directory is flushed here and not inside `create_one`/`replace_one`, because the
+/// flush comes *after* the file has landed: the push onto `written` is between the two, so a flush
+/// that fails is reported as a failure after a landed write, and never as a clean system.
 fn write_targets(
     captured: &[Captured],
     owner_uid: u32,
@@ -779,12 +805,23 @@ fn write_targets(
     for c in captured.iter().filter(|c| c.create_new) {
         create_one(c, owner_uid, owner_gid).map_err(|e| e.after_writing(&written))?;
         written.push(c.target.clone());
+        sync_written_dir(c, &written)?;
     }
     for c in captured.iter().filter(|c| !c.create_new) {
         replace_one(c).map_err(|e| e.after_writing(&written))?;
         written.push(c.target.clone());
+        sync_written_dir(c, &written)?;
     }
     Ok(written)
+}
+
+/// Flush the directory a landed target was written into, so its new name survives a crash.
+///
+/// Called only after the target is on `written`: the bytes are on disk by the time this runs, so
+/// every failure here is a failure *after* a write and carries what the run had already changed.
+fn sync_written_dir(c: &Captured, written: &[Target]) -> Result<(), ApplyError> {
+    let dir = parent_dir(&c.path).map_err(|e| e.after_writing(written))?;
+    sync_dir(dir, write_failed).map_err(|e| e.after_writing(written))
 }
 
 /// Create a planned file with an exclusive create, and never overwrite what is there.
@@ -809,11 +846,15 @@ fn create_one(c: &Captured, owner_uid: u32, owner_gid: u32) -> Result<(), ApplyE
             _ => write_failed(&c.path, e),
         })?;
     if let Err(e) = fill_creation(&file, c, owner_uid, owner_gid) {
-        // A failed creation must not leave a partial file at the target path.
-        let _ = fs::remove_file(&c.path);
-        return Err(e);
+        // A failed creation must not leave a partial file at the target path, and a cleanup that
+        // itself fails must not be swallowed: the file would still be there while the error reads
+        // as if nothing had been created.
+        return Err(match fs::remove_file(&c.path) {
+            Ok(()) => e,
+            Err(cleanup) => e.cleanup_failed(cleanup),
+        });
     }
-    sync_dir(parent_dir(&c.path)?, write_failed)
+    Ok(())
 }
 
 /// Fill a created file and prove it is exactly what the manifest already recorded for it.
@@ -870,7 +911,7 @@ fn replace_one(c: &Captured) -> Result<(), ApplyError> {
         let _ = fs::remove_file(&tmp);
         return Err(write_failed(&c.path, e));
     }
-    sync_dir(dir, write_failed)
+    Ok(())
 }
 
 /// Open a candidate temp file exclusively; a leftover from an earlier run is never reused.
@@ -966,8 +1007,35 @@ fn read_state(path: &Path) -> Result<Entry, ApplyError> {
     }))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Armed by a test to fail the very next `sync_dir` call, once.
+    ///
+    /// The failure this simulates is the last one a landed write can still hit, and no non-root
+    /// test can build it: a directory the kernel refuses to flush is a device error. Present only
+    /// in a test build, so a release binary carries no switch here.
+    static SYNC_DIR_FAULT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Arm the one-shot directory-sync fault. Test-only.
+#[cfg(test)]
+fn fail_next_sync_dir() {
+    SYNC_DIR_FAULT.with(|armed| armed.set(true));
+}
+
+/// The injected flush failure, named so a test can tell which path it came from. Test-only.
+#[cfg(test)]
+fn injected_sync_failure() -> io::Error {
+    io::Error::other("injected directory sync failure")
+}
+
 /// Flush one directory, so a name it gained or lost survives a crash.
 fn sync_dir(dir: &Path, fail: fn(&Path, io::Error) -> ApplyError) -> Result<(), ApplyError> {
+    // Test-only, and consumed here so it can fire at most once per arming.
+    #[cfg(test)]
+    if SYNC_DIR_FAULT.with(|armed| armed.replace(false)) {
+        return Err(fail(dir, injected_sync_failure()));
+    }
     File::open(dir)
         .and_then(|handle| handle.sync_all())
         .map_err(|e| fail(dir, e))
@@ -2094,6 +2162,167 @@ mod tests {
         assert_eq!(
             fs::symlink_metadata(&target).expect("meta").len(),
             MAX_FILE_BYTES as u64 + 1
+        );
+    }
+
+    /// Criterion 19: the directory flush that follows a landed replacement fails, and the run may
+    /// not claim `/etc/apt` is clean. The fault is armed immediately before the write phase,
+    /// because the backup flushes its own directories first and no other flush runs in between.
+    #[test]
+    fn a_failed_flush_after_a_landed_replace_names_the_file_the_run_wrote() {
+        let root = TempRoot::new("flush");
+        let apt = root.apt();
+        let (uid, gid) = root.owner();
+        let backup_root = root.path().join("backup");
+        let target = fixture(&apt, LIST, OLD, 0o644);
+        let before = state(&target);
+        let planned = plan(vec![replace(LIST, Some(before.clone()))]);
+        let captured = capture(&apt, &planned).expect("capture binds the plan to the disk");
+        let new_bytes = captured[0].new_bytes.clone();
+        let id = BackupId::from_secs(NOW).expect("backup id");
+        backup(&backup_root, uid, gid, &id, &captured).expect("the backup succeeds");
+
+        fail_next_sync_dir();
+        let err = write_targets(&captured, uid, gid).expect_err("the flush fails");
+        println!("flush failure: {err}");
+        assert!(matches!(err, ApplyError::Write { .. }), "{err}");
+        let text = err.to_string();
+
+        // The replacement landed before the flush: its new bytes are on disk, through a rename,
+        // and no temp file survives.
+        let after = state(&target);
+        assert_eq!(after.bytes, new_bytes);
+        assert_ne!(after.ino, before.ino, "the rename happened");
+        let left = entries(&apt);
+        assert!(
+            !left.iter().any(|n| n.starts_with(TEMP_PREFIX)),
+            "a temp file survived: {left:?}"
+        );
+        // The error is the flush of the target's own directory, and it names what already landed.
+        assert!(text.contains("cannot write"), "{text}");
+        assert!(text.contains(&apt.display().to_string()), "{text}");
+        assert!(text.contains("injected directory sync failure"), "{text}");
+        assert!(text.contains("already written sources.list"), "{text}");
+        // The clean-system sentence this defect was about may not appear at all.
+        assert!(
+            !text.contains("had been written before this failure"),
+            "{text}"
+        );
+        assert!(!text.contains("Nothing was written"), "{text}");
+    }
+
+    /// Criterion 20: a cleanup that refuses to remove a half-written creation is folded into the
+    /// refusal, so the message never reports a clean path with a partial file at it.
+    #[test]
+    fn a_failed_cleanup_of_a_creation_is_named_in_the_refusal() {
+        let path = PathBuf::from(APT_DIR).join(SECURITY);
+        let reason = "the record does not describe what was created";
+        let text = ApplyError::Write {
+            path: path.clone(),
+            reason: reason.into(),
+        }
+        .cleanup_failed(io::Error::other("Read-only file system (os error 30)"))
+        .to_string();
+        println!("cleanup failure: {text}");
+        assert!(text.contains(reason), "{text}");
+        assert!(
+            text.contains("Removing the partial file this run created then failed too"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Read-only file system (os error 30)"),
+            "{text}"
+        );
+        assert!(text.contains(&path.display().to_string()), "{text}");
+
+        // A refusal that never created anything has no partial file to name and passes through.
+        let unchanged = ApplyError::Changed {
+            path: path.clone(),
+            reason: "the bytes changed".into(),
+        };
+        let expected = unchanged.to_string();
+        assert_eq!(
+            unchanged
+                .cleanup_failed(io::Error::other("Read-only file system (os error 30)"))
+                .to_string(),
+            expected
+        );
+    }
+
+    /// Criterion 21: a directory the sweep cannot list is a read refusal that names that directory
+    /// as itself, never a write refusal about the directory holding it.
+    #[test]
+    fn an_unlistable_directory_is_a_read_refusal_not_a_write_refusal() {
+        let root = TempRoot::new("sweep-read");
+        let apt = root.apt();
+        let (uid, _) = root.owner();
+        if uid == 0 {
+            // Root lists a 0300 directory, so only a non-root run can build this case.
+            return;
+        }
+        fs::set_permissions(&apt, fs::Permissions::from_mode(0o300)).expect("mode");
+        let err = sweep_temp(&apt, uid).expect_err("the directory cannot be listed");
+        fs::set_permissions(&apt, fs::Permissions::from_mode(0o755)).expect("mode");
+        println!("sweep read failure: {err}");
+        assert!(matches!(err, ApplyError::Read { .. }), "{err}");
+        let text = err.to_string();
+        assert!(
+            text.starts_with(&format!("cannot read {}", apt.display())),
+            "{text}"
+        );
+        assert!(!text.contains("cannot write"), "{text}");
+        assert!(!text.contains("directory holding it"), "{text}");
+        // The sweep runs before the write phase, so its scope is `/etc/apt` and nothing broader.
+        assert!(text.contains("Nothing was written to /etc/apt"), "{text}");
+
+        // A missing directory is still no finding at all.
+        sweep_temp(&root.path().join("absent"), uid).expect("a missing directory holds nothing");
+    }
+
+    /// Criterion 22: every refusal a run can raise after the backup exists is scoped to `/etc/apt`,
+    /// because the manifest of that backup is already on disk when it is printed.
+    #[test]
+    fn a_refusal_that_can_follow_the_backup_is_scoped_to_etc_apt() {
+        let path = PathBuf::from(APT_DIR).join(LIST);
+        let after_backup = [
+            ApplyError::Read {
+                path: path.clone(),
+                reason: "Permission denied (os error 13)".into(),
+            },
+            ApplyError::TooLarge {
+                path: path.clone(),
+                limit: MAX_FILE_BYTES,
+            },
+            ApplyError::Target {
+                path: path.clone(),
+                reason: "it is a symlink".into(),
+            },
+            ApplyError::Owner {
+                path: path.clone(),
+                reason: "it is owned by uid 1000 gid 1000".into(),
+            },
+            ApplyError::Changed {
+                path: path.clone(),
+                reason: "the bytes changed".into(),
+            },
+        ];
+        for err in &after_backup {
+            let text = err.to_string();
+            println!("scoped refusal: {text}");
+            assert!(text.contains("Nothing was written to /etc/apt"), "{text}");
+            assert!(!text.contains("Nothing was written."), "{text}");
+        }
+
+        // The backup refusal already had that scope, and keeps its own wording.
+        let backup = ApplyError::Backup {
+            path,
+            reason: "its mode is 0o777, not 0o700".into(),
+        };
+        assert!(
+            backup
+                .to_string()
+                .contains("Nothing was written to /etc/apt"),
+            "{backup}"
         );
     }
 }
