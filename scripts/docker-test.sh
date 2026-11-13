@@ -42,7 +42,15 @@ platform=linux/amd64
 builder=ghcr.io/cross-rs/$target:main
 docker pull --quiet --platform "$platform" "$builder" >/dev/null
 builder_run() { docker run --rm --platform "$platform" -v "$PWD":/src -w /src \
-  -e CARGO_TARGET_DIR=/src/target/docker -e CARGO_HOME=/src/target/docker-cargo "$builder" "$@"; }
+  -e CARGO_TARGET_DIR=/src/target/docker \
+  -e CARGO_HOME=/src/target/docker-cargo -e RUSTUP_HOME=/src/target/rustup "$builder" "$@"; }
+# Both builds run in their own container, so the toolchain the musl target needs lives in the two
+# persistent directories above: installed once per invocation, reused by the second build, and
+# skipped by rustup itself when it is already there.
+builder_prepare() {
+  builder_run sh -c "curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal \
+    --default-toolchain stable -t $target >/dev/null 2>&1"
+}
 # build plain|cfg -- `cargo clean -p apt-scout` drops only this crate's artifacts, never its deps,
 # and never the two copies below (they live outside target/docker/$target). The clean is what makes
 # a second invocation honest: `cargo rustc`'s trailing --cfg is not part of cargo's fingerprint, so
@@ -55,6 +63,7 @@ build() {
   builder_run sh -c ". /src/target/docker-cargo/env 2>/dev/null || . \$HOME/.cargo/env
     cargo clean -p apt-scout >/dev/null && $cmd"
 }
+builder_prepare
 build plain; cp "target/docker/$target/release/apt-scout" target/docker/apt-scout-plain
 build cfg;   cp "target/docker/$target/release/apt-scout" target/docker/apt-scout-harness
 echo "PLAIN $(sha256sum target/docker/apt-scout-plain | cut -d' ' -f1)"
