@@ -1319,4 +1319,257 @@ mod tests {
         assert!(msg.contains("LT.txt"), "{msg}");
         assert!(msg.contains("--country"), "{msg}");
     }
+
+    #[test]
+    fn the_uid_and_the_flags_decide_whether_the_run_writes() {
+        // `--list` never writes, whatever the uid, and exits 0 (SPEC.md CLI table).
+        assert_eq!(decide(true, false, false), Mode::List);
+        assert_eq!(decide(true, true, false), Mode::List);
+        assert_eq!(decide(true, true, true), Mode::List);
+        // A non-root run recommends and exits 3, with or without --yes.
+        assert_eq!(decide(false, false, false), Mode::Recommend);
+        assert_eq!(decide(false, false, true), Mode::Recommend);
+        // A root run writes, and asks once unless --yes skipped the prompt.
+        assert_eq!(decide(false, true, false), Mode::Write { confirm: true });
+        assert_eq!(decide(false, true, true), Mode::Write { confirm: false });
+    }
+
+    #[test]
+    fn yes_is_parsed_and_the_sudo_line_repeats_the_flags() {
+        let args = parse_args_from(["--yes"].into_iter().map(str::to_string)).unwrap();
+        assert!(args.yes);
+        assert_eq!(sudo_command(&args), "sudo apt-scout --yes");
+
+        let plain = parse_args_from(std::iter::empty()).unwrap();
+        assert_eq!(sudo_command(&plain), "sudo apt-scout");
+
+        let flags = parse_args_from(
+            ["--country", "lt", "--no-geo", "--top", "3", "--https-only"]
+                .into_iter()
+                .map(str::to_string),
+        )
+        .unwrap();
+        assert_eq!(
+            sudo_command(&flags),
+            "sudo apt-scout --country LT --no-geo --top 3 --https-only"
+        );
+    }
+
+    #[test]
+    fn a_default_answer_or_a_no_at_the_prompt_writes_nothing() {
+        let ask = |answer: &str| {
+            confirm_write(&mut std::io::Cursor::new(answer.to_string()), "").map_err(|e| e.1)
+        };
+        assert!(ask("y\n").is_ok());
+        assert!(ask("YES\n").is_ok());
+        let no = ask("n\n").expect_err("a no must refuse the write");
+        assert!(no.contains("nothing was written"), "{no}");
+        // A closed stdin is not a yes: the answer is required, or --yes.
+        let eof = ask("").expect_err("no answer must refuse the write");
+        assert!(eof.contains("--yes"), "{eof}");
+    }
+
+    /// A fixture apt root under the temp directory, removed however the test ends. Every plan test
+    /// below reads and writes inside it and nowhere else.
+    struct TempApt(std::path::PathBuf);
+
+    impl TempApt {
+        fn new(tag: &str) -> TempApt {
+            let path =
+                std::env::temp_dir().join(format!("apt-scout-d11-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(path.join("sources.list.d")).expect("temp apt root");
+            TempApt(path)
+        }
+
+        fn write(&self, name: &str, content: &str) {
+            std::fs::write(self.0.join(name), content).expect("fixture file");
+        }
+
+        fn read(&self, name: &str) -> String {
+            std::fs::read_to_string(self.0.join(name)).expect("fixture file")
+        }
+    }
+
+    impl Drop for TempApt {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A probed mirror shaped the way `probe::probe` builds one: the signed `Date` and the status
+    /// meet in the same value, so only a `Verified` status can yield a proof.
+    fn probed(url: &str, signature: verify::SignatureStatus) -> fresh::Probed {
+        fresh::Probed {
+            url: url.to_string(),
+            updates_date: 1000,
+            signed_updates_date: Some(
+                fresh::release_date(
+                    "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nDate: Thu, 01 Jan 1970 00:16:40 UTC\n",
+                )
+                .expect("the armour and the date parse"),
+            ),
+            lag_secs: 0,
+            throughput_bps: 1_000_000,
+            latency_ms: 10,
+            same_as: false,
+            signature,
+        }
+    }
+
+    const MIRROR: &str = "https://mirror.example/ubuntu/";
+
+    #[test]
+    fn the_plan_is_refused_when_the_selected_mirror_is_not_verified() {
+        let apt = TempApt::new("no-proof");
+        let original = "deb http://archive.ubuntu.com/ubuntu noble main\n";
+        apt.write("sources.list", original);
+        let hosts = vec!["archive.ubuntu.com".to_string()];
+        let inventory = sources::inventory(&apt.0, &hosts, false);
+        assert!(inventory.has_rewritable_uri());
+        let selected = probed(
+            MIRROR,
+            verify::SignatureStatus::Invalid("the signature is from an unknown key".into()),
+        );
+        let (code, msg) = build_plan(
+            &apt.0,
+            &inventory,
+            &hosts,
+            &selected,
+            plan::Platform::Ubuntu,
+        )
+        .expect_err("an unverified mirror must not be written");
+        assert_eq!(code, 1);
+        assert!(msg.contains("not proven fresh"), "{msg}");
+        assert!(msg.contains("Nothing was written"), "{msg}");
+        // The refusal is a refusal: the file still holds the bytes it was read from.
+        assert_eq!(apt.read("sources.list"), original);
+    }
+
+    #[test]
+    fn the_plan_is_refused_when_no_uri_is_eligible() {
+        let apt = TempApt::new("no-uri");
+        apt.write(
+            "sources.list",
+            "deb https://security.ubuntu.com/ubuntu noble-security main\ndeb https://ppa.example/ubuntu noble main\n",
+        );
+        let hosts = vec!["archive.ubuntu.com".to_string()];
+        let inventory = sources::inventory(&apt.0, &hosts, false);
+        assert!(!inventory.has_rewritable_uri());
+        let (code, msg) = build_plan(
+            &apt.0,
+            &inventory,
+            &hosts,
+            &probed(MIRROR, verify::SignatureStatus::Verified),
+            plan::Platform::Ubuntu,
+        )
+        .expect_err("an empty plan must be refused, not written");
+        assert_eq!(code, 1);
+        assert!(msg.contains("no apt source file would change"), "{msg}");
+        assert!(msg.contains("Nothing was written"), "{msg}");
+    }
+
+    #[test]
+    fn the_plan_rewrites_only_the_eligible_uris_and_binds_the_bytes_on_disk() {
+        let apt = TempApt::new("plan");
+        let legacy = "deb http://archive.ubuntu.com/ubuntu noble main universe\n# keep this comment\ndeb-src https://security.ubuntu.com/ubuntu noble-security main\n";
+        apt.write("sources.list", legacy);
+        let deb822 = "# noble\nTypes: deb\nURIs: http://archive.ubuntu.com/ubuntu\nSuites: noble noble-updates\nComponents: main\n";
+        apt.write("sources.list.d/ubuntu.sources", deb822);
+        let hosts = vec![
+            "archive.ubuntu.com".to_string(),
+            "mirror.example".to_string(),
+        ];
+        let inventory = sources::inventory(&apt.0, &hosts, false);
+        let plan = build_plan(
+            &apt.0,
+            &inventory,
+            &hosts,
+            &probed(MIRROR, verify::SignatureStatus::Verified),
+            plan::Platform::Ubuntu,
+        )
+        .expect("both inspected files have a rewritable URI");
+        assert_eq!(plan.selected_uri(), MIRROR);
+        assert_eq!(plan.proof().seconds(), 1000);
+        let targets: Vec<String> = plan
+            .writes()
+            .iter()
+            .map(|w| w.target.relative().display().to_string())
+            .collect();
+        assert_eq!(targets, ["sources.list", "sources.list.d/ubuntu.sources"]);
+        for write in plan.writes() {
+            // The bytes the writer re-checks are the bytes this plan was computed from, read from
+            // the real file rather than from the inventory's parse.
+            let original = write.original.as_ref().expect("both files exist");
+            assert!(!write.create_new);
+            let new = String::from_utf8_lossy(&write.new_bytes).into_owned();
+            assert!(new.contains(MIRROR), "{new}");
+            assert!(!new.contains("archive.ubuntu.com"), "{new}");
+            let on_disk = apt.read(&write.target.relative().display().to_string());
+            assert_eq!(original.bytes, on_disk.as_bytes());
+            // The writer compares the plan's state against `st_mode & 0o7777`; a mode that still
+            // carried the file-type bits would make every file look changed and refuse the write.
+            let meta = std::fs::symlink_metadata(apt.0.join(write.target.relative()))
+                .expect("fixture metadata");
+            assert_eq!(original.mode & !0o7777, 0);
+            assert_eq!(original.mode, meta.mode() & 0o7777);
+            assert_eq!(write.digest, crate::digest::sha256(&write.new_bytes));
+        }
+        // Building a plan writes nothing.
+        let legacy_new = String::from_utf8_lossy(&plan.writes()[0].new_bytes).into_owned();
+        assert!(
+            legacy_new.contains("deb-src https://security.ubuntu.com/ubuntu noble-security main"),
+            "{legacy_new}"
+        );
+        assert!(legacy_new.contains("# keep this comment"), "{legacy_new}");
+        // The change the confirmation and --list show: one line per changed line, and nothing else.
+        assert_eq!(
+            plan_report(&plan),
+            [
+                "  mirror: https://mirror.example/ubuntu/",
+                "  replace /etc/apt/sources.list:",
+                "    line 1: - deb http://archive.ubuntu.com/ubuntu noble main universe",
+                "    line 1: + deb https://mirror.example/ubuntu/ noble main universe",
+                "  replace /etc/apt/sources.list.d/ubuntu.sources:",
+                "    line 3: - URIs: http://archive.ubuntu.com/ubuntu",
+                "    line 3: + URIs: https://mirror.example/ubuntu/",
+            ]
+        );
+        assert_eq!(apt.read("sources.list"), legacy);
+        assert_eq!(apt.read("sources.list.d/ubuntu.sources"), deb822);
+    }
+
+    #[test]
+    fn the_plan_creates_the_pop_os_security_source_without_an_original() {
+        let apt = TempApt::new("pop");
+        let system = "Types: deb\nURIs: http://apt.pop-os.org/ubuntu\nSuites: jammy jammy-security jammy-updates\nComponents: main\n";
+        apt.write("sources.list.d/system.sources", system);
+        let hosts = vec!["apt.pop-os.org".to_string(), "mirror.example".to_string()];
+        let inventory = sources::inventory(&apt.0, &hosts, true);
+        let plan = build_plan(
+            &apt.0,
+            &inventory,
+            &hosts,
+            &probed(MIRROR, verify::SignatureStatus::Verified),
+            plan::Platform::PopOs,
+        )
+        .expect("the Pop!_OS split is planned");
+        assert_eq!(plan.writes().len(), 2);
+        let created = plan
+            .writes()
+            .iter()
+            .find(|w| w.create_new)
+            .expect("the security source is a planned creation");
+        assert_eq!(
+            created.target.relative().display().to_string(),
+            "sources.list.d/system-security.sources"
+        );
+        assert!(created.original.is_none());
+        // Planned, never incidental: the file does not exist until the writer creates it.
+        assert!(
+            !apt.0
+                .join("sources.list.d/system-security.sources")
+                .exists()
+        );
+    }
 }
