@@ -1,9 +1,11 @@
 #![cfg_attr(not(test), allow(dead_code))] // the CLI reaches this writer in D11
 //! The privileged writer for `/etc/apt`.
 //!
-//! Nothing here runs unless the process is root, and no path is written until it is
-//! bound to the disk entry the plan was built from. The order is: validate the plan,
-//! capture and bind to the disk, back up, re-validate, write.
+//! Nothing here runs unless the process is root, and no path is written until it is bound to the
+//! disk entry the plan was built from and held against the run's verified freshness baseline. The
+//! order is: validate the plan, check the baseline, capture and bind to the disk, check the
+//! ownership a manifest can record, back up, re-validate, sweep this program's own leftovers,
+//! write.
 
 use std::fmt;
 use std::fs::{self, DirBuilder, File, OpenOptions};
@@ -12,8 +14,10 @@ use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsE
 use std::path::{Path, PathBuf};
 
 use crate::digest::sha256;
+use crate::fresh;
 use crate::manifest::{self, Action, BackupId, ManifestEntry};
 use crate::plan::{FileState, Plan, PlanError, Target};
+use crate::verify::VerifiedDate;
 
 /// The apt configuration root every planned path is relative to.
 pub const APT_DIR: &str = "/etc/apt";
@@ -67,14 +71,25 @@ pub enum ApplyError {
     NotRoot,
     /// The plan this run built does not validate, so no disk operation is reached.
     Plan(PlanError),
+    /// The run holds no verified freshness baseline for the mirror it selected.
+    NoBaseline,
+    /// The selected mirror is older than the verified baseline by more than `MAX_LAG_SECS`.
+    Stale { uri: String, lag_secs: i64 },
     /// A planned path could not be inspected, opened, or read.
     Read { path: PathBuf, reason: String },
+    /// A planned path is larger than the size apt-scout reads: a cap, never a permission problem.
+    TooLarge { path: PathBuf, limit: usize },
     /// A planned path is not a plain regular file apt-scout is willing to own.
     Target { path: PathBuf, reason: String },
+    /// A planned path carries ownership a restorable manifest cannot record.
+    Owner { path: PathBuf, reason: String },
     /// A planned path no longer matches the state the plan was built from.
     Changed { path: PathBuf, reason: String },
     /// A path that must not exist yet does exist; nothing is ever overwritten on `EEXIST`.
-    Exists { path: PathBuf },
+    ///
+    /// Three sites, three reasons: a file that appeared where the run creates one, a backup
+    /// directory for the same UTC second, and eight taken temp names in one directory.
+    Exists { path: PathBuf, reason: String },
     /// The backup of a file could not be written, so nothing under `/etc/apt` may be.
     Backup { path: PathBuf, reason: String },
     /// The new content of a planned file could not be written.
@@ -89,13 +104,75 @@ impl ApplyError {
         match self {
             Self::NotRoot => 3,
             Self::Plan(_)
+            | Self::NoBaseline
+            | Self::Stale { .. }
             | Self::Read { .. }
+            | Self::TooLarge { .. }
             | Self::Target { .. }
+            | Self::Owner { .. }
             | Self::Changed { .. }
             | Self::Exists { .. }
             | Self::Backup { .. }
             | Self::Write { .. }
             | Self::Time { .. } => 1,
+        }
+    }
+
+    /// Add what this run had already changed, for a failure that comes after the first creation.
+    ///
+    /// The write phase can reach three groups of variants. `Write` and `Exists` are its own, and
+    /// they never claim a clean system: the creations run first, so a failed replacement can
+    /// follow a landed creation. The re-validation before the rename can also raise `Changed`,
+    /// `Target`, `Read` or `TooLarge`, whose own messages say nothing was written; that is true
+    /// while no target has landed, and false afterwards, so past that point the finding moves into
+    /// a `Write` refusal. Everything else is unreachable here.
+    fn after_writing(self, written: &[Target]) -> Self {
+        let landed = if written.is_empty() {
+            "No file under /etc/apt had been written before this failure".to_string()
+        } else {
+            let names: Vec<String> = written
+                .iter()
+                .map(|t| t.relative().display().to_string())
+                .collect();
+            format!(
+                "This run had already written {} before this failure, and what it wrote stays in \
+                 place",
+                names.join(", ")
+            )
+        };
+        match self {
+            Self::Write { path, reason } => Self::Write {
+                path,
+                reason: format!("{reason}. {landed}"),
+            },
+            Self::Exists { path, reason } => Self::Exists {
+                path,
+                reason: format!("{reason}. {landed}"),
+            },
+            _ if written.is_empty() => self,
+            Self::Changed { path, reason } => Self::Write {
+                path,
+                reason: format!("it changed while this run was writing: {reason}. {landed}"),
+            },
+            Self::Target { path, reason } => Self::Write {
+                path,
+                reason: format!(
+                    "it is no longer a plain regular file apt-scout can replace: {reason}. \
+                     {landed}"
+                ),
+            },
+            Self::Read { path, reason } => Self::Write {
+                path,
+                reason: format!("it can no longer be read: {reason}. {landed}"),
+            },
+            Self::TooLarge { path, limit } => Self::Write {
+                path,
+                reason: format!(
+                    "it is now larger than the {limit} byte limit apt-scout reads for an apt \
+                     source file. {landed}"
+                ),
+            },
+            other => other,
         }
     }
 }
@@ -114,10 +191,33 @@ impl fmt::Display for ApplyError {
                  plan this run built, not in the files on disk, so re-run apt-scout and report it \
                  if the same refusal comes back"
             ),
+            Self::NoBaseline => write!(
+                f,
+                "this run has no verified freshness baseline for the mirror it selected, so it \
+                 cannot tell how old that mirror is. Nothing was written: a write needs a verified \
+                 -updates InRelease to hold the mirror against. Re-run apt-scout once a verified \
+                 -updates InRelease is reachable; read-only ranking still works meanwhile"
+            ),
+            Self::Stale { uri, lag_secs } => write!(
+                f,
+                "the mirror this run selected, {uri}, is {lag_secs} seconds behind the verified \
+                 freshness baseline, past the {} second limit at which a mirror counts as stale. \
+                 Nothing was written: writing it would replace newer data with older. Re-run \
+                 apt-scout so ranking can pick a fresher mirror, or use {uri} once it catches up",
+                fresh::MAX_LAG_SECS
+            ),
             Self::Read { path, reason } => write!(
                 f,
                 "cannot read {}: {reason}. Nothing was written. Check that root can read the file \
                  and re-run",
+                path.display()
+            ),
+            Self::TooLarge { path, limit } => write!(
+                f,
+                "cannot read {}: it is larger than the {limit} byte limit apt-scout reads for an \
+                 apt source file. Nothing was written. The limit is about size and not about \
+                 access, so no chmod or chown makes it readable: find what wrote a file this large \
+                 to that path and re-run",
                 path.display()
             ),
             Self::Target { path, reason } => write!(
@@ -127,18 +227,23 @@ impl fmt::Display for ApplyError {
                  special file aside and re-run",
                 path.display()
             ),
+            Self::Owner { path, reason } => write!(
+                f,
+                "refusing {}: {reason}. apt-scout will not rewrite a file it cannot describe in a \
+                 restorable manifest, because --restore must be able to put the original back. \
+                 Nothing was written. Make that file owned by the user this run writes as, and \
+                 re-run",
+                path.display()
+            ),
             Self::Changed { path, reason } => write!(
                 f,
                 "{} changed since the plan was built: {reason}. Nothing was written. Re-run \
                  apt-scout so its plan is built from what is on disk now",
                 path.display()
             ),
-            Self::Exists { path } => write!(
-                f,
-                "{} already exists and apt-scout never overwrites a path it did not plan to \
-                 replace. Nothing was written. Remove or rename it and re-run",
-                path.display()
-            ),
+            // The reason carries this site's own case and its own fix: a file that appeared where
+            // the run creates one, taken backup names, and taken temp names are three findings.
+            Self::Exists { path, reason } => write!(f, "{}: {reason}", path.display()),
             Self::Backup { path, reason } => write!(
                 f,
                 "cannot write the backup of {}: {reason}. Nothing was written to /etc/apt, \
@@ -149,9 +254,8 @@ impl fmt::Display for ApplyError {
             ),
             Self::Write { path, reason } => write!(
                 f,
-                "cannot write {}: {reason}. Nothing was left half-written: apt-scout writes a \
-                 temporary file and renames it. Check the permissions of the directory that holds \
-                 it and re-run",
+                "cannot write {}: {reason}. Check that the directory holding it is writable by \
+                 the user this run writes as, and re-run",
                 path.display()
             ),
             Self::Time { secs } => write!(
@@ -174,40 +278,102 @@ pub struct Outcome {
 
 /// Write the plan, as root, to the real `/etc/apt` and `/var/backups/apt-scout`.
 ///
-/// Refuses before its first byte on a non-root run, on a plan that does not validate, and on any
-/// difference between the plan and the disk.
-pub fn apply(plan: &Plan, now_secs: u64) -> Result<Outcome, ApplyError> {
+/// Refuses before its first byte on a non-root run, on a plan that does not validate, on a run
+/// whose verified baseline is missing or does not cover the selected mirror, on a file it cannot
+/// describe in a restorable manifest, and on any difference between the plan and the disk.
+pub fn apply(
+    plan: &Plan,
+    baseline: Option<&VerifiedDate>,
+    now_secs: u64,
+) -> Result<Outcome, ApplyError> {
     require_root()?;
     run(
         Path::new(APT_DIR),
         Path::new(BACKUP_ROOT),
         plan,
+        baseline,
         now_secs,
+        0,
         0,
     )
 }
 
-/// The one write path, with the two roots and the backup owner as parameters.
+/// The one write path, with the two roots, the baseline and the run's owner as parameters.
 ///
-/// Private: it is the only place where the backup owner is not `0`, so the "the backup belongs to
-/// root" rule cannot be reached from production code with any other value.
+/// Private: it is the only place where the run's owner is not `0`, so the "every file and backup
+/// belongs to this run's owner" rule cannot be reached from production code with any other value.
+/// `0, 0` is a claim about a root run that `create_one` proves against the file it created;
+/// `getegid` is deliberately absent, so it cannot be checked at the door.
 fn run(
     apt_root: &Path,
     backup_root: &Path,
     plan: &Plan,
+    baseline: Option<&VerifiedDate>,
     now_secs: u64,
     owner_uid: u32,
+    owner_gid: u32,
 ) -> Result<Outcome, ApplyError> {
     plan.validate().map_err(ApplyError::Plan)?;
+    check_freshness(plan, baseline)?;
     let captured = capture(apt_root, plan)?;
+    check_ownership(&captured, owner_uid, owner_gid)?;
     let id = BackupId::from_secs(now_secs).map_err(|_| ApplyError::Time { secs: now_secs })?;
-    backup(backup_root, owner_uid, &id, &captured)?;
+    backup(backup_root, owner_uid, owner_gid, &id, &captured)?;
     validate_targets(&captured)?;
-    let written = write_targets(&captured)?;
+    sweep_targets(&captured, owner_uid)?;
+    let written = write_targets(&captured, owner_uid, owner_gid)?;
     Ok(Outcome {
         backup_id: id,
         written,
     })
+}
+
+/// Hold the selected mirror's verified proof against the baseline this run verified earlier.
+///
+/// The write performs no network request, so it cannot go looking for a baseline: a run without
+/// one is refused, and a mirror behind the baseline by more than `fresh::MAX_LAG_SECS` is refused
+/// through the same predicate the pipeline uses to call a mirror stale. A mirror *ahead* of the
+/// baseline is accepted: clock skew on a mirror cannot be told apart from a fresher mirror.
+fn check_freshness(plan: &Plan, baseline: Option<&VerifiedDate>) -> Result<(), ApplyError> {
+    let Some(baseline) = baseline else {
+        return Err(ApplyError::NoBaseline);
+    };
+    let lag_secs = fresh::lag(baseline.seconds(), plan.proof().seconds());
+    if fresh::is_stale(lag_secs) {
+        return Err(ApplyError::Stale {
+            uri: plan.selected_uri().to_string(),
+            lag_secs,
+        });
+    }
+    Ok(())
+}
+
+/// Refuse any target whose ownership a restorable manifest cannot record.
+///
+/// `manifest::parse` accepts only uid 0 and gid 0, so a file owned by anyone else would leave a
+/// backup that `--restore` refuses outright. Refused before the backup and before the write: a
+/// backup whose record the parser rejects is not a backup.
+fn check_ownership(
+    captured: &[Captured],
+    owner_uid: u32,
+    owner_gid: u32,
+) -> Result<(), ApplyError> {
+    for c in captured {
+        let Some(original) = c.original.as_ref() else {
+            continue;
+        };
+        if original.uid != owner_uid || original.gid != owner_gid {
+            return Err(ApplyError::Owner {
+                path: c.path.clone(),
+                reason: format!(
+                    "it is owned by uid {} gid {}, and the only ownership apt-scout can record in \
+                     a manifest is uid {owner_uid} gid {owner_gid}",
+                    original.uid, original.gid
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// A planned file paired with the state the plan expected to find on disk.
@@ -360,6 +526,7 @@ fn difference(expected: &FileState, found: &FileState) -> String {
 fn backup(
     backup_root: &Path,
     owner_uid: u32,
+    owner_gid: u32,
     id: &BackupId,
     captured: &[Captured],
 ) -> Result<(), ApplyError> {
@@ -367,21 +534,31 @@ fn backup(
     let dir = backup_root.join(id.as_str());
     DirBuilder::new().mode(DIR_MODE).create(&dir).map_err(|e| {
         if e.kind() == io::ErrorKind::AlreadyExists {
-            // Two runs inside one second: refusing beats overwriting a backup.
-            ApplyError::Exists { path: dir.clone() }
+            // Two runs inside one UTC second: refusing beats overwriting a backup. The directory
+            // is left exactly as the earlier run made it, so this message never suggests acting
+            // on it, and only the seconds of the run's own clock can clear the collision.
+            ApplyError::Exists {
+                path: dir.clone(),
+                reason: "a backup directory for this UTC second already exists, and apt-scout \
+                         neither reuses nor overwrites a backup an earlier run made. Re-run \
+                         apt-scout in a later second; nothing under /etc/apt had been written \
+                         before this failure"
+                    .into(),
+            }
         } else {
             backup_failed(&dir, e)
         }
     })?;
-    // A new file gets the run's effective gid. std exposes no `getegid`, and `unsafe` is reserved
-    // for `geteuid`, so the gid is read from the directory this run just created: a directory
-    // without the set-group-id bit carries the creating process's gid.
-    let owner_gid = fs::symlink_metadata(&dir)
-        .map_err(|e| backup_failed(&dir, e))?
-        .gid();
+    // The umask can only narrow what `DirBuilder` asked for, so 0700 is re-applied here exactly as
+    // the backup root does it; otherwise a narrowed directory would later be reported as an apt
+    // permission problem when the cause is the umask.
+    fs::set_permissions(&dir, fs::Permissions::from_mode(DIR_MODE))
+        .map_err(|e| backup_failed(&dir, e))?;
     for c in captured.iter().filter(|c| c.original.is_some()) {
         copy_original(&dir, c)?;
     }
+    // The record carries the run's own identity, never a directory's gid: the parent of a backup
+    // copy and the parent of a created target can inherit different gids.
     let entries = manifest_entries(captured, owner_uid, owner_gid);
     let text = manifest::render(id, &entries);
     write_manifest(&dir, owner_uid, owner_gid, &text)?;
@@ -451,7 +628,12 @@ fn copy_original(dir: &Path, c: &Captured) -> Result<(), ApplyError> {
     let parent = parent_dir(&dest)?;
     if parent != dir {
         match DirBuilder::new().mode(DIR_MODE).create(parent) {
-            Ok(()) => {}
+            Ok(()) => {
+                // The umask can narrow this directory too, and a narrowed one would be reported
+                // later as an apt permission problem.
+                fs::set_permissions(parent, fs::Permissions::from_mode(DIR_MODE))
+                    .map_err(|e| backup_failed(parent, e))?;
+            }
             // The directory is inside a directory this run just created, so it is only ever the
             // `sources.list.d` of a second copy.
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
@@ -526,37 +708,125 @@ fn write_manifest(
     file.sync_all().map_err(|e| backup_failed(&path, e))
 }
 
+/// Sweep every directory the run is about to write into, once each.
+///
+/// Only the plan's own target directories: both derive from the closed target enumeration, never
+/// from input.
+fn sweep_targets(captured: &[Captured], owner_uid: u32) -> Result<(), ApplyError> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for c in captured {
+        let dir = parent_dir(&c.path)?.to_path_buf();
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    dirs.iter().try_for_each(|dir| sweep_temp(dir, owner_uid))
+}
+
+/// Remove this program's own leftover temp files from one directory.
+///
+/// `SPEC.md` promises that an interrupted write's temp files are cleaned up on the next run, and a
+/// name of ours left in `/etc/apt` would falsify this module's "no half-written files". Four
+/// conditions bound what a privileged `unlink` may be steered to by a name: this program's prefix,
+/// a regular file, the run's own uid, and at most `TEMP_TRIES` names per directory. An entry that
+/// fails one of them is left alone and never reused.
+fn sweep_temp(dir: &Path, owner_uid: u32) -> Result<(), ApplyError> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        // A missing directory holds no leftovers of ours; the write reports it if it cannot write
+        // there either.
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(write_failed(dir, e)),
+    };
+    let mut considered = 0;
+    for entry in entries {
+        if considered == TEMP_TRIES {
+            break;
+        }
+        let entry = entry.map_err(|e| write_failed(dir, e))?;
+        let name = entry.file_name();
+        // A name that is not UTF-8 cannot be one this program wrote.
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !name.starts_with(TEMP_PREFIX) {
+            continue;
+        }
+        considered += 1;
+        let path = entry.path();
+        let meta = fs::symlink_metadata(&path).map_err(|e| write_failed(&path, e))?;
+        // Never a symlink, never a directory, never a device: the name alone may not point the
+        // removal anywhere, and a file this run did not create is not this program's leftover.
+        if !meta.file_type().is_file() || meta.uid() != owner_uid {
+            continue;
+        }
+        fs::remove_file(&path).map_err(|e| write_failed(&path, e))?;
+    }
+    Ok(())
+}
+
 /// Write every captured target: the creations first, then the replacements.
 ///
 /// The order is the security property: a creation that finds the path taken aborts the whole run
-/// while every other target is still untouched.
-fn write_targets(captured: &[Captured]) -> Result<Vec<Target>, ApplyError> {
+/// while every other target is still untouched. Every failure here is reported through
+/// `after_writing`, because from the first landed creation on, "nothing was written" is false.
+fn write_targets(
+    captured: &[Captured],
+    owner_uid: u32,
+    owner_gid: u32,
+) -> Result<Vec<Target>, ApplyError> {
     let mut written = Vec::with_capacity(captured.len());
     for c in captured.iter().filter(|c| c.create_new) {
-        create_one(c)?;
+        create_one(c, owner_uid, owner_gid).map_err(|e| e.after_writing(&written))?;
         written.push(c.target.clone());
     }
     for c in captured.iter().filter(|c| !c.create_new) {
-        replace_one(c)?;
+        replace_one(c).map_err(|e| e.after_writing(&written))?;
         written.push(c.target.clone());
     }
     Ok(written)
 }
 
 /// Create a planned file with an exclusive create, and never overwrite what is there.
-fn create_one(c: &Captured) -> Result<(), ApplyError> {
+fn create_one(c: &Captured, owner_uid: u32, owner_gid: u32) -> Result<(), ApplyError> {
     let file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(FILE_MODE)
         .open(&c.path)
         .map_err(|e| match e.kind() {
-            io::ErrorKind::AlreadyExists => ApplyError::Exists {
-                path: c.path.clone(),
-            },
+            io::ErrorKind::AlreadyExists => {
+                // The file this run planned to create appeared in the meantime; its own path is
+                // the only thing the reader can act on.
+                ApplyError::Exists {
+                    path: c.path.clone(),
+                    reason: "it was free when this run's plan was built from the disk and is \
+                             taken now, and apt-scout never overwrites a path it did not plan to \
+                             replace. Remove or rename that path and re-run"
+                        .into(),
+                }
+            }
             _ => write_failed(&c.path, e),
         })?;
-    let mut handle = &file;
+    if let Err(e) = fill_creation(&file, c, owner_uid, owner_gid) {
+        // A failed creation must not leave a partial file at the target path.
+        let _ = fs::remove_file(&c.path);
+        return Err(e);
+    }
+    sync_dir(parent_dir(&c.path)?, write_failed)
+}
+
+/// Fill a created file and prove it is exactly what the manifest already recorded for it.
+///
+/// The record is written before the file exists, so the claim is checked here, at the point of
+/// use: a file the run cannot describe is removed and the run fails with `Write`.
+fn fill_creation(
+    file: &File,
+    c: &Captured,
+    owner_uid: u32,
+    owner_gid: u32,
+) -> Result<(), ApplyError> {
+    let mut handle = file;
     handle
         .write_all(&c.new_bytes)
         .map_err(|e| write_failed(&c.path, e))?;
@@ -564,7 +834,19 @@ fn create_one(c: &Captured) -> Result<(), ApplyError> {
     file.set_permissions(fs::Permissions::from_mode(FILE_MODE))
         .map_err(|e| write_failed(&c.path, e))?;
     file.sync_all().map_err(|e| write_failed(&c.path, e))?;
-    sync_dir(parent_dir(&c.path)?, write_failed)
+    let meta = file.metadata().map_err(|e| write_failed(&c.path, e))?;
+    let (mode, uid, gid) = (meta.mode() & MODE_MASK, meta.uid(), meta.gid());
+    if mode != FILE_MODE || uid != owner_uid || gid != owner_gid {
+        return Err(ApplyError::Write {
+            path: c.path.clone(),
+            reason: format!(
+                "the manifest already records mode {FILE_MODE:#o} uid {owner_uid} gid {owner_gid} \
+                 for this file, and the file this run created is mode {mode:#o} uid {uid} gid \
+                 {gid}, so the record does not describe what was created"
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// Replace one file through a temp file in its own directory, the mode and owner it already had.
@@ -607,7 +889,16 @@ fn create_temp(dir: &Path) -> Result<(File, PathBuf), ApplyError> {
             Err(e) => return Err(write_failed(&path, e)),
         }
     }
-    Err(ApplyError::Exists { path: leftover })
+    // Every candidate is taken by a name this program chose, so the fix is about those names and
+    // about nothing else in the directory.
+    Err(ApplyError::Exists {
+        path: leftover,
+        reason: format!(
+            "all {TEMP_TRIES} candidate temp names in this directory are taken, and apt-scout \
+             never reuses a leftover temp file as content. Remove the {TEMP_PREFIX}* files in that \
+             directory and re-run"
+        ),
+    })
 }
 
 /// Fill the temp file: the new bytes, then the original's owner, then its mode.
@@ -659,9 +950,9 @@ fn read_state(path: &Path) -> Result<Entry, ApplyError> {
         .read_to_end(&mut bytes)
         .map_err(|e| read_failed(path, e))?;
     if bytes.len() > MAX_FILE_BYTES {
-        return Err(ApplyError::Read {
+        return Err(ApplyError::TooLarge {
             path: path.to_path_buf(),
-            reason: format!("larger than the {MAX_FILE_BYTES} byte limit"),
+            limit: MAX_FILE_BYTES,
         });
     }
 
@@ -711,6 +1002,7 @@ mod tests {
     use super::*;
     use crate::digest::hex;
     use crate::fresh::{self, Probed, SignedDate};
+    use crate::manifest::ManifestError;
     use crate::plan::{PlannedWrite, Platform};
     use crate::verify::SignatureStatus;
     use std::os::unix::fs::symlink;
@@ -718,6 +1010,10 @@ mod tests {
     const LIST: &str = "sources.list";
     const SECURITY: &str = "sources.list.d/system-security.sources";
     const RFC: &str = "Thu, 12 Nov 2026  4:23:38 UTC";
+    /// One second past `RFC` plus `MAX_LAG_SECS`: the first instant a mirror counts as stale.
+    const LATE: &str = "Fri, 13 Nov 2026  4:23:39 UTC";
+    /// An hour before `RFC`: the mirror is ahead of this baseline, which is not staleness.
+    const EARLY: &str = "Thu, 12 Nov 2026  3:23:38 UTC";
     const ARM: &str = "-----BEGIN PGP SIGNED MESSAGE-----";
     /// 1794515445 is `20261112T203045Z`, the id every test run below is dated with.
     const NOW: u64 = 1_794_515_445;
@@ -741,7 +1037,7 @@ mod tests {
         }
 
         /// The uid and gid of the caller: every fixture is its own file, so the writer is handed
-        /// this uid as the backup owner and the tests never need root.
+        /// this identity as the run's owner and the tests never need root.
         fn owner(&self) -> (u32, u32) {
             let meta = fs::metadata(&self.0).expect("temp root metadata");
             (meta.uid(), meta.gid())
@@ -763,6 +1059,18 @@ mod tests {
 
     fn signed(rfc: &str) -> SignedDate {
         fresh::release_date(&format!("{ARM}\nHash: SHA512\n\nDate: {rfc}\n")).expect("signed date")
+    }
+
+    /// A verified date for `rfc`: the only constructor is a `Verified` status plus a parsed date.
+    fn verified(rfc: &str) -> VerifiedDate {
+        SignatureStatus::Verified
+            .verified_date(signed(rfc))
+            .expect("a verified date")
+    }
+
+    /// The run's baseline: the same instant the probe's proof carries.
+    fn baseline() -> VerifiedDate {
+        verified(RFC)
     }
 
     fn probe() -> Probed {
@@ -838,6 +1146,19 @@ mod tests {
             .collect()
     }
 
+    /// The leftover temp name this program writes, for candidate `i`.
+    fn temp_name(i: u32) -> String {
+        format!("{TEMP_PREFIX}{}-{i}", std::process::id())
+    }
+
+    fn exists_reason(err: &ApplyError) -> &str {
+        let ApplyError::Exists { reason, .. } = err else {
+            panic!("not an Exists: {err}");
+        };
+        reason
+    }
+
+    /// Criterion 1: the root check, its message and its exit code.
     #[test]
     fn a_non_root_run_is_refused_with_the_sudo_command() {
         let err = ApplyError::NotRoot;
@@ -845,86 +1166,65 @@ mod tests {
         assert!(line.contains("sudo apt-scout"), "{line}");
         assert!(!line.contains('\n'), "{line}");
         assert_eq!(err.exit_code(), 3);
+        assert_eq!(APT_DIR, "/etc/apt");
+        assert_eq!(BACKUP_ROOT, "/var/backups/apt-scout");
 
         let root = TempRoot::new("root");
         let (uid, _) = root.owner();
         assert_eq!(require_root().is_ok(), uid == 0);
-        // `apply` is the root-only entry point: as a non-root caller it must refuse before it
-        // reads anything, so no part of /etc/apt is touched here.
-        assert_eq!(APT_DIR, "/etc/apt");
-        assert_eq!(BACKUP_ROOT, "/var/backups/apt-scout");
         if uid != 0 {
-            let plan = plan(vec![create(SECURITY)]);
-            assert!(matches!(apply(&plan, NOW), Err(ApplyError::NotRoot)));
+            // `apply` is the root-only entry point: it must refuse before it reads anything, so no
+            // part of /etc/apt is touched here, whatever baseline it is handed.
+            let planned = plan(vec![create(SECURITY)]);
+            assert!(matches!(
+                apply(&planned, Some(&baseline()), NOW),
+                Err(ApplyError::NotRoot)
+            ));
         }
-
-        // Every other refusal is a runtime error whose message says nothing was written.
-        let path = PathBuf::from("/etc/apt/sources.list");
-        let others = [
-            ApplyError::Plan(PlanError::NoProof),
-            ApplyError::Read {
-                path: path.clone(),
-                reason: "Permission denied (os error 13)".into(),
-            },
-            ApplyError::Target {
-                path: path.clone(),
-                reason: "it is a symlink".into(),
-            },
-            ApplyError::Changed {
-                path: path.clone(),
-                reason: "the bytes changed".into(),
-            },
-            ApplyError::Exists { path: path.clone() },
-            ApplyError::Backup {
-                path: path.clone(),
-                reason: "its mode is 0o777, not 0o700".into(),
-            },
-            ApplyError::Write {
-                path: path.clone(),
-                reason: "Permission denied (os error 13)".into(),
-            },
-            ApplyError::Time {
-                secs: 253_402_300_800,
-            },
-        ];
-        for err in &others {
-            assert_eq!(err.exit_code(), 1, "{err}");
-            let text = err.to_string();
-            // Every refusal says what to do next; none of them is a bare OS error.
-            assert!(text.to_lowercase().contains("re-run"), "{text}");
-            if !matches!(err, ApplyError::Plan(_) | ApplyError::Time { .. }) {
-                assert!(text.contains("/etc/apt/sources.list"), "{text}");
-            }
-        }
-        // The OS error is carried verbatim, and a backup failure says what to fix.
-        for at in [1, 6] {
-            let text = others[at].to_string();
-            assert!(text.contains("Permission denied (os error 13)"), "{text}");
-        }
-        assert!(others[5].to_string().contains("0700"), "{}", others[5]);
     }
 
+    /// Criterion 2: a recorded mode loses the file-type bits, and a set-gid mode survives the
+    /// replace, because `fchown` precedes `set_permissions` (chown clears set-id bits).
     #[test]
-    fn capture_records_a_mode_without_the_file_type_bits() {
+    fn a_mode_is_recorded_without_the_file_type_bits_and_a_set_gid_mode_survives() {
         let root = TempRoot::new("mode");
         let apt = root.apt();
-        let path = fixture(&apt, LIST, OLD, 0o755);
+        let (uid, gid) = root.owner();
+        let backup = root.path().join("backup");
+        let path = fixture(&apt, LIST, OLD, 0o2755);
         // `st_mode` carries the file type as well, so an unmasked record of this fixture would be
-        // 0o100755 on both Linux and macOS.
-        assert_eq!(fs::symlink_metadata(&path).expect("meta").mode(), 0o100755);
-        let captured = capture(&apt, &plan(vec![replace(LIST, Some(state(&path)))]))
-            .expect("capture binds the plan to the disk");
-        let recorded = captured[0].original.as_ref().expect("original").mode;
-        assert_eq!(recorded, 0o755);
-        assert_eq!(recorded & !MODE_MASK, 0);
+        // 0o102755 on both Linux and macOS.
+        assert_eq!(fs::symlink_metadata(&path).expect("meta").mode(), 0o102755);
+        let before = state(&path);
+        assert_eq!(before.mode, 0o2755);
+
+        let planned = plan(vec![replace(LIST, Some(before.clone()))]);
+        let new_bytes = planned.writes()[0].new_bytes.clone();
+        let captured = capture(&apt, &planned).expect("capture binds the plan to the disk");
+        assert_eq!(
+            captured[0].original.as_ref().expect("original").mode,
+            0o2755
+        );
+
+        run(&apt, &backup, &planned, Some(&baseline()), NOW, uid, gid)
+            .expect("the set-gid replacement succeeds");
+        let after = state(&path);
+        assert_eq!(after.mode, 0o2755, "the set-gid bit survives the replace");
+        assert_eq!(after.mode & !MODE_MASK, 0);
+        assert_eq!(after.bytes, new_bytes);
+        // The owner is preserved. A root run replacing a file owned by uid 1000 is the case that
+        // matters most, and only D9c's container matrix can build it: a non-root test cannot own
+        // another user's file.
+        assert_eq!((after.uid, after.gid), (before.uid, before.gid));
     }
 
+    /// Criterion 3: the plan is bound to the disk before anything else happens to it.
     #[test]
     fn capture_refuses_a_plan_that_disagrees_with_the_disk() {
         let root = TempRoot::new("bind");
         let apt = root.apt();
         let backup = root.path().join("backup");
-        let (uid, _) = root.owner();
+        let (uid, gid) = root.owner();
         let target = fixture(&apt, LIST, OLD, 0o644);
         let on_disk = state(&target);
 
@@ -937,8 +1237,10 @@ mod tests {
             &apt,
             &backup,
             &plan(vec![replace(LIST, Some(stale))]),
+            Some(&baseline()),
             NOW,
             uid,
+            gid,
         )
         .expect_err("a stale plan is refused");
         assert!(matches!(err, ApplyError::Changed { .. }), "{err}");
@@ -952,8 +1254,10 @@ mod tests {
             &apt,
             &backup,
             &plan(vec![replace(LIST, Some(on_disk))]),
+            Some(&baseline()),
             NOW,
             uid,
+            gid,
         )
         .expect_err("a missing original is refused");
         assert!(matches!(err, ApplyError::Changed { .. }), "{err}");
@@ -961,6 +1265,7 @@ mod tests {
         assert!(!backup.exists(), "{backup:?} must not exist");
     }
 
+    /// Criterion 4: no symlink is ever followed, neither the target nor its directory.
     #[test]
     fn a_hostile_symlink_is_refused_and_the_canary_stays() {
         let root = TempRoot::new("link");
@@ -968,7 +1273,7 @@ mod tests {
         let outside = root.path().join("outside");
         fs::create_dir_all(outside.join("sources.list.d")).expect("outside tree");
         let backup = root.path().join("backup");
-        let (uid, _) = root.owner();
+        let (uid, gid) = root.owner();
         // The canaries hold exactly the bytes the plan was built from, so only the refusal keeps
         // the write away from them.
         let canary = fixture(&outside, "canary.list", b"canary\n", 0o644);
@@ -985,15 +1290,18 @@ mod tests {
             &apt,
             &backup,
             &plan(vec![replace(LIST, Some(state(&canary)))]),
+            Some(&baseline()),
             NOW,
             uid,
+            gid,
         )
         .expect_err("a symlinked target is refused");
         assert!(matches!(err, ApplyError::Target { .. }), "{err}");
         assert_eq!(fs::read(&canary).expect("canary"), b"canary\n");
         assert!(!backup.exists(), "{backup:?} must not exist");
 
-        // (b) `sources.list.d` is a symlink, so the target resolves outside the tree.
+        // (b) `sources.list.d` is a symlink, so the target resolves outside the tree. `lstat` of
+        // the target does not follow only its parent, so this is `check_parent`'s proof.
         fs::remove_file(apt.join(LIST)).expect("remove the link");
         symlink(outside.join("sources.list.d"), apt.join("sources.list.d")).expect("symlink");
         let err = run(
@@ -1003,8 +1311,10 @@ mod tests {
                 "sources.list.d/escape.list",
                 Some(state(&escaped)),
             )]),
+            Some(&baseline()),
             NOW,
             uid,
+            gid,
         )
         .expect_err("a symlinked directory is refused");
         assert!(matches!(err, ApplyError::Target { .. }), "{err}");
@@ -1012,30 +1322,44 @@ mod tests {
         assert!(!backup.exists(), "{backup:?} must not exist");
     }
 
+    /// Criterion 5: the backup root is verified, never trusted.
     #[test]
     fn a_hostile_backup_root_is_refused_and_stays_empty() {
         let root = TempRoot::new("backuproot");
         let apt = root.apt();
-        let (uid, _) = root.owner();
+        let (uid, gid) = root.owner();
         let target = fixture(&apt, LIST, OLD, 0o644);
         let before = state(&target);
         let writes = || plan(vec![replace(LIST, Some(before.clone()))]);
+        let run_with = |backup_root: &Path, planned: &Plan, owner_uid: u32| {
+            run(
+                &apt,
+                backup_root,
+                planned,
+                Some(&baseline()),
+                NOW,
+                owner_uid,
+                gid,
+            )
+        };
 
         // (a) the backup root is a symlink to a directory outside the tree.
         let abroad = root.path().join("abroad");
         fs::create_dir(&abroad).expect("abroad");
         let link = root.path().join("backup-link");
         symlink(&abroad, &link).expect("symlink");
-        let err = run(&apt, &link, &writes(), NOW, uid).expect_err("a symlink is refused");
+        let err = run_with(&link, &writes(), uid).expect_err("a symlink is refused");
         assert!(matches!(err, ApplyError::Backup { .. }), "{err}");
         assert_eq!(entries(&abroad), Vec::<String>::new());
 
         // (b) the backup root belongs to another uid: root runs as uid 0, so this is what a
-        // directory planted by a local user looks like.
+        // directory planted by a local user looks like. The plan only creates, so the ownership
+        // gate finds no file to refuse and the backup root is reached.
+        fs::create_dir(apt.join("sources.list.d")).expect("sources.list.d");
         let foreign = root.path().join("backup-foreign");
         fs::create_dir(&foreign).expect("foreign root");
         fs::set_permissions(&foreign, fs::Permissions::from_mode(DIR_MODE)).expect("mode");
-        let err = run(&apt, &foreign, &writes(), NOW, uid.wrapping_add(1))
+        let err = run_with(&foreign, &plan(vec![create(SECURITY)]), uid.wrapping_add(1))
             .expect_err("another owner is refused");
         assert!(matches!(err, ApplyError::Backup { .. }), "{err}");
         assert_eq!(entries(&foreign), Vec::<String>::new());
@@ -1044,7 +1368,7 @@ mod tests {
         let loose = root.path().join("backup-loose");
         fs::create_dir(&loose).expect("loose root");
         fs::set_permissions(&loose, fs::Permissions::from_mode(0o777)).expect("mode");
-        let err = run(&apt, &loose, &writes(), NOW, uid).expect_err("mode 0777 is refused");
+        let err = run_with(&loose, &writes(), uid).expect_err("mode 0777 is refused");
         assert!(matches!(err, ApplyError::Backup { .. }), "{err}");
         assert!(err.to_string().contains("0o777"), "{err}");
         assert_eq!(entries(&loose), Vec::<String>::new());
@@ -1052,11 +1376,14 @@ mod tests {
         assert_eq!(state(&target), before);
     }
 
+    /// Criterion 6, narrowed: this proves the backup root's *mode control* and nothing more. The
+    /// real write-failure case needs a directory that passes the backup root and still refuses the
+    /// write, which only D9c's S8 container case can build.
     #[test]
-    fn a_backup_that_cannot_be_written_leaves_every_target_alone() {
+    fn an_unwritable_backup_root_is_refused_before_anything_is_written() {
         let root = TempRoot::new("backupfail");
         let apt = root.apt();
-        let (uid, _) = root.owner();
+        let (uid, gid) = root.owner();
         let target = fixture(&apt, LIST, OLD, 0o644);
         let before = state(&target);
         let backup = root.path().join("backup");
@@ -1070,8 +1397,10 @@ mod tests {
             &apt,
             &backup,
             &plan(vec![replace(LIST, Some(before.clone()))]),
+            Some(&baseline()),
             NOW,
             uid,
+            gid,
         )
         .expect_err("an unwritable backup root fails the run");
         assert!(matches!(err, ApplyError::Backup { .. }), "{err}");
@@ -1080,6 +1409,7 @@ mod tests {
         assert_eq!(entries(&backup), Vec::<String>::new());
     }
 
+    /// Criterion 7: a substituted file (same path, same bytes, other inode) is refused.
     #[test]
     fn a_file_swapped_between_capture_and_write_is_refused() {
         let root = TempRoot::new("swap");
@@ -1099,6 +1429,7 @@ mod tests {
         assert_eq!(fs::read(&target).expect("bytes"), OLD);
     }
 
+    /// Criterion 8: an edit in place, same inode, is refused too.
     #[test]
     fn bytes_edited_in_place_between_capture_and_write_are_refused() {
         let root = TempRoot::new("edit");
@@ -1118,37 +1449,101 @@ mod tests {
         assert_eq!(fs::read(&target).expect("bytes"), edited);
     }
 
+    /// Criterion 9: `EEXIST` aborts the whole run, and the three `Exists` sites say three
+    /// different things with three different fixes.
     #[test]
     fn a_file_that_appears_where_the_run_creates_aborts_the_whole_run() {
         let root = TempRoot::new("exists");
         let apt = root.apt();
+        let (uid, gid) = root.owner();
+        let backup = root.path().join("backup");
         let list = fixture(&apt, LIST, OLD, 0o644);
         let before = state(&list);
         let planned = plan(vec![replace(LIST, Some(before.clone())), create(SECURITY)]);
         let captured = capture(&apt, &planned).expect("capture binds the plan to the disk");
 
-        // The window between the capture and the write: someone else creates the file first.
+        // (a) the window between the capture and the write: someone else creates the file first.
         let created = fixture(&apt, SECURITY, b"planted\n", 0o644);
-
-        let err = write_targets(&captured).expect_err("the creation finds the path taken");
+        let err = write_targets(&captured, uid, gid).expect_err("the creation finds it taken");
         assert!(matches!(err, ApplyError::Exists { .. }), "{err}");
         // The creations run before the replacements, so the other target is untouched too.
         assert_eq!(fs::read(&created).expect("planted"), b"planted\n");
         assert_eq!(state(&list), before);
+        let create_taken = err;
+
+        // (b) the `<id>` collision: a backup for this UTC second already exists. The backup root
+        // itself is verified first, so it is 0700 before the collision is built.
+        fs::create_dir(&backup).expect("backup root");
+        fs::set_permissions(&backup, fs::Permissions::from_mode(DIR_MODE)).expect("mode");
+        let held = backup.join(ID);
+        fs::create_dir(&held).expect("an earlier backup");
+        let err = run(
+            &apt,
+            &backup,
+            &plan(vec![replace(LIST, Some(before.clone()))]),
+            Some(&baseline()),
+            NOW,
+            uid,
+            gid,
+        )
+        .expect_err("a taken backup name is refused");
+        assert!(matches!(err, ApplyError::Exists { .. }), "{err}");
+        let id_taken = err;
+
+        // (c) the temp-name site: every candidate name in the directory is taken.
+        for i in 0..TEMP_TRIES {
+            fixture(&apt, &temp_name(i), b"leftover\n", FILE_MODE);
+        }
+        let err = create_temp(&apt).expect_err("every candidate name is taken");
+        assert!(matches!(err, ApplyError::Exists { .. }), "{err}");
+        let temp_taken = err;
+
+        let texts = [
+            create_taken.to_string(),
+            id_taken.to_string(),
+            temp_taken.to_string(),
+        ];
+        let reasons = [
+            exists_reason(&create_taken).to_string(),
+            exists_reason(&id_taken).to_string(),
+            exists_reason(&temp_taken).to_string(),
+        ];
+        for (a, b) in [(0, 1), (0, 2), (1, 2)] {
+            assert_ne!(
+                reasons[a], reasons[b],
+                "site {a} and site {b} share a reason"
+            );
+            assert_ne!(texts[a], texts[b], "site {a} and site {b} share a message");
+        }
+        for text in &texts {
+            assert!(text.to_lowercase().contains("re-run"), "{text}");
+            // A write-phase failure may not claim the system is clean.
+            assert!(!text.contains("Nothing was written"), "{text}");
+        }
+        // The create-collision message is about the target path the user has to act on.
+        assert!(texts[0].contains(SECURITY), "{}", texts[0]);
+        // The `<id>` collision leaves the earlier backup alone: the fix is a later second, and the
+        // message must never suggest removing a backup.
+        assert!(!texts[1].to_lowercase().contains("remove"), "{}", texts[1]);
+        assert!(texts[1].contains("later second"), "{}", texts[1]);
+        // The temp-name message names the files it is about.
+        assert!(texts[2].contains(TEMP_PREFIX), "{}", texts[2]);
     }
 
+    /// Criterion 10: a replace keeps content, mode and owner, through a rename.
     #[test]
     fn a_replace_keeps_content_mode_and_owner_and_leaves_no_temp_file() {
         let root = TempRoot::new("replace");
         let apt = root.apt();
-        let (uid, _) = root.owner();
+        let (uid, gid) = root.owner();
         let backup = root.path().join("backup");
         let target = fixture(&apt, LIST, OLD, 0o640);
         let before = state(&target);
         let planned = plan(vec![replace(LIST, Some(before.clone()))]);
         let new_bytes = planned.writes()[0].new_bytes.clone();
 
-        let outcome = run(&apt, &backup, &planned, NOW, uid).expect("the replacement succeeds");
+        let outcome = run(&apt, &backup, &planned, Some(&baseline()), NOW, uid, gid)
+            .expect("the replacement succeeds");
         assert_eq!(outcome.written, vec![Target::parse(LIST).expect("target")]);
         assert_eq!(outcome.backup_id.as_str(), ID);
 
@@ -1161,44 +1556,53 @@ mod tests {
         assert_eq!(entries(&apt), vec![LIST.to_string()]);
     }
 
+    /// Criterion 11: what the run creates is 0600 with the exact bytes, and the `create` record
+    /// matches the created file's own `fstat`, not a directory's gid.
     #[test]
-    fn a_created_file_has_mode_0600_and_a_create_record() {
+    fn a_created_file_is_0600_and_its_record_matches_its_own_fstat() {
         let root = TempRoot::new("create");
         let apt = root.apt();
         // A stock install has `sources.list.d`; the run creates the file in it, never the directory.
         fs::create_dir(apt.join("sources.list.d")).expect("sources.list.d");
-        let (uid, _) = root.owner();
+        let (uid, gid) = root.owner();
         let backup = root.path().join("backup");
         let planned = plan(vec![create(SECURITY)]);
         let new_bytes = planned.writes()[0].new_bytes.clone();
 
-        let outcome = run(&apt, &backup, &planned, NOW, uid).expect("the creation succeeds");
+        let outcome = run(&apt, &backup, &planned, Some(&baseline()), NOW, uid, gid)
+            .expect("the creation succeeds");
         let created = apt.join(SECURITY);
         assert_eq!(fs::read(&created).expect("bytes"), new_bytes);
         let meta = fs::symlink_metadata(&created).expect("meta");
-        assert_eq!(meta.mode() & MODE_MASK, 0o600);
+        assert_eq!(meta.mode() & MODE_MASK, FILE_MODE);
         assert_eq!(
             outcome.written,
             vec![Target::parse(SECURITY).expect("target")]
         );
 
-        // The record describes what this run created: the new bytes' digest, 0600 and the owner
-        // the file actually carries.
+        // The record describes what this run created. A `<id>` directory can carry a gid the file
+        // does not (a set-group-id `sources.list.d` is a real configuration), which is why the
+        // record names the run's own identity and `fill_creation` proves the file carries it; a
+        // non-root test cannot make the two differ, so that case is D9c's.
         let text = fs::read_to_string(backup.join(ID).join(MANIFEST)).expect("manifest");
         let line = format!(
-            "file {SECURITY} create {} 384 {} {}",
+            "file {SECURITY} create {} {} {} {}",
             hex(&sha256(&new_bytes)),
+            meta.mode() & MODE_MASK,
             meta.uid(),
             meta.gid()
         );
         assert!(text.contains(&line), "{text}");
+        assert_eq!((meta.uid(), meta.gid()), (uid, gid));
     }
 
+    /// Criterion 12: the backup holds every replaced file, its manifest and nothing else. The
+    /// parse round trip is criterion 15's; here the text is exactly what `render` produces.
     #[test]
     fn the_backup_holds_every_replaced_file_and_its_manifest() {
         let root = TempRoot::new("backup");
         let apt = root.apt();
-        let (uid, _) = root.owner();
+        let (uid, gid) = root.owner();
         let backup = root.path().join("backup");
         let list = fixture(&apt, LIST, OLD, 0o644);
         let extra = fixture(
@@ -1213,7 +1617,8 @@ mod tests {
             replace("sources.list.d/extra.list", Some(extra_state.clone())),
         ]);
 
-        let outcome = run(&apt, &backup, &planned, NOW, uid).expect("the write succeeds");
+        let outcome = run(&apt, &backup, &planned, Some(&baseline()), NOW, uid, gid)
+            .expect("the write succeeds");
         let dir = backup.join(outcome.backup_id.as_str());
         // Every copy is byte-identical to the original, with the original's mode and owner.
         for (name, s) in [
@@ -1226,7 +1631,8 @@ mod tests {
             assert_eq!(meta.mode() & MODE_MASK, s.mode, "{name}");
             assert_eq!((meta.uid(), meta.gid()), (s.uid, s.gid), "{name}");
         }
-        // The backup root and every directory inside it are 0700, the manifest is 0600.
+        // The backup root and every directory inside it are 0700 whatever the umask is, and the
+        // manifest is 0600.
         for held in [&backup, &dir, &dir.join("sources.list.d")] {
             let meta = fs::symlink_metadata(held).expect("backup metadata");
             assert_eq!(meta.mode() & MODE_MASK, DIR_MODE, "{}", held.display());
@@ -1258,13 +1664,436 @@ mod tests {
                 line("sources.list.d/extra.list", &extra_state)
             )
         );
-        // `manifest::parse` defines the format but accepts nothing except root-owned records, so
-        // only a root run can read this manifest back.
-        if uid == 0 {
-            let parsed = manifest::parse(&text).expect("parse the manifest back");
-            assert_eq!(parsed.id(), &outcome.backup_id);
-            assert_eq!(parsed.entries().len(), 2);
-            assert_eq!(parsed.entries()[0].digest, sha256(&list_state.bytes));
+    }
+
+    /// Criterion 13: no verified baseline, or a mirror behind it, refuses before the first disk
+    /// operation; a baseline the mirror matches or trails is accepted.
+    #[test]
+    fn a_missing_or_later_baseline_refuses_before_the_first_disk_operation() {
+        let root = TempRoot::new("fresh");
+        let apt = root.apt();
+        let (uid, gid) = root.owner();
+        let backup = root.path().join("backup");
+        let target = fixture(&apt, LIST, OLD, 0o644);
+        let before = state(&target);
+        // The plan is built from the disk as it is now, so a run that lands does not leave the
+        // next case with a stale plan.
+        let planned = || plan(vec![replace(LIST, Some(state(&target)))]);
+        let run_with = |baseline: Option<&VerifiedDate>, backup_root: &Path| {
+            run(&apt, backup_root, &planned(), baseline, NOW, uid, gid)
+        };
+
+        // (a) no baseline at all: the writer cannot establish one, because it may not fetch.
+        let err = run_with(None, &backup).expect_err("a run without a baseline is refused");
+        assert!(matches!(err, ApplyError::NoBaseline), "{err}");
+        assert_eq!(err.exit_code(), 1);
+        assert!(err.to_string().contains("Nothing was written"), "{err}");
+        assert_eq!(state(&target), before);
+        assert!(!backup.exists(), "{backup:?} must not exist");
+
+        // (b) the mirror is `MAX_LAG_SECS + 1` behind the baseline: the same stale rule the
+        // pipeline uses, with the URI and the lag in the message.
+        let late = verified(LATE);
+        let err = run_with(Some(&late), &backup).expect_err("a stale mirror is refused");
+        let ApplyError::Stale { uri, lag_secs } = &err else {
+            panic!("not a Stale: {err}");
+        };
+        assert_eq!(uri, "https://m.example/ubuntu");
+        assert_eq!(*lag_secs, fresh::MAX_LAG_SECS + 1);
+        let text = err.to_string();
+        assert!(text.contains("https://m.example/ubuntu"), "{text}");
+        assert!(
+            text.contains(&(fresh::MAX_LAG_SECS + 1).to_string()),
+            "{text}"
+        );
+        assert_eq!(state(&target), before);
+        assert!(!backup.exists(), "{backup:?} must not exist");
+
+        // (c) the baseline is behind the mirror (the mirror is fresher): accepted.
+        let early = verified(EARLY);
+        let outcome = run_with(Some(&early), &root.path().join("backup-early"))
+            .expect("a mirror ahead of the baseline is not stale");
+        assert_eq!(outcome.backup_id.as_str(), ID);
+
+        // (d) the baseline is exactly the plan's proof: accepted.
+        let equal = verified(RFC);
+        run_with(Some(&equal), &root.path().join("backup-equal"))
+            .expect("a baseline equal to the proof is accepted");
+    }
+
+    /// Criterion 14: a target the run does not own is refused before the backup, because a record
+    /// the manifest parser rejects is not a backup.
+    #[test]
+    fn a_target_the_run_does_not_own_is_refused_before_the_backup() {
+        let root = TempRoot::new("owner");
+        let apt = root.apt();
+        let (uid, gid) = root.owner();
+        let backup = root.path().join("backup");
+        let target = fixture(&apt, LIST, OLD, 0o644);
+        let before = state(&target);
+        let planned = plan(vec![replace(LIST, Some(before.clone()))]);
+
+        // The run's owner is not the file's owner, which is what a root run meeting a user's file
+        // looks like; a non-root test can build the same refusal by handing the writer another
+        // uid, because the gate compares the file to the run, not the file to the process.
+        let err = run(
+            &apt,
+            &backup,
+            &planned,
+            Some(&baseline()),
+            NOW,
+            uid.wrapping_add(1),
+            gid,
+        )
+        .expect_err("a foreign target is refused");
+        assert!(matches!(err, ApplyError::Owner { .. }), "{err}");
+        let text = err.to_string();
+        assert!(
+            text.contains("will not rewrite a file it cannot describe in a restorable manifest"),
+            "{text}"
+        );
+        assert!(text.contains(&before.uid.to_string()), "{text}");
+        assert!(text.contains(&uid.wrapping_add(1).to_string()), "{text}");
+        assert!(text.contains("Nothing was written"), "{text}");
+        assert_eq!(state(&target), before);
+        assert!(!backup.exists(), "{backup:?} must not exist");
+
+        // The gate's own rule, on the same captured state: the run's owner passes.
+        let captured = capture(&apt, &planned).expect("capture binds the plan to the disk");
+        assert!(check_ownership(&captured, uid, gid).is_ok());
+    }
+
+    /// Criterion 15: the gate's rule *is* the manifest parser's rule, provable without root.
+    #[test]
+    fn the_writers_records_round_trip_through_the_manifest_parser() {
+        let root_owned = FileState {
+            dev: 1,
+            ino: 2,
+            mode: 0o644,
+            uid: 0,
+            gid: 0,
+            bytes: OLD.to_vec(),
+        };
+        let new_bytes = b"Types: deb\nURIs: https://m.example/ubuntu\n".to_vec();
+        let captured = vec![
+            Captured {
+                target: Target::parse(LIST).expect("target"),
+                path: PathBuf::from(APT_DIR).join(LIST),
+                original: Some(root_owned),
+                new_bytes: new_bytes.clone(),
+                create_new: false,
+            },
+            Captured {
+                target: Target::parse(SECURITY).expect("target"),
+                path: PathBuf::from(APT_DIR).join(SECURITY),
+                original: None,
+                new_bytes: new_bytes.clone(),
+                create_new: true,
+            },
+        ];
+        let id = BackupId::from_secs(NOW).expect("backup id");
+
+        // A root-owned state is exactly what the parser accepts, so the writer's own records for
+        // such a run round-trip.
+        let entries = manifest_entries(&captured, 0, 0);
+        assert_eq!(entries[0].action, Action::Replace);
+        assert_eq!(entries[1].action, Action::Create);
+        assert_eq!(entries[1].mode, FILE_MODE);
+        let text = manifest::render(&id, &entries);
+        let parsed = manifest::parse(&text).expect("a root-owned state round-trips");
+        assert_eq!(parsed.id(), &id);
+        assert_eq!(parsed.entries(), &entries[..]);
+        // And the ownership gate accepts the same state under the same owner.
+        assert!(check_ownership(&captured, 0, 0).is_ok());
+
+        // The same entries with gid 100 are refused by the parser *and* by the gate, which is the
+        // proof that the gate's rule is the parser's rule.
+        let foreign: Vec<ManifestEntry> = entries
+            .iter()
+            .map(|e| ManifestEntry {
+                gid: 100,
+                ..e.clone()
+            })
+            .collect();
+        assert!(matches!(
+            manifest::parse(&manifest::render(&id, &foreign)),
+            Err(ManifestError::Ownership(_))
+        ));
+        let foreign_captured: Vec<Captured> = captured
+            .iter()
+            .map(|c| Captured {
+                target: c.target.clone(),
+                path: c.path.clone(),
+                original: c.original.as_ref().map(|s| FileState {
+                    gid: 100,
+                    ..s.clone()
+                }),
+                new_bytes: c.new_bytes.clone(),
+                create_new: c.create_new,
+            })
+            .collect();
+        assert!(matches!(
+            check_ownership(&foreign_captured, 0, 0),
+            Err(ApplyError::Owner { .. })
+        ));
+    }
+
+    /// Criterion 16: the sweep removes only this program's own regular files, and only up to
+    /// `TEMP_TRIES` per directory.
+    #[test]
+    fn the_sweep_removes_only_this_programs_own_regular_leftovers() {
+        let root = TempRoot::new("sweep");
+        let apt = root.apt();
+        let (uid, gid) = root.owner();
+        let backup = root.path().join("backup");
+        let target = fixture(&apt, LIST, OLD, 0o644);
+        let before = state(&target);
+
+        // One leftover of ours, one symlink of that name, one directory of that name.
+        let leftover = fixture(&apt, &temp_name(0), b"leftover\n", FILE_MODE);
+        let linked = root.path().join("linked");
+        fs::write(&linked, b"elsewhere\n").expect("link destination");
+        let symlink_name = apt.join(temp_name(1));
+        symlink(&linked, &symlink_name).expect("symlink");
+        let dir_name = apt.join(temp_name(2));
+        fs::create_dir(&dir_name).expect("directory");
+
+        let outcome = run(
+            &apt,
+            &backup,
+            &plan(vec![replace(LIST, Some(before.clone()))]),
+            Some(&baseline()),
+            NOW,
+            uid,
+            gid,
+        )
+        .expect("the sweep never blocks a write");
+        assert_eq!(outcome.written, vec![Target::parse(LIST).expect("target")]);
+        assert!(!leftover.exists(), "the leftover is swept");
+        assert!(symlink_name.exists(), "a symlink is never swept");
+        assert!(dir_name.exists(), "a directory is never swept");
+        assert_eq!(fs::read(&linked).expect("link destination"), b"elsewhere\n");
+
+        // A file this run did not create is not its leftover: with another owner, nothing goes.
+        let foreign = fixture(&apt, &temp_name(3), b"someone else's\n", FILE_MODE);
+        sweep_temp(&apt, uid.wrapping_add(1)).expect("the sweep runs");
+        assert!(foreign.exists(), "another owner's file is never swept");
+        sweep_temp(&apt, uid).expect("the sweep runs");
+        assert!(!foreign.exists(), "the run's own leftover is swept");
+
+        // The bound: more than `TEMP_TRIES` leftovers still let the run succeed, and only
+        // `TEMP_TRIES` of them go.
+        let bound = TempRoot::new("sweep-bound");
+        let apt = bound.apt();
+        let (uid, gid) = bound.owner();
+        let backup = bound.path().join("backup");
+        let list = fixture(&apt, LIST, OLD, 0o644);
+        let before = state(&list);
+        // Names the replacement never tries, so the leftover count alone decides the outcome.
+        let extra: Vec<PathBuf> = (TEMP_TRIES..TEMP_TRIES + TEMP_TRIES + 4)
+            .map(|i| fixture(&apt, &temp_name(i), b"leftover\n", FILE_MODE))
+            .collect();
+        run(
+            &apt,
+            &backup,
+            &plan(vec![replace(LIST, Some(before))]),
+            Some(&baseline()),
+            NOW,
+            uid,
+            gid,
+        )
+        .expect("many leftovers do not block the write");
+        let left = extra.iter().filter(|p| p.exists()).count();
+        assert_eq!(
+            left,
+            extra.len() - TEMP_TRIES as usize,
+            "the sweep is bounded to {TEMP_TRIES} entries per directory"
+        );
+    }
+
+    /// Criterion 17: a write-phase failure says what the run had already changed, never that the
+    /// system is untouched, and a failed creation leaves no file behind.
+    #[test]
+    fn a_failed_write_names_what_the_run_had_already_changed() {
+        // The variants whose failure provably precedes every mutation may say it; the two the
+        // write phase can produce may not.
+        let path = PathBuf::from(APT_DIR).join(LIST);
+        let before_any_write = [
+            ApplyError::Plan(PlanError::NoProof),
+            ApplyError::NoBaseline,
+            ApplyError::Stale {
+                uri: "https://m.example/ubuntu".into(),
+                lag_secs: fresh::MAX_LAG_SECS + 1,
+            },
+            ApplyError::Read {
+                path: path.clone(),
+                reason: "Permission denied (os error 13)".into(),
+            },
+            ApplyError::TooLarge {
+                path: path.clone(),
+                limit: MAX_FILE_BYTES,
+            },
+            ApplyError::Target {
+                path: path.clone(),
+                reason: "it is a symlink".into(),
+            },
+            ApplyError::Owner {
+                path: path.clone(),
+                reason: "it is owned by uid 1000 gid 1000".into(),
+            },
+            ApplyError::Changed {
+                path: path.clone(),
+                reason: "the bytes changed".into(),
+            },
+            ApplyError::Backup {
+                path: path.clone(),
+                reason: "its mode is 0o777, not 0o700".into(),
+            },
+            ApplyError::Time {
+                secs: 253_402_300_800,
+            },
+        ];
+        for err in &before_any_write {
+            assert_eq!(err.exit_code(), 1, "{err}");
+            let text = err.to_string();
+            assert!(text.contains("Nothing was written"), "{text}");
+            assert!(text.to_lowercase().contains("re-run"), "{text}");
+            assert!(!text.contains('\n'), "{text}");
+            if !matches!(
+                err,
+                ApplyError::Plan(_)
+                    | ApplyError::NoBaseline
+                    | ApplyError::Stale { .. }
+                    | ApplyError::Time { .. }
+            ) {
+                assert!(text.contains("/etc/apt/sources.list"), "{text}");
+            }
         }
+        // The OS error travels verbatim.
+        assert!(
+            before_any_write[3]
+                .to_string()
+                .contains("Permission denied (os error 13)")
+        );
+
+        // (a) a creation lands, then the replacement cannot write: the message names the created
+        // target and does not claim the system is clean.
+        let root = TempRoot::new("truthful");
+        let apt = root.apt();
+        let (uid, gid) = root.owner();
+        if uid != 0 {
+            let backup = root.path().join("backup");
+            fs::create_dir(apt.join("sources.list.d")).expect("sources.list.d");
+            let list = fixture(&apt, LIST, OLD, 0o644);
+            let before = state(&list);
+            let planned = plan(vec![replace(LIST, Some(before.clone())), create(SECURITY)]);
+            // `sources.list.d` stays writable, so the creation lands; the directory holding the
+            // replacement refuses the temp file. Root ignores the mode, so only a non-root run
+            // can build this.
+            fs::set_permissions(&apt, fs::Permissions::from_mode(0o500)).expect("mode");
+            let err = run(&apt, &backup, &planned, Some(&baseline()), NOW, uid, gid)
+                .expect_err("the replacement cannot be written");
+            fs::set_permissions(&apt, fs::Permissions::from_mode(0o755)).expect("mode");
+            assert!(matches!(err, ApplyError::Write { .. }), "{err}");
+            let text = err.to_string();
+            assert!(text.contains(SECURITY), "{text}");
+            assert!(
+                text.contains("already written sources.list.d/system-security.sources"),
+                "{text}"
+            );
+            assert!(!text.contains("Nothing was written"), "{text}");
+            // The creation really did land, which is why the message may not claim otherwise.
+            assert_eq!(
+                fs::read(apt.join(SECURITY)).expect("the creation landed"),
+                planned.writes()[1].new_bytes
+            );
+            assert_eq!(state(&list), before);
+        }
+
+        // (b) a creation that fails after the file exists leaves nothing at the target path. The
+        // only non-root-reachable failure there is the record mismatch: the manifest's `create`
+        // entry names an owner the created file does not carry.
+        let bare = TempRoot::new("truthful-create");
+        let apt = bare.apt();
+        let (uid, gid) = bare.owner();
+        fs::create_dir(apt.join("sources.list.d")).expect("sources.list.d");
+        let planned = plan(vec![create(SECURITY)]);
+        let captured = capture(&apt, &planned).expect("capture binds the plan to the disk");
+        let err = write_targets(&captured, uid.wrapping_add(1), gid)
+            .expect_err("the record does not describe the created file");
+        assert!(matches!(err, ApplyError::Write { .. }), "{err}");
+        let text = err.to_string();
+        assert!(text.contains("the record does not describe"), "{text}");
+        assert!(!text.contains("Nothing was written"), "{text}");
+        assert!(
+            !apt.join(SECURITY).exists(),
+            "a failed creation leaves no file at the target path"
+        );
+
+        // (c) the re-validation before the rename refuses after a creation landed: the finding is
+        // the disk's, but the message may still not claim a clean system.
+        let swapped = TempRoot::new("truthful-changed");
+        let apt = swapped.apt();
+        let (uid, gid) = swapped.owner();
+        fs::create_dir(apt.join("sources.list.d")).expect("sources.list.d");
+        let list = fixture(&apt, LIST, OLD, 0o644);
+        let before = state(&list);
+        let planned = plan(vec![replace(LIST, Some(before.clone())), create(SECURITY)]);
+        let captured = capture(&apt, &planned).expect("capture binds the plan to the disk");
+        // The window between the re-validation and the rename: the file is edited in place, so
+        // only the check just before the rename can catch it.
+        fs::write(&list, b"deb http://evil.example/ubuntu noble main\n").expect("edit");
+        let err = write_targets(&captured, uid, gid)
+            .expect_err("the re-validation refuses the changed file");
+        assert!(matches!(err, ApplyError::Write { .. }), "{err}");
+        let text = err.to_string();
+        assert!(text.contains(SECURITY), "{text}");
+        assert!(
+            text.contains("changed while this run was writing"),
+            "{text}"
+        );
+        assert!(!text.contains("Nothing was written"), "{text}");
+        // The creation landed and the edited file is untouched: no temp file survives either.
+        assert!(apt.join(SECURITY).exists());
+        assert_eq!(
+            fs::read(&list).expect("bytes"),
+            b"deb http://evil.example/ubuntu noble main\n"
+        );
+        assert!(!entries(&apt).iter().any(|n| n.starts_with(TEMP_PREFIX)));
+    }
+
+    /// Criterion 18: an oversize file is a size refusal, never a permission hint.
+    #[test]
+    fn a_file_over_the_size_limit_is_too_large_and_not_unreadable() {
+        let root = TempRoot::new("oversize");
+        let apt = root.apt();
+        let target = fixture(&apt, LIST, OLD, 0o644);
+        let captured = capture(&apt, &plan(vec![replace(LIST, Some(state(&target)))]))
+            .expect("capture binds the plan to the disk");
+        assert_eq!(captured.len(), 1);
+
+        // The file grows between the plan and the capture, in place: same inode, more bytes.
+        let ino = fs::symlink_metadata(&target).expect("meta").ino();
+        fs::write(&target, vec![b'x'; MAX_FILE_BYTES + 1]).expect("grow in place");
+        assert_eq!(fs::symlink_metadata(&target).expect("meta").ino(), ino);
+
+        let err = match read_state(&target) {
+            Ok(_) => panic!("an oversize file is accepted"),
+            Err(e) => e,
+        };
+        let ApplyError::TooLarge { path, limit } = &err else {
+            panic!("not a TooLarge: {err}");
+        };
+        assert_eq!(path, &target);
+        assert_eq!(*limit, MAX_FILE_BYTES);
+        let text = err.to_string();
+        assert!(text.contains("Nothing was written"), "{text}");
+        assert!(!text.contains("permission"), "{text}");
+        assert!(!text.contains("Check that root can read"), "{text}");
+        assert!(text.to_lowercase().contains("re-run"), "{text}");
+        assert_eq!(
+            fs::symlink_metadata(&target).expect("meta").len(),
+            MAX_FILE_BYTES as u64 + 1
+        );
     }
 }
