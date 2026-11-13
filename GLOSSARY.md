@@ -56,4 +56,6 @@
 
 **Locale**: The language a run prints its messages in, taken from the shell environment. It selects display text and nothing else.
 
-**Message catalog**: Every message in one locale, one entry per English message. A run prints from the catalog it selected, or from the English entry when that catalog has none, so a message is either translated whole or printed in English.
+**Message id**: The stable table key a message is addressed by, chosen for the message's role and never derived from its English text, so rewriting English never moves a translated entry.
+
+**Message catalog**: Every message in one locale, one entry per message id. A run prints from the catalog it selected, or from the English entry when that catalog has none, so a message is either translated whole or printed in English.
