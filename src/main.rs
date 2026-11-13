@@ -32,6 +32,7 @@ const MAX_CANDIDATES: usize = 30;
 /// The `--top` default (SPEC.md CLI: `--top <N>` shows N best mirrors, default 5).
 const DEFAULT_TOP: usize = 5;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Args {
     country: Option<String>,
     top: usize,
@@ -59,35 +60,39 @@ fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args, Strin
     };
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
+        // Each short alias is the same arm as its long form, and the value-taking ones name the
+        // spelling the user typed in their error, so a message never points at a flag they did not
+        // write. Only these aliases exist; `-a`, `-r` and `-R` stay reserved for flags that are not
+        // implemented yet, and bundling (`-lyc NO`) stays an unknown option.
         match arg.as_str() {
-            "--list" => a.list = true,
-            "--yes" => a.yes = true,
-            "--https-only" => a.https_only = true,
-            "--no-geo" => a.no_geo = true,
-            "--verbose" => a.verbose = true,
-            "--country" => {
-                let cc = it
-                    .next()
-                    .ok_or("--country needs a two-letter country code, for example --country LT")?;
+            "--list" | "-l" => a.list = true,
+            "--yes" | "-y" => a.yes = true,
+            "--https-only" | "-s" => a.https_only = true,
+            "--no-geo" | "-n" => a.no_geo = true,
+            "--verbose" | "-v" => a.verbose = true,
+            "--country" | "-c" => {
+                let cc = it.next().ok_or(format!(
+                    "{arg} needs a two-letter country code, for example {arg} LT"
+                ))?;
                 let cc = cc.to_ascii_uppercase();
                 if cc.len() != 2 || !cc.chars().all(|c| c.is_ascii_uppercase()) {
                     return Err(format!(
-                        "--country '{cc}' is not a two-letter country code, for example LT"
+                        "{arg} '{cc}' is not a two-letter country code, for example LT"
                     ));
                 }
                 a.country = Some(cc);
             }
-            "--top" => {
+            "--top" | "-t" => {
                 let n = it
                     .next()
-                    .ok_or("--top needs a number, for example --top 5")?;
+                    .ok_or(format!("{arg} needs a number, for example {arg} 5"))?;
                 a.top = n
                     .parse()
                     .ok()
                     .filter(|n| *n > 0)
-                    .ok_or(format!("--top '{n}' is not a positive number"))?;
+                    .ok_or(format!("{arg} '{n}' is not a positive number"))?;
             }
-            "-h" | "--help" => {
+            arg if help_requested(arg) => {
                 println!("{HELP}");
                 std::process::exit(0);
             }
@@ -97,26 +102,35 @@ fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args, Strin
     Ok(a)
 }
 
-/// `--help`, once: the flags, what a run does with them, the exit codes and one example each. The
-/// rule that used to repeat under every table lives here instead.
+/// `-h` and `--help` are one request, kept out of the flag match so both spellings print the same
+/// text and exit 0 before any run starts.
+fn help_requested(arg: &str) -> bool {
+    matches!(arg, "-h" | "--help")
+}
+
+/// `--help`, once: the flags (long form first, the short alias beside it), what a run does with
+/// them, the exit codes and one example each. The rule that used to repeat under every table lives
+/// here instead. Examples and the `sudo` line stay long-form, so a copied command is unambiguous.
 const HELP: &str = "\
 apt-scout — pick the fastest Ubuntu mirror and use it
 
 USAGE
   apt-scout [OPTIONS]
 
+  -h, --help          this text, then exit 0
+
 DISCOVERY
-  --country <CC>   two-letter country; overrides detection
-  --no-geo         no geolocation; requires --country
-  --https-only     only https mirrors
-  --top <N>        rows to show (default 5)
-  --verbose        per-mirror detail and full rejection reasons
+  -c, --country <CC>  two-letter country; overrides detection
+  -n, --no-geo        no geolocation; requires --country
+  -s, --https-only    only https mirrors
+  -t, --top <N>       rows to show (default 5)
+  -v, --verbose       per-mirror detail and full rejection reasons
 
 MODE
-  (no flag)        non-root: recommend and print the sudo line, exit 3
-                   root:      back up, confirm, rewrite the apt sources
-  --list           ranked table and planned change only; never writes
-  --yes            skip the one confirmation
+  (no flag)           non-root: recommend and print the sudo line, exit 3
+                      root:      back up, confirm, rewrite the apt sources
+  -l, --list          ranked table and planned change only; never writes
+  -y, --yes           skip the one confirmation
 
 TABLE
   sig reads ok only for a verified -updates InRelease; only ok may authorize a write.
@@ -1992,6 +2006,115 @@ mod tests {
         .unwrap();
         assert!(args.no_geo);
         assert_eq!(args.country.as_deref(), Some("LT"));
+    }
+
+    /// Every approved short alias is the same flag as its long form: the same `Args`, so the same
+    /// decisions. The pairing is the contract — a row that drifted from its long form would be a
+    /// flag that silently changed meaning.
+    #[test]
+    fn short_aliases_parse_to_the_same_args_as_their_long_forms() {
+        let parse = |argv: &[&str]| {
+            parse_args_from(argv.iter().copied().map(str::to_string))
+                .unwrap_or_else(|e| panic!("{argv:?} must parse: {e}"))
+        };
+        for (long, short) in [
+            (&["--country", "LT"][..], &["-c", "LT"][..]),
+            (&["--top", "3"][..], &["-t", "3"][..]),
+            (&["--list"][..], &["-l"][..]),
+            (&["--yes"][..], &["-y"][..]),
+            (
+                &["--no-geo", "--country", "LT"][..],
+                &["-n", "-c", "LT"][..],
+            ),
+            (&["--https-only"][..], &["-s"][..]),
+            (&["--verbose"][..], &["-v"][..]),
+        ] {
+            assert_eq!(parse(short), parse(long), "{short:?} must be {long:?}");
+        }
+        // A run that typed only aliases still recommends a long-form command to copy.
+        assert_eq!(
+            sudo_command(&parse(&["-c", "LT", "-y", "-t", "3"])),
+            "sudo apt-scout --country LT --top 3 --yes"
+        );
+    }
+
+    /// `-h` and `--help` are one request: both spellings print the same text and exit 0, and that
+    /// text lists the short form beside every long one, `-h` included.
+    #[test]
+    fn help_is_recognized_in_both_spellings_and_lists_every_short_form() {
+        assert!(help_requested("-h"));
+        assert!(help_requested("--help"));
+        // Neither a bundled flag nor a misspelling is a help request.
+        assert!(!help_requested("-hx"));
+        assert!(!help_requested("--helpp"));
+        for (long, short) in [
+            ("--help", "-h"),
+            ("--country", "-c"),
+            ("--no-geo", "-n"),
+            ("--https-only", "-s"),
+            ("--top", "-t"),
+            ("--verbose", "-v"),
+            ("--list", "-l"),
+            ("--yes", "-y"),
+        ] {
+            let pair = format!("{short}, {long}");
+            assert!(
+                HELP.contains(&pair),
+                "{pair} is missing from --help:\n{HELP}"
+            );
+        }
+    }
+
+    /// One alias and one value per argument, never a bundle: `-lyc NO` stays an unknown option. The
+    /// reserved shorts stay unknown too, so `--any`, `--restore` and `--refresh` can still claim
+    /// them.
+    #[test]
+    fn unknown_and_bundled_short_options_are_refused() {
+        for argv in [
+            &["-lyc", "NO"][..],
+            &["-ly"][..],
+            &["-a"][..],
+            &["-r"][..],
+            &["-R"][..],
+        ] {
+            let err = parse_args_from(argv.iter().copied().map(str::to_string))
+                .expect_err(&format!("{argv:?} must be refused"));
+            assert_eq!(
+                err,
+                format!("unknown option '{}'; try --help", argv[0]),
+                "{argv:?}"
+            );
+        }
+    }
+
+    /// A value-taking alias names itself in its error, so the message points at the spelling the
+    /// user typed instead of one they did not.
+    #[test]
+    fn a_missing_or_invalid_value_names_the_spelling_that_was_typed() {
+        let err = |argv: &[&str]| {
+            parse_args_from(argv.iter().copied().map(str::to_string))
+                .expect_err(&format!("{argv:?} must be refused"))
+        };
+        assert_eq!(
+            err(&["-c"]),
+            "-c needs a two-letter country code, for example -c LT"
+        );
+        assert_eq!(
+            err(&["--country"]),
+            "--country needs a two-letter country code, for example --country LT"
+        );
+        assert_eq!(err(&["-t"]), "-t needs a number, for example -t 5");
+        assert_eq!(err(&["--top"]), "--top needs a number, for example --top 5");
+        assert_eq!(
+            err(&["-c", "L1"]),
+            "-c 'L1' is not a two-letter country code, for example LT"
+        );
+        assert_eq!(err(&["-t", "0"]), "-t '0' is not a positive number");
+        // The value is the next argument, never a flag glued on: `-c -y` reads `-y` as its country.
+        assert_eq!(
+            err(&["-c", "-y"]),
+            "-c '-Y' is not a two-letter country code, for example LT"
+        );
     }
 
     #[test]
