@@ -194,7 +194,9 @@ rc=0; got=$(run none ubuntu:24.04 /apt-scout --country ZZ 2>&1) || rc=$?
 if [ "$rc" = 2 ] && [[ "$got" == *"unknown country code 'ZZ'"* ]] && [[ "$got" != *"note: geolocation"* ]] && [[ "$got" != *"cannot reach"* ]]; then pass "unknown country -> rejected before network"; else fail "unknown country -> exit $rc: $got"; fi
 
 # 7. Offline: unsupported architecture detected from dpkg is rejected before geolocation/network.
-rc=0; got=$(run none ubuntu:24.04 sh -c 'mkdir -p /tmp/fakebin; printf "#!/bin/sh\\necho arm64\\n" > /tmp/fakebin/dpkg; chmod +x /tmp/fakebin/dpkg; PATH=/tmp/fakebin:/usr/bin:/bin /apt-scout --country LT' 2>&1) || rc=$?
+#    The binary reads `/usr/bin/dpkg`, not `dpkg` through `PATH` (SPEC.md Privilege boundary: a root
+#    run's commands have fixed paths), so the fake replaces that file instead of shadowing the name.
+rc=0; got=$(run none ubuntu:24.04 sh -c 'printf "#!/bin/sh\\necho arm64\\n" > /usr/bin/dpkg; chmod +x /usr/bin/dpkg; /apt-scout --country LT' 2>&1) || rc=$?
 if [ "$rc" = 4 ] && [[ "$got" == *"architecture 'arm64'"* ]] && [[ "$got" != *"note: geolocation"* ]] && [[ "$got" != *"cannot reach"* ]]; then pass "unsupported architecture -> rejected before network"; else fail "unsupported architecture -> exit $rc: $got"; fi
 
 # 8. Offline: bad arguments are usage errors (exit 2) that say what to do.
@@ -208,25 +210,31 @@ rc=0; got=$(run none ubuntu:24.04 /apt-scout --country LT 2>&1) || rc=$?
 if [ "$rc" = 1 ] && [[ "$got" == *"no mirror list is available"* ]] && [[ "$got" == *"launchpad.net"* ]] && [[ "$got" == *"mirrors.ubuntu.com/LT.txt"* ]]; then pass "no network -> clear error, exit 1"; else fail "no network -> exit $rc: $got"; fi
 
 # 10. Live: with only third-party apt sources, inventory must stop before reference/mirror probing.
-rc=0; got=$(run bridge ubuntu:24.04 sh -c 'rm -f /etc/apt/sources.list; rm -rf /etc/apt/sources.list.d; mkdir -p /etc/apt/sources.list.d; printf "deb https://packages.example.org/ubuntu noble main\\n" > /etc/apt/sources.list.d/third-party.list; /apt-scout --no-geo --country LT' 2>&1) || rc=$?
+#     `--list` is the read-only mode whatever the uid (SPEC.md CLI table), so this case stays about
+#     the inventory and never asks to write.
+rc=0; got=$(run bridge ubuntu:24.04 sh -c 'rm -f /etc/apt/sources.list; rm -rf /etc/apt/sources.list.d; mkdir -p /etc/apt/sources.list.d; printf "deb https://packages.example.org/ubuntu noble main\\n" > /etc/apt/sources.list.d/third-party.list; /apt-scout --list --no-geo --country LT' 2>&1) || rc=$?
 if [ "$rc" = 0 ] && [[ "$got" == *"APT source inventory (read-only)"* ]] && [[ "$got" == *"not an official Ubuntu archive"* ]] && [[ "$got" == *"No official Ubuntu apt source URI can be changed"* ]] && [[ "$got" != *"baseline"* ]] && [[ "$got" != *"ranked"* ]]; then pass "third-party-only apt sources -> stop before probes"; else fail "third-party-only sources -> exit $rc: $(echo "$got" | head -8)"; fi
 
 # 11. Live: missing gpgv keeps ranking read-only usable but marks signatures unavailable.
-rc=0; got=$(run bridge ubuntu:24.04 sh -c 'mv /usr/bin/gpgv /usr/bin/gpgv.disabled 2>/dev/null || true; /apt-scout --no-geo --country LT --top 2' 2>&1) || rc=$?
+#     The case is about the ranking, and a root run without `--list` would try to write, so `--list`
+#     keeps it on the read-only path it was written for.
+rc=0; got=$(run bridge ubuntu:24.04 sh -c 'mv /usr/bin/gpgv /usr/bin/gpgv.disabled 2>/dev/null || true; /apt-scout --list --no-geo --country LT --top 2' 2>&1) || rc=$?
 if [ "$rc" = 0 ] && [[ "$got" == *"unavailable ("* ]] && [[ "$got" == *" 1  http"* ]]; then pass "missing gpgv -> unavailable signatures, ranking still works"; else fail "missing gpgv -> exit $rc: $(echo "$got" | head -8)"; fi
 
 # 12. Live (needs internet): real Launchpad + real mirrors, every supported Ubuntu release.
-#    Checks shape, not specific mirrors: a ranked table with at least one fresh mirror.
+#    Checks shape, not specific mirrors: a ranked table with at least one fresh mirror. `--list` is
+#    the read-only mode, so a root container reports the table and the planned change without writing.
 for v in 20.04 22.04 24.04 26.04; do
   if [ $# -gt 0 ]; then case " $* " in *" $v "*) ;; *) continue ;; esac; fi
-  rc=0; got=$(run bridge "ubuntu:$v" /apt-scout --country LT --top 3 2>&1) || rc=$?
+  rc=0; got=$(run bridge "ubuntu:$v" /apt-scout --list --country LT --top 3 2>&1) || rc=$?
   if [ "$rc" = 0 ] && [[ "$got" == *"country Lithuania"* ]] && [[ "$got" == *"APT source inventory (read-only)"* ]] && [[ "$got" == *"source file: /etc/apt/"* ]] && [[ "$got" == *" 1  http"* ]]; then pass "ubuntu:$v live LT -> source inventory and ranked table"; else fail "ubuntu:$v live LT -> exit $rc: $(echo "$got" | head -6)"; fi
 done
 
 # 13. Live: a real verified row. The base images have no ubuntu-keyring, so install the two
 #     dependencies the .deb declares before asserting the positive path. Exit 9 means that install
-#     failed, not that apt-scout is broken.
-rc=0; got=$(run bridge ubuntu:24.04 sh -c 'apt-get update -qq >/dev/null 2>&1; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gpgv ubuntu-keyring >/dev/null 2>&1 || { echo DEPENDENCY_INSTALL_FAILED; exit 9; }; /apt-scout --no-geo --country LT --top 3' 2>&1) || rc=$?
+#     failed, not that apt-scout is broken. `--list` keeps this about the verified ranking: a write
+#     case would need the harness, not this binary.
+rc=0; got=$(run bridge ubuntu:24.04 sh -c 'apt-get update -qq >/dev/null 2>&1; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gpgv ubuntu-keyring >/dev/null 2>&1 || { echo DEPENDENCY_INSTALL_FAILED; exit 9; }; /apt-scout --list --no-geo --country LT --top 3' 2>&1) || rc=$?
 if [ "$rc" = 0 ] && [[ "$got" == *"Reference InRelease signature: verified"* ]] && printf '%s\n' "$got" | grep -qE 'verified +[0-9]+m'; then
   pass "live LT -> reference and at least one mirror verified"
 else

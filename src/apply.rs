@@ -1133,10 +1133,9 @@ mod tests {
         fresh::release_date(&format!("{ARM}\nHash: SHA512\n\nDate: {rfc}\n")).expect("signed date")
     }
 
-    /// A verified date for `rfc`: the only constructor is a `Verified` status plus a parsed date.
+    /// A verified date for `rfc`: minted the way the writer gets one, by the verifier's in-region read.
     fn verified(rfc: &str) -> VerifiedDate {
-        SignatureStatus::Verified
-            .verified_date(signed(rfc))
+        crate::verify::verified_date_for_test(&format!("{ARM}\nHash: SHA512\n\nDate: {rfc}\n"))
             .expect("a verified date")
     }
 
@@ -1150,12 +1149,12 @@ mod tests {
         Probed {
             url: "https://m.example/ubuntu".to_string(),
             updates_date: date.seconds(),
-            signed_updates_date: Some(date),
+            verified_updates: Some(verified(RFC)),
             lag_secs: 0,
             throughput_bps: 0,
             latency_ms: 0,
             same_as: false,
-            signature: SignatureStatus::Verified,
+            signature: SignatureStatus::verified_for_test(),
         }
     }
 

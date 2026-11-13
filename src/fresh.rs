@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use crate::verify::{self, SignatureStatus};
+use crate::verify::{SignatureStatus, VerifiedDate};
 
 /// Stale mirrors are rejected when `-updates` lags the reference by more than this (SPEC step 8).
 pub const MAX_LAG_SECS: i64 = 24 * 3600;
@@ -90,7 +90,10 @@ pub fn parse_date(value: &str) -> Result<i64, DateError> {
 
 /// A `Date` parsed from inside an `InRelease`'s cleartext-signed region.
 /// The field is private and `release_date` is the only function that builds one, so holding a
-/// `SignedDate` means the strict parse accepted this body's armour (SPEC step 8).
+/// `SignedDate` means the strict parse accepted this body's armour (SPEC step 8). It authorizes
+/// nothing on its own: the freshness trust boundary is `verify::VerifiedDate`, and no function here
+/// can turn a `SignedDate` into one. Verification reads the region again, from the bytes `gpgv`
+/// accepted, and only then is there a proof.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SignedDate(i64);
 
@@ -102,6 +105,12 @@ impl SignedDate {
 
 /// Extract the `Date:` header from the cleartext-signed region only (SPEC step 8): anything but
 /// whitespace-only lines before the armour is refused, because `gpgv` hashes nothing there.
+///
+/// It hands out a `SignedDate`, a parse result and not a proof. The trust boundary is
+/// `verify::VerifiedDate`, whose only constructor runs this parse over the bytes `gpgv` has just
+/// accepted, so a caller holding arbitrary text can reach a date here and never a verified one
+/// (D25). In production the only caller is that constructor; display uses `release_date_tolerant`,
+/// and the write harness reads this one to report what the strict parse refused.
 pub fn release_date(text: &str) -> Result<SignedDate, DateError> {
     let mut lines = text.lines();
     let head = lines.by_ref().find(|l| !l.trim().is_empty());
@@ -157,25 +166,19 @@ pub fn is_stale(lag_secs: i64) -> bool {
 pub struct Probed {
     pub url: String,
     /// The mirror's `-updates` `InRelease` `Date` as displayed and used for lag/ranking; kept as an
-    /// absolute date because a trusted value is a date, not a lag.
+    /// absolute date because a trusted value is a date, not a lag. Ranking reads this one only.
     pub updates_date: i64,
-    /// `Some` only when `updates_date` came from inside the cleartext-signed region.
-    pub signed_updates_date: Option<SignedDate>,
+    /// The verified `-updates` `Date`, `Some` only when verification handed one out for this mirror's
+    /// deciding `InRelease`. It is not derived here: `VerifiedDate` has one constructor, inside
+    /// `verify`, and it reads the date from the bytes `gpgv` accepted (D25). `None` means no write
+    /// may use this mirror.
+    pub verified_updates: Option<VerifiedDate>,
     pub lag_secs: i64,
     pub throughput_bps: u64,
     pub latency_ms: u64,
     pub same_as: bool,
     /// Verification result of this mirror's deciding `-updates` InRelease (SPEC step 8).
     pub signature: SignatureStatus,
-}
-
-impl Probed {
-    /// The trusted date of this mirror: `None` when either half of the proof is missing, including
-    /// when the displayed date sits outside the signed region.
-    #[cfg_attr(not(test), allow(dead_code))] // production consumer is D9; D6f asserts it in tests
-    pub fn verified_updates(&self) -> Option<verify::VerifiedDate> {
-        self.signature.verified_date(self.signed_updates_date?)
-    }
 }
 
 /// Rank: lag ascending (equal `Date` forms a group), then within a group throughput descending and
@@ -277,11 +280,6 @@ mod tests {
         .unwrap()
     }
 
-    /// A `SignedDate` built the only way anything outside `fresh` can build one: by parsing.
-    fn signed(rfc: &str) -> SignedDate {
-        release_date(&format!("{ARMOUR_HEAD}\nHash: SHA512\n\nDate: {rfc}\n")).unwrap()
-    }
-
     #[test]
     fn release_date_reads_only_the_signed_region() {
         // the real signed fixture still parses, and the value is the signed one
@@ -364,7 +362,7 @@ mod tests {
         Probed {
             url: url.into(),
             updates_date: 1_794_457_418,
-            signed_updates_date: Some(signed("Thu, 12 Nov 2026  4:23:38 UTC")),
+            verified_updates: None,
             lag_secs: lag,
             throughput_bps: mbps * 1_000_000,
             latency_ms: ms,
@@ -373,32 +371,29 @@ mod tests {
         }
     }
 
-    /// The same mirror with a `Verified` signature, so only the status differs from `p()`.
-    fn pv(url: &str) -> Probed {
-        Probed {
-            signature: SignatureStatus::Verified,
-            ..p(url, 0, 100, 10, false)
-        }
+    /// A verified date for `rfc`, minted the only way a test can: the verifier's own in-region read.
+    fn verified(rfc: &str) -> Option<VerifiedDate> {
+        crate::verify::verified_date_for_test(&format!(
+            "{ARMOUR_HEAD}\nHash: SHA512\n\nDate: {rfc}\n"
+        ))
     }
 
+    /// Ranking must not change: it reads the unverified `updates_date` path only, so two lists that
+    /// differ in nothing but the proof rank identically.
     #[test]
-    fn probed_verified_updates_requires_verified() {
-        assert_eq!(
-            p("http://a.example/ubuntu", 0, 10, 10, false).verified_updates(),
-            None
-        );
-        assert_eq!(
-            pv("http://a.example/ubuntu")
-                .verified_updates()
-                .map(|d| d.seconds()),
-            Some(1_794_457_418)
-        );
-        // a verified status around a date from outside the signed region yields nothing either:
-        let outside = Probed {
-            signed_updates_date: None,
-            ..pv("http://b.example/ubuntu")
-        };
-        assert_eq!(outside.verified_updates(), None);
+    fn ranking_ignores_whether_a_mirror_has_a_proof() {
+        let without = vec![
+            p("fast", 0, 100, 10, false),
+            p("slow", 0, 50, 60, false),
+            p("behind", 21_600, 900, 5, false),
+        ];
+        let mut with = without.clone();
+        for mirror in &mut with {
+            mirror.signature = SignatureStatus::verified_for_test();
+            mirror.verified_updates = verified("Thu, 12 Nov 2026  4:23:38 UTC");
+        }
+        assert_eq!(urls(&rank(without)), ["fast", "slow", "behind"]);
+        assert_eq!(urls(&rank(with)), ["fast", "slow", "behind"]);
     }
 
     fn urls(v: &[Probed]) -> Vec<&str> {

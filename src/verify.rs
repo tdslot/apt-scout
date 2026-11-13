@@ -1,6 +1,7 @@
 //! OpenPGP verification for `InRelease` using the system `gpgv` and Ubuntu archive keyring.
 //!
-//! Ranking may use an unverified `Date`; any future write decision must require `Verified`.
+//! Ranking may use an unverified `Date`; a write decision requires `Verified`, and `Verified`
+//! cannot be built without this module's `gpgv` pass (D25).
 //! No shell is used, the executable and keyring paths are fixed, and the environment is cleared.
 
 use std::fmt;
@@ -22,10 +23,32 @@ pub const MAX_INRELEASE_BYTES: usize = 512 * 1024;
 const GPGV_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_STATUS_BYTES: u64 = 1024 * 1024;
 
+/// The token a successful verification hands out: `gpgv` reported `GOODSIG` and `VALIDSIG`, exited
+/// zero and reported no bad signature, and it carries the `Date` read inside the region `gpgv`
+/// hashed, taken from the very bytes it accepted. Both halves are private to this module and only
+/// `verify_inrelease_with_timeout` builds one, so no other code path in this crate — the CLI
+/// included — can produce a `VerifiedDate`, and no caller can pair a proof with a date it chose
+/// (D25, `docs/threat-model.md` 3.10). A `compile_fail` doctest cannot say that (the crate has no
+/// `[lib]` target); `the_write_proof_is_minted_only_in_the_verifier` and
+/// `a_verified_date_carries_the_date_of_the_verified_region_only` are the executable half.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerifiedProof(Option<VerifiedDate>);
+
+impl VerifiedProof {
+    /// The `Date` read inside the region `gpgv` hashed. `None` when that region carries no `Date:`
+    /// this crate can parse: a signature can be good for a body with no usable date.
+    fn date(self) -> Option<VerifiedDate> {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SignatureStatus {
-    /// `gpgv` reported a valid signature from the configured Ubuntu archive keyring.
-    Verified,
+    /// `gpgv` reported a valid signature from the configured Ubuntu archive keyring. It carries the
+    /// proof token, and the token carries the `Date` read inside the region `gpgv` hashed, so the
+    /// only way to hold this variant is to have verification hand it to you, and the only date it
+    /// can yield is that one.
+    Verified(VerifiedProof),
     /// The data was readable but is unsigned, malformed, altered, or signed by an unknown key.
     Invalid(String),
     /// Verification could not run (missing tool/keyring, unsafe temp state, size limit, spawn error).
@@ -34,14 +57,36 @@ pub enum SignatureStatus {
 
 impl SignatureStatus {
     pub fn is_verified(&self) -> bool {
-        matches!(self, SignatureStatus::Verified)
+        matches!(self, SignatureStatus::Verified(_))
+    }
+
+    /// The `Date` this verification read inside the region it hashed, if any.
+    ///
+    /// It takes no date argument, and there is no other route to a `VerifiedDate`: the only
+    /// expression in the crate that builds one is `region_date`, called on the bytes `gpgv` has just
+    /// accepted. D25's second abuse path — take a value that genuinely verified, change its date,
+    /// and re-derive the proof from it — has nothing left to hold onto.
+    pub fn proof_date(&self) -> Option<VerifiedDate> {
+        match self {
+            SignatureStatus::Verified(proof) => proof.date(),
+            SignatureStatus::Invalid(_) | SignatureStatus::Unavailable(_) => None,
+        }
+    }
+
+    /// A proof with no date, for the tests that need a `Verified` status and nothing more.
+    /// `verified_date_for_test` is the dated form. Both are compiled out of every shipped build (W1
+    /// and W2 pin the harness out of the binary), so the shipped binary has one door into
+    /// `Verified`, and it is the `gpgv` run.
+    #[cfg(any(test, apt_scout_write_harness))]
+    pub fn verified_for_test() -> SignatureStatus {
+        SignatureStatus::Verified(VerifiedProof(None))
     }
 }
 
 impl fmt::Display for SignatureStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SignatureStatus::Verified => write!(f, "verified"),
+            SignatureStatus::Verified(_) => write!(f, "verified"),
             SignatureStatus::Invalid(why) => write!(f, "invalid ({why})"),
             SignatureStatus::Unavailable(why) => write!(f, "unavailable ({why})"),
         }
@@ -49,9 +94,9 @@ impl fmt::Display for SignatureStatus {
 }
 
 /// A freshness `Date` that came out of an `InRelease` whose signature is `Verified`.
-/// The field is private, and the only constructor needs both halves of the proof: a `Verified`
-/// status and a `fresh::SignedDate`, which only the strict parser inside `fresh` builds. So a write
-/// path can take `VerifiedDate` and cannot be handed a date from outside the signed region.
+/// The field is private and `region_date` is the only expression in the crate that builds one, so
+/// a write path can take a `VerifiedDate` and there is no way to obtain one for a date it chose:
+/// nothing takes a date from the caller, and no `fresh::SignedDate` reaches a proof on its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VerifiedDate(fresh::SignedDate);
 
@@ -61,11 +106,20 @@ impl VerifiedDate {
     }
 }
 
-impl SignatureStatus {
-    /// The date is usable as a trusted freshness value only when this status is `Verified`.
-    pub fn verified_date(&self, date: fresh::SignedDate) -> Option<VerifiedDate> {
-        self.is_verified().then_some(VerifiedDate(date))
-    }
+/// The `Date` inside the region `gpgv` hashed, read from the same bytes it accepted, and the only
+/// `VerifiedDate` constructor in the crate (D25). Bytes the signature does not cover — anything
+/// before the armour — are refused by the strict parse, so such a `Date` never becomes a proof.
+fn region_date(data: &[u8]) -> Option<VerifiedDate> {
+    let text = std::str::from_utf8(data).ok()?;
+    fresh::release_date(text).ok().map(VerifiedDate)
+}
+
+/// The date the strict parse reads from `text`, with a proof attached: the tests' and the write
+/// harness's stand-in for a `gpgv` pass. Compiled out of every shipped build, like
+/// `SignatureStatus::verified_for_test`.
+#[cfg(any(test, apt_scout_write_harness))]
+pub fn verified_date_for_test(text: &str) -> Option<VerifiedDate> {
+    region_date(text.as_bytes())
 }
 
 fn private_temp_dir() -> Result<PathBuf, String> {
@@ -277,7 +331,7 @@ fn verify_inrelease_with_timeout(
             || l.starts_with("[GNUPG:] NO_PUBKEY ")
     });
     if exit_status.success() && has_good && has_valid && !has_bad {
-        SignatureStatus::Verified
+        SignatureStatus::Verified(VerifiedProof(region_date(data)))
     } else {
         let reason = status
             .lines()
@@ -297,7 +351,7 @@ mod tests {
 
     #[test]
     fn display_is_explicit_for_every_state() {
-        assert_eq!(SignatureStatus::Verified.to_string(), "verified");
+        assert_eq!(SignatureStatus::verified_for_test().to_string(), "verified");
         assert!(
             SignatureStatus::Invalid("bad".into())
                 .to_string()
@@ -342,9 +396,12 @@ mod tests {
         let keyring = fixture("ubuntu-archive-keyring.gpg");
         let good = std::fs::read(fixture("noble-updates-InRelease")).unwrap();
         let bad = std::fs::read(fixture("noble-updates-InRelease.tampered")).unwrap();
+        let status = verify_inrelease_with(&good, &gpgv, &keyring);
+        // Verified, and the proof carries the date that body's signed region declares.
+        assert!(status.is_verified(), "{status}");
         assert_eq!(
-            verify_inrelease_with(&good, &gpgv, &keyring),
-            SignatureStatus::Verified
+            status.proof_date().map(|d| d.seconds()),
+            Some(1_794_472_142)
         );
         assert!(matches!(
             verify_inrelease_with(&bad, &gpgv, &keyring),
@@ -432,7 +489,7 @@ mod tests {
         );
         let status =
             verify_inrelease_with_timeout(b"signed data", &gpgv, &keyring, Duration::from_secs(5));
-        assert_eq!(status, SignatureStatus::Verified);
+        assert_eq!(status, SignatureStatus::verified_for_test());
         std::fs::remove_dir_all(temp).unwrap();
     }
 
@@ -470,28 +527,70 @@ mod tests {
         assert!(matches!(status, SignatureStatus::Unavailable(_)));
     }
 
+    /// D25's second abuse path, pinned: no caller can get a `VerifiedDate` for a date it chose.
+    ///
+    /// The way it used to be expressible was a `Verified` status plus a date of the caller's —
+    /// mint nothing, but take a value that verified and re-derive the proof from a different date.
+    /// `proof_date()` takes no date argument and the only builder of a `VerifiedDate` is
+    /// `region_date`, run on the bytes `gpgv` accepted. So a clean body hands out the date inside
+    /// its signed region, and a body with the checker's own date glued in front of the armour hands
+    /// out nothing at all. This crate has no `[lib]` target, so a `compile_fail` doctest cannot
+    /// state it; this test and `the_write_proof_is_minted_only_in_the_verifier` are the executable
+    /// half.
+    #[cfg(unix)]
     #[test]
-    fn verified_date_requires_a_verified_status() {
-        // The strict parse refuses a prefixed body, so no `SignedDate` exists to gate on at all:
-        let forged = "Date: Thu, 1 Jan 2099 00:00:00 UTC\n-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nOrigin: Ubuntu\nDate: Thu, 12 Nov 2026  4:23:38 UTC\n";
-        assert!(fresh::release_date(forged).is_err());
-        let signed = fresh::release_date("-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nDate: Thu, 12 Nov 2026  4:23:38 UTC\n").unwrap();
+    fn a_verified_date_carries_the_date_of_the_verified_region_only() {
+        let (temp, gpgv, keyring) = fake_gpgv(
+            "region-date",
+            "#!/bin/sh\nprintf '%s\\n' '[GNUPG:] GOODSIG 1234 Ubuntu Archive Automatic Signing Key' '[GNUPG:] VALIDSIG 1234 5678'\nexit 0\n",
+        );
+        let check = |body: &str| {
+            verify_inrelease_with_timeout(body.as_bytes(), &gpgv, &keyring, Duration::from_secs(5))
+        };
+        // A clean cleartext-signed body: the proof carries the `Date` inside the signed region.
+        let clean = "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nOrigin: Ubuntu\nDate: Thu, 12 Nov 2026  4:23:38 UTC\n-----BEGIN PGP SIGNATURE-----\n";
+        let status = check(clean);
+        assert!(status.is_verified(), "{status}");
         assert_eq!(
-            SignatureStatus::Verified
-                .verified_date(signed)
-                .map(|d| d.seconds()),
+            status.proof_date().map(|d| d.seconds()),
             Some(1_794_457_418)
         );
-        assert!(
-            SignatureStatus::Invalid("bad".into())
-                .verified_date(signed)
-                .is_none()
+        // The same body with a `Date` the checker chose glued in front of the armour. `gpgv`
+        // accepts a prefixed body (`gpgv_accepts_a_prefixed_body`), so that date is in the very
+        // file that was verified — and it still never becomes a proof, because the in-region parse
+        // refuses the body outright. This is the shape D25's second abuse path needed.
+        let prefixed = format!("Date: Thu, 1 Jan 2099 00:00:00 UTC\n{clean}");
+        let status = check(&prefixed);
+        assert!(status.is_verified(), "{status}");
+        assert_eq!(
+            status.proof_date(),
+            None,
+            "a Date in front of the armour is not covered by the signature"
         );
-        assert!(
-            SignatureStatus::Unavailable("missing".into())
-                .verified_date(signed)
-                .is_none()
+        std::fs::remove_dir_all(temp).unwrap();
+        // A status that did not verify carries no date at all, whatever date is on offer.
+        assert_eq!(SignatureStatus::Invalid("bad".into()).proof_date(), None);
+        assert_eq!(
+            SignatureStatus::Unavailable("missing".into()).proof_date(),
+            None
         );
+        assert_eq!(SignatureStatus::verified_for_test().proof_date(), None);
+    }
+
+    /// A body that verifies but carries no `Date:` this crate can read is still `Verified`, and the
+    /// proof carries no date, so nothing downstream can be handed one.
+    #[cfg(unix)]
+    #[test]
+    fn a_verified_body_without_a_usable_date_hands_out_no_date() {
+        let (temp, gpgv, keyring) = fake_gpgv(
+            "dateless",
+            "#!/bin/sh\nprintf '%s\\n' '[GNUPG:] GOODSIG 1234 Ubuntu Archive Automatic Signing Key' '[GNUPG:] VALIDSIG 1234 5678'\nexit 0\n",
+        );
+        let body = b"-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nOrigin: Ubuntu\n";
+        let status = verify_inrelease_with_timeout(body, &gpgv, &keyring, Duration::from_secs(5));
+        std::fs::remove_dir_all(temp).unwrap();
+        assert_eq!(status, SignatureStatus::verified_for_test());
+        assert_eq!(status.proof_date(), None);
     }
 
     /// Why the parser, not `gpgv`, has to enforce the signed region (P1-1): `gpgv` exits 0 on a
@@ -503,9 +602,49 @@ mod tests {
         let good = std::fs::read(fixture("noble-updates-InRelease")).unwrap();
         let mut prefixed = b"Date: Thu, 1 Jan 2099 00:00:00 UTC\n".to_vec();
         prefixed.extend_from_slice(&good);
-        assert_eq!(
-            verify_inrelease_with(&prefixed, &gpgv, &keyring),
-            SignatureStatus::Verified
+        let status = verify_inrelease_with(&prefixed, &gpgv, &keyring);
+        assert!(status.is_verified(), "{status}");
+        // …and the prefix's `Date` is never a proof: the in-region parse refuses that body, so the
+        // verified date is absent rather than the checker's.
+        assert_eq!(status.proof_date(), None);
+    }
+
+    /// The proof cannot be minted outside this module (D25, `docs/threat-model.md` 3.10).
+    ///
+    /// `SignatureStatus::Verified` carries a `VerifiedProof` whose only field is private here, so the
+    /// token exists only where `gpgv` reported a good signature; every other module has to reach it
+    /// through `verified_for_test`, which a `cfg(test)` or `apt_scout_write_harness` build compiles
+    /// and the shipped binary does not (W1/W2 pin the harness out of it). A `compile_fail` doctest
+    /// cannot state this: the crate has no `[lib]` target, so no documentation test is ever compiled.
+    /// This test is the executable half — it reads every source file of the crate and fails when a
+    /// second `VerifiedProof(...)` or a second `VerifiedDate(...)` appears outside `src/verify.rs`.
+    /// The second check is D25's other abuse path: a `VerifiedDate` for a date the caller chose needs
+    /// a constructor, and there is exactly one, over bytes `gpgv` accepted.
+    #[test]
+    fn the_write_proof_is_minted_only_in_the_verifier() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&src).expect("the crate's source directory") {
+            let path = entry.expect("a source file").path();
+            if path.extension().is_none_or(|ext| ext != "rs") || path == src.join("verify.rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("a source file is readable UTF-8");
+            assert!(
+                !text.contains("VerifiedProof("),
+                "{} mints a write proof; only src/verify.rs may (D25)",
+                path.display()
+            );
+            assert!(
+                !text.contains("VerifiedDate("),
+                "{} builds a verified date; only src/verify.rs may (D25)",
+                path.display()
+            );
+            checked += 1;
+        }
+        assert!(
+            checked >= 5,
+            "expected the crate's modules, checked {checked}"
         );
     }
 }
