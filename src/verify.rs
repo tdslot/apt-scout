@@ -22,10 +22,20 @@ pub const MAX_INRELEASE_BYTES: usize = 512 * 1024;
 const GPGV_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_STATUS_BYTES: u64 = 1024 * 1024;
 
+/// The token a successful verification hands out: `gpgv` reported `GOODSIG` and `VALIDSIG`, exited
+/// zero and reported no bad signature. The field is private to this module and only
+/// `verify_inrelease_with_timeout` builds one, so no other code path in this crate — the CLI
+/// included — can produce a value `VerifiedDate` accepts as proof (D25, `docs/threat-model.md`
+/// 3.10). A `compile_fail` doctest cannot say that (the crate has no `[lib]` target);
+/// `the_write_proof_is_minted_only_in_the_verifier` is the executable half of the invariant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerifiedProof(());
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SignatureStatus {
-    /// `gpgv` reported a valid signature from the configured Ubuntu archive keyring.
-    Verified,
+    /// `gpgv` reported a valid signature from the configured Ubuntu archive keyring. It carries the
+    /// proof token, so the only way to hold this variant is to have verification hand it to you.
+    Verified(VerifiedProof),
     /// The data was readable but is unsigned, malformed, altered, or signed by an unknown key.
     Invalid(String),
     /// Verification could not run (missing tool/keyring, unsafe temp state, size limit, spawn error).
@@ -34,14 +44,22 @@ pub enum SignatureStatus {
 
 impl SignatureStatus {
     pub fn is_verified(&self) -> bool {
-        matches!(self, SignatureStatus::Verified)
+        matches!(self, SignatureStatus::Verified(_))
+    }
+
+    /// A proof for the tests and for the write harness, which is a test artifact of its own (W1/W2
+    /// pin it out of the shipped binary). Compiled out of every shipped build, so this is not a
+    /// second door into `Verified`: the shipped binary has one, and it is the `gpgv` run.
+    #[cfg(any(test, apt_scout_write_harness))]
+    pub fn verified_for_test() -> SignatureStatus {
+        SignatureStatus::Verified(VerifiedProof(()))
     }
 }
 
 impl fmt::Display for SignatureStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SignatureStatus::Verified => write!(f, "verified"),
+            SignatureStatus::Verified(_) => write!(f, "verified"),
             SignatureStatus::Invalid(why) => write!(f, "invalid ({why})"),
             SignatureStatus::Unavailable(why) => write!(f, "unavailable ({why})"),
         }
@@ -277,7 +295,7 @@ fn verify_inrelease_with_timeout(
             || l.starts_with("[GNUPG:] NO_PUBKEY ")
     });
     if exit_status.success() && has_good && has_valid && !has_bad {
-        SignatureStatus::Verified
+        SignatureStatus::Verified(VerifiedProof(()))
     } else {
         let reason = status
             .lines()
@@ -297,7 +315,7 @@ mod tests {
 
     #[test]
     fn display_is_explicit_for_every_state() {
-        assert_eq!(SignatureStatus::Verified.to_string(), "verified");
+        assert_eq!(SignatureStatus::verified_for_test().to_string(), "verified");
         assert!(
             SignatureStatus::Invalid("bad".into())
                 .to_string()
@@ -344,7 +362,7 @@ mod tests {
         let bad = std::fs::read(fixture("noble-updates-InRelease.tampered")).unwrap();
         assert_eq!(
             verify_inrelease_with(&good, &gpgv, &keyring),
-            SignatureStatus::Verified
+            SignatureStatus::verified_for_test()
         );
         assert!(matches!(
             verify_inrelease_with(&bad, &gpgv, &keyring),
@@ -432,7 +450,7 @@ mod tests {
         );
         let status =
             verify_inrelease_with_timeout(b"signed data", &gpgv, &keyring, Duration::from_secs(5));
-        assert_eq!(status, SignatureStatus::Verified);
+        assert_eq!(status, SignatureStatus::verified_for_test());
         std::fs::remove_dir_all(temp).unwrap();
     }
 
@@ -477,7 +495,7 @@ mod tests {
         assert!(fresh::release_date(forged).is_err());
         let signed = fresh::release_date("-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nDate: Thu, 12 Nov 2026  4:23:38 UTC\n").unwrap();
         assert_eq!(
-            SignatureStatus::Verified
+            SignatureStatus::verified_for_test()
                 .verified_date(signed)
                 .map(|d| d.seconds()),
             Some(1_794_457_418)
@@ -505,7 +523,39 @@ mod tests {
         prefixed.extend_from_slice(&good);
         assert_eq!(
             verify_inrelease_with(&prefixed, &gpgv, &keyring),
-            SignatureStatus::Verified
+            SignatureStatus::verified_for_test()
+        );
+    }
+
+    /// The proof cannot be minted outside this module (D25, `docs/threat-model.md` 3.10).
+    ///
+    /// `SignatureStatus::Verified` carries a `VerifiedProof` whose only field is private here, so the
+    /// token exists only where `gpgv` reported a good signature; every other module has to reach it
+    /// through `verified_for_test`, which a `cfg(test)` or `apt_scout_write_harness` build compiles
+    /// and the shipped binary does not (W1/W2 pin the harness out of it). A `compile_fail` doctest
+    /// cannot state this: the crate has no `[lib]` target, so no documentation test is ever compiled.
+    /// This test is the executable half — it reads every source file of the crate and fails when a
+    /// second `VerifiedProof(...)` appears outside `src/verify.rs`.
+    #[test]
+    fn the_write_proof_is_minted_only_in_the_verifier() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&src).expect("the crate's source directory") {
+            let path = entry.expect("a source file").path();
+            if path.extension().is_none_or(|ext| ext != "rs") || path == src.join("verify.rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("a source file is readable UTF-8");
+            assert!(
+                !text.contains("VerifiedProof("),
+                "{} mints a write proof; only src/verify.rs may (D25)",
+                path.display()
+            );
+            checked += 1;
+        }
+        assert!(
+            checked >= 5,
+            "expected the crate's modules, checked {checked}"
         );
     }
 }

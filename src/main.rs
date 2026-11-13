@@ -819,7 +819,7 @@ fn architecture() -> Result<String, (u8, String)> {
 
 fn signature_label(status: &verify::SignatureStatus) -> &'static str {
     match status {
-        verify::SignatureStatus::Verified => "verified",
+        verify::SignatureStatus::Verified(_) => "verified",
         verify::SignatureStatus::Invalid(_) => "invalid",
         verify::SignatureStatus::Unavailable(_) => "unavailable",
     }
@@ -1140,7 +1140,7 @@ mod tests {
     /// armour, plus a `Verified` status.
     fn vd(rfc: &str) -> verify::VerifiedDate {
         let body = format!("-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nDate: {rfc}\n");
-        verify::SignatureStatus::Verified
+        verify::SignatureStatus::verified_for_test()
             .verified_date(fresh::release_date(&body).unwrap())
             .unwrap()
     }
@@ -1217,7 +1217,7 @@ mod tests {
                 )
                 .unwrap(),
             ),
-            updates_signature: verify::SignatureStatus::Verified,
+            updates_signature: verify::SignatureStatus::verified_for_test(),
             security: None,
         };
         let unverified = probe::Reference {
@@ -1460,7 +1460,7 @@ mod tests {
             &apt.0,
             &inventory,
             &hosts,
-            &probed(MIRROR, verify::SignatureStatus::Verified),
+            &probed(MIRROR, verify::SignatureStatus::verified_for_test()),
             plan::Platform::Ubuntu,
         )
         .expect_err("an empty plan must be refused, not written");
@@ -1485,7 +1485,7 @@ mod tests {
             &apt.0,
             &inventory,
             &hosts,
-            &probed(MIRROR, verify::SignatureStatus::Verified),
+            &probed(MIRROR, verify::SignatureStatus::verified_for_test()),
             plan::Platform::Ubuntu,
         )
         .expect("both inspected files have a rewritable URI");
@@ -1550,7 +1550,7 @@ mod tests {
             &apt.0,
             &inventory,
             &hosts,
-            &probed(MIRROR, verify::SignatureStatus::Verified),
+            &probed(MIRROR, verify::SignatureStatus::verified_for_test()),
             plan::Platform::PopOs,
         )
         .expect("the Pop!_OS split is planned");

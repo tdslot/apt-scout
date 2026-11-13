@@ -376,7 +376,7 @@ mod tests {
     /// The same mirror with a `Verified` signature, so only the status differs from `p()`.
     fn pv(url: &str) -> Probed {
         Probed {
-            signature: SignatureStatus::Verified,
+            signature: SignatureStatus::verified_for_test(),
             ..p(url, 0, 100, 10, false)
         }
     }

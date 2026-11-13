@@ -688,7 +688,7 @@ mod tests {
         let o = probe(&c, "http://m.example/ubuntu", "noble", "amd64").unwrap();
         assert_eq!(
             o.updates_signature,
-            SignatureStatus::Verified,
+            SignatureStatus::verified_for_test(),
             "{}",
             o.updates_signature
         );

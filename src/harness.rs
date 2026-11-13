@@ -329,7 +329,7 @@ fn probed_from(updates_date: i64, signed: Option<SignedDate>) -> Probed {
         throughput_bps: 1,
         latency_ms: 1,
         same_as: false,
-        signature: SignatureStatus::Verified,
+        signature: SignatureStatus::verified_for_test(),
     }
 }
 
@@ -540,7 +540,7 @@ fn baseline_of(case: Case) -> Result<Option<VerifiedDate>, Fault> {
 
 /// A verified date for one strict-parsed date, or a harness fault when the status cannot give one.
 fn verified(date: SignedDate) -> Result<VerifiedDate, Fault> {
-    let Some(verified) = SignatureStatus::Verified.verified_date(date) else {
+    let Some(verified) = SignatureStatus::verified_for_test().verified_date(date) else {
         return Err(Fault::Harness(
             "harness baseline is unusable: a verified status and a strict-parsed date always yield \
              a verified date"

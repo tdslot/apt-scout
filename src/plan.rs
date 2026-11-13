@@ -256,13 +256,13 @@ mod tests {
         fresh::release_date(&format!("{ARM}\nHash: SHA512\n\nDate: {rfc}\n")).unwrap()
     }
 
-    fn proof() -> VerifiedDate { SignatureStatus::Verified.verified_date(signed(RFC_A)).unwrap() }
+    fn proof() -> VerifiedDate { SignatureStatus::verified_for_test().verified_date(signed(RFC_A)).unwrap() }
 
     fn probe(url: &str, rfc: &str) -> Probed {
         let date = signed(rfc);
         Probed { url: url.to_string(), updates_date: date.seconds(), signed_updates_date: Some(date),
             lag_secs: 0, throughput_bps: 0, latency_ms: 0, same_as: false,
-            signature: SignatureStatus::Verified }
+            signature: SignatureStatus::verified_for_test() }
     }
 
     fn old() -> Option<FileState> {

@@ -1135,7 +1135,7 @@ mod tests {
 
     /// A verified date for `rfc`: the only constructor is a `Verified` status plus a parsed date.
     fn verified(rfc: &str) -> VerifiedDate {
-        SignatureStatus::Verified
+        SignatureStatus::verified_for_test()
             .verified_date(signed(rfc))
             .expect("a verified date")
     }
@@ -1155,7 +1155,7 @@ mod tests {
             throughput_bps: 0,
             latency_ms: 0,
             same_as: false,
-            signature: SignatureStatus::Verified,
+            signature: SignatureStatus::verified_for_test(),
         }
     }
 
