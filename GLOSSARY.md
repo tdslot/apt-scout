@@ -53,3 +53,7 @@
 **Custom mirror**: A mirror URL added by the user with `Insert`; probed and ranked like any other candidate.
 
 **Vendor default mirror**: The `X-Repolib-Default-Mirror` value in a Pop!_OS `system.sources` stanza. Left unchanged so the vendor default stays available for restore.
+
+**Locale**: The language a run prints its messages in, taken from the shell environment. It selects display text and nothing else.
+
+**Message catalog**: Every message in one locale, one entry per English message. A run prints from the catalog it selected, or from the English entry when that catalog has none, so a message is either translated whole or printed in English.
