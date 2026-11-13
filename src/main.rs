@@ -2217,9 +2217,9 @@ mod tests {
         )
     }
 
-    /// An entry that fails candidate validation never enters the rewrite set, and the run reports it
-    /// instead of trusting it: one `validate_url` filter for the Launchpad page and the fallback
-    /// alike (SPEC: Apply).
+    /// An entry that fails candidate validation, or whose path carries a dot segment, never enters the
+    /// rewrite set, and the run reports it instead of trusting it: one `validate_url` filter for the
+    /// Launchpad page and the fallback alike (SPEC: Apply).
     #[test]
     fn mirror_roots_drops_and_reports_invalid_entries() {
         let (roots, rejected) = mirror_roots(
@@ -2228,6 +2228,8 @@ mod tests {
                 "http://127.0.0.1/ubuntu/",
                 "http://2130706433/ubuntu/",
                 "http://mirror.example:0/ubuntu/",
+                "http://mirror.example/ubuntu/../debian",
+                "http://mirror.example/ubuntu/%2e%2e/debian",
             ]
             .into_iter(),
         );
@@ -2244,6 +2246,8 @@ mod tests {
                 "http://127.0.0.1/ubuntu/",
                 "http://2130706433/ubuntu/",
                 "http://mirror.example:0/ubuntu/",
+                "http://mirror.example/ubuntu/../debian",
+                "http://mirror.example/ubuntu/%2e%2e/debian",
             ]
         );
 

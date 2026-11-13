@@ -159,6 +159,8 @@ pub fn parse_legacy(
             Some(format!(
                 "mirror URI scheme in '{uri}' is unsupported and will be left unchanged"
             ))
+        } else if let Some(reason) = dot_segment_reason(uri) {
+            Some(reason)
         } else if !is_rewritable(uri, roots, pop_os_system_sources) {
             Some(format!(
                 "URI '{uri}' is not an official Ubuntu archive mirror"
@@ -245,6 +247,11 @@ pub fn parse_deb822(
             .collect::<Vec<_>>();
         if issue.is_none() && !enabled {
             *issue = Some("stanza disabled (Enabled: no)".into());
+        }
+        if issue.is_none()
+            && let Some(reason) = uris.iter().find_map(|uri| dot_segment_reason(uri))
+        {
+            *issue = Some(reason);
         }
         if issue.is_none()
             && uris
@@ -375,6 +382,11 @@ pub fn mirror_root(url: &str) -> Option<MirrorRoot> {
         return None;
     }
     let path = tail.split(['?', '#']).next().unwrap_or_default();
+    // A listing that names a dot segment is left out of the set rather than resolved into something
+    // else, and the caller reports it with the other entries that cannot enter it.
+    if dot_segment(path).is_some() {
+        return None;
+    }
     Some(MirrorRoot {
         host: host.to_ascii_lowercase(),
         path: if path.is_empty() {
@@ -382,6 +394,19 @@ pub fn mirror_root(url: &str) -> Option<MirrorRoot> {
         } else {
             path.to_string()
         },
+    })
+}
+
+/// The first segment of `path` that names a directory hop rather than a directory, spelled as it was
+/// written: `.` or `..`, plainly or with either dot percent-encoded (`%2e%2e`, `%2E%2E`, `.%2e`,
+/// `%2e.`). Nothing here decodes escapes in general and nothing resolves a segment: a dot segment is
+/// only ever found so that the path can be refused. A listed `/ubuntu` admits an on-disk
+/// `/ubuntu/../debian` under the whole-segment rule while that path names the `/debian` tree, and
+/// refusing is both the smaller answer and the one a spelling cannot walk around.
+fn dot_segment(path: &str) -> Option<&str> {
+    path.split('/').find(|segment| {
+        let plain = segment.replace("%2e", ".").replace("%2E", ".");
+        plain == "." || plain == ".."
     })
 }
 
@@ -482,6 +507,11 @@ fn is_rewritable(uri: &str, roots: &[MirrorRoot], pop_os_system_sources: bool) -
         return false;
     }
     let path = tail.split(['?', '#']).next().unwrap_or_default();
+    // Refused before any host or membership test, so neither a listed path nor the canonical archive's
+    // any-path rule can admit a tree the token does not name.
+    if dot_segment(path).is_some() {
+        return false;
+    }
     let policy_match = roots
         .iter()
         .any(|r| r.host.eq_ignore_ascii_case(&host) && path_admits(&r.path, path));
@@ -492,6 +522,28 @@ fn is_rewritable(uri: &str, roots: &[MirrorRoot], pop_os_system_sources: bool) -
         return normalize_path(path) == "/ubuntu";
     }
     host == "archive.ubuntu.com" || host.ends_with(".archive.ubuntu.com") || policy_match
+}
+
+/// Why a URI token with a dot segment is not eligible, naming the segment it found so that the
+/// skipped entry is actionable on its own. `None` when the token carries no dot segment, because the
+/// refusal then has another reason to state.
+fn dot_segment_reason(uri: &str) -> Option<String> {
+    let (_, rest) = uri.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let path = rest[authority.len()..]
+        .split(['?', '#'])
+        .next()
+        .unwrap_or_default();
+    let segment = dot_segment(path)?;
+    Some(format!(
+        "URI '{uri}' carries a '{segment}' path segment, so it is left unchanged"
+    ))
+}
+
+/// The reason a URI token was left alone: a dot segment is named, and every other refusal keeps the
+/// line a reader already knows.
+fn refusal_reason(uri: &str) -> String {
+    dot_segment_reason(uri).unwrap_or_else(|| format!("{uri} was not changed"))
 }
 
 /// Discover apt source files without following symlinks. Non-UTF8 files are reported, not guessed.
@@ -946,9 +998,10 @@ pub fn rewrite_source(
             };
             if !entry.rewritable.first().copied().unwrap_or(false) {
                 skipped.push(format!(
-                    "{}:{}: {uri} was not changed",
+                    "{}:{}: {}",
                     file.display(),
-                    entry.line
+                    entry.line,
+                    refusal_reason(uri)
                 ));
                 continue;
             }
@@ -1003,9 +1056,10 @@ pub fn rewrite_source(
                     ));
                 } else if let Some(uri) = entry.uris.get(i) {
                     skipped.push(format!(
-                        "{}:{}: {uri} was not changed",
+                        "{}:{}: {}",
                         file.display(),
-                        entry.line
+                        entry.line,
+                        refusal_reason(uri)
                     ));
                 }
             }
@@ -1248,6 +1302,118 @@ mod tests {
             &hosts,
             false
         ));
+    }
+
+    /// A dot segment names a different tree than the path it is written inside: `..` walks out of the
+    /// listed `/ubuntu`, so `http://host/ubuntu/../debian` still starts with the listed segment while the
+    /// tree it really names is `/debian`, and rewriting it would substitute a tree the list never named.
+    /// Every spelling is refused instead of decoded or resolved, because resolving is the step that has to
+    /// agree with an intermediary, and refusing needs no agreement (SPEC: Apply).
+    #[test]
+    fn a_dot_segment_is_never_eligible_in_any_spelling() {
+        let ubuntu = roots(&[("mirror.example", "/ubuntu")]);
+        for uri in [
+            "http://mirror.example/ubuntu/../debian",
+            "http://mirror.example/ubuntu/../debian/dists/trixie/InRelease",
+            "http://mirror.example/ubuntu/%2e%2e/debian",
+            "http://mirror.example/ubuntu/%2E%2E/debian",
+            "http://mirror.example/ubuntu/.%2e/debian",
+            "http://mirror.example/ubuntu/%2e./debian",
+            "http://mirror.example/../ubuntu",
+            "http://mirror.example/ubuntu/./",
+        ] {
+            assert!(!is_rewritable(uri, &ubuntu, false), "{uri} must be refused");
+        }
+        // A listed `/` and the canonical archive's any-path rule admit every path, so only the dot-segment
+        // refusal can keep `..` out there; the traversal would otherwise reach a tree no list named.
+        for uri in [
+            "http://archive.ubuntu.com/ubuntu/../debian",
+            "http://de.archive.ubuntu.com/ubuntu/%2e%2e/debian",
+        ] {
+            assert!(!is_rewritable(uri, HOSTS, false), "{uri} must be refused");
+        }
+        // The rule bans segments, not dots: a dot inside a name is a name.
+        for admitted in [
+            "http://mirror.example/ubuntu/v1.2/",
+            "http://mirror.example/ubuntu/v1.2/dists/noble/InRelease",
+            "http://mirror.example/ubuntu/..foo",
+            "http://mirror.example/ubuntu/v1.2..3/",
+        ] {
+            assert!(is_rewritable(admitted, &ubuntu, false), "{admitted}");
+        }
+    }
+
+    /// The skipped token says which segment it found, and the line keeps its bytes, so a refusal is never
+    /// silent and never half-applied (SPEC: Apply).
+    #[test]
+    fn a_dot_segment_is_reported_and_the_line_is_left_alone() {
+        let hosts = roots(&[("mirror.example", "/ubuntu")]);
+        let input = "deb http://mirror.example/ubuntu/../debian trixie main\ndeb http://mirror.example/ubuntu/%2e%2e/debian trixie main\ndeb http://mirror.example/ubuntu/v1.2/ noble main\n";
+        let plan = rewrite_source(
+            input,
+            Path::new("/etc/apt/sources.list"),
+            "https://mirror.example/ubuntu/",
+            &hosts,
+            false,
+        )
+        .expect("the selected mirror is valid");
+        assert_eq!(
+            plan.skipped,
+            [
+                "/etc/apt/sources.list:1: URI 'http://mirror.example/ubuntu/../debian' carries a '..' path segment, so it is left unchanged",
+                "/etc/apt/sources.list:2: URI 'http://mirror.example/ubuntu/%2e%2e/debian' carries a '%2e%2e' path segment, so it is left unchanged",
+            ]
+        );
+        let rewritten = &plan.files[0].content;
+        assert!(
+            rewritten.contains("deb http://mirror.example/ubuntu/../debian trixie main"),
+            "the refused line keeps its bytes: {rewritten}"
+        );
+        assert!(
+            rewritten.contains("deb https://mirror.example/ubuntu/ noble main"),
+            "its harmless sibling is still rewritten: {rewritten}"
+        );
+
+        // The same refusal reaches the deb822 path and the inventory report, not only the rewrite plan.
+        let stanza = "Types: deb\nURIs: http://mirror.example/ubuntu/../debian\nSuites: trixie\nComponents: main\n";
+        let parsed = parse_deb822(
+            stanza,
+            Path::new("/etc/apt/sources.list.d/x.sources"),
+            &hosts,
+            false,
+        );
+        assert_eq!(
+            parsed[0].issue.as_deref(),
+            Some(
+                "URI 'http://mirror.example/ubuntu/../debian' carries a '..' path segment, so it is left unchanged"
+            )
+        );
+        assert!(parsed[0].rewritable.iter().all(|v| !*v));
+    }
+
+    /// A list entry whose path carries a dot segment names a tree this cannot read without resolving it,
+    /// and resolving is how a listed `/ubuntu` would end up admitting `/debian`. It is left out of the
+    /// set instead, so the run reports it and nothing is admitted through it.
+    #[test]
+    fn a_listed_entry_with_a_dot_segment_never_enters_the_set() {
+        for url in [
+            "http://mirror.example/ubuntu/../debian",
+            "http://mirror.example/ubuntu/%2e%2e/debian",
+            "http://mirror.example/ubuntu/%2E%2E/debian",
+            "http://mirror.example/ubuntu/.%2e/debian",
+            "http://mirror.example/ubuntu/%2e./debian",
+            "http://mirror.example/../ubuntu",
+        ] {
+            assert_eq!(mirror_root(url), None, "{url} must not enter the set");
+        }
+        // A dot inside a name is still an ordinary entry.
+        assert_eq!(
+            mirror_root("http://mirror.example/ubuntu/v1.2/"),
+            Some(MirrorRoot {
+                host: "mirror.example".to_string(),
+                path: "/ubuntu/v1.2/".to_string(),
+            })
+        );
     }
 
     /// A trailing slash names the same tree on both sides, and a repeated slash is another spelling
