@@ -20,7 +20,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::ExitCode;
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use http::{Fetch, Net};
 
@@ -121,7 +121,7 @@ MODE
 TABLE
   sig reads ok only for a verified -updates InRelease; only ok may authorize a write.
   notes reads sec:<n>m for a -security lag and redir:<host> for a redirect to another host;
-  a host cut to fit the table is printed in full by --verbose.
+  a host that does not fit is cut and ends in ~; --verbose prints it in full.
 
 EXIT CODES
   0 success    1 refusal or failure    2 usage    3 not root
@@ -628,6 +628,10 @@ const AS_MIN_WIDTH: usize = 7;
 /// so one long name cannot wrap the table; `--verbose` prints it in full.
 const REDIR_HOST_MAX: usize = 16;
 
+/// What a cut host ends in. `~` cannot appear in a hostname, so a real host is never read as a cut
+/// one, and it costs one column, so `REDIR_HOST_MAX` bounds the cell whether or not it was cut.
+const CUT_MARKER: char = '~';
+
 /// The ranked table (SPEC step 9): rank, mirror, lag, speed, delay, AS, signature, notes. The AS
 /// column is left out entirely when no row has AS data, so it can never read as "every mirror is
 /// unknown"; the notes column is left out when no shown row has a note, so a plain table gains no
@@ -699,13 +703,67 @@ fn note_cell(row: &Row) -> Option<String> {
     }
 }
 
-/// At most `room` bytes of a host, cut on a character boundary so a non-ASCII name cannot panic.
-fn host_prefix(host: &str, room: usize) -> &str {
-    let mut end = room.min(host.len());
-    while !host.is_char_boundary(end) {
-        end -= 1;
+/// At most `room` columns of a host, ending in `CUT_MARKER` when the host did not fit: a cell that
+/// silently stopped at `redir:a-very-long-mir` cannot be told from a host of that name. A host of
+/// exactly `room` columns is not cut and carries no marker, so the marker means one thing only.
+fn host_prefix(host: &str, room: usize) -> String {
+    if host.chars().count() <= room {
+        return host.to_string();
     }
-    &host[..end]
+    // The marker takes the last column, so the whole cell stays inside `room`.
+    let mut cut: String = host.chars().take(room.saturating_sub(1)).collect();
+    cut.push(CUT_MARKER);
+    cut
+}
+
+/// What `--verbose` prints about one mirror, and where the default table's `notes` cell reads the
+/// same two facts back: the country, both pocket dates and the redirect the probe saw. The
+/// `-security` lag is computed once, here, so `--verbose` and the table cannot disagree about it.
+fn detail_of(reference_security: Option<i64>, country: &str, outcome: &probe::Outcome) -> Detail {
+    let security_lag = match (reference_security, outcome.security_date) {
+        (Some(reference), Some(security)) => Some(fresh::lag(reference, security)),
+        _ => None,
+    };
+    Detail {
+        country: country.to_string(),
+        security_date: outcome.security_date,
+        security_lag,
+        redirected_to: outcome.redirected_to.clone(),
+    }
+}
+
+/// The rows the table prints, in rank order and capped at `top`, each carrying the AS cell and the
+/// two facts the `notes` column shows. Both note facts are read from the run's own probe results
+/// (`details`) instead of being recomputed here, so the default table and `--verbose` describe the
+/// same run (SPEC steps 7 and 8).
+fn table_rows<'a>(
+    ranked: &'a [fresh::Probed],
+    details: &'a std::collections::HashMap<String, Detail>,
+    mirror_asn: &std::collections::HashMap<String, ResolvedAs>,
+    server_asn: Option<&str>,
+    top: usize,
+) -> Vec<Row<'a>> {
+    ranked
+        .iter()
+        .take(top)
+        .map(|r| {
+            let detail = details.get(&r.url);
+            Row {
+                url: &r.url,
+                updates_date: r.updates_date,
+                lag_secs: r.lag_secs,
+                throughput_bps: r.throughput_bps,
+                latency_ms: r.latency_ms,
+                signature: &r.signature,
+                as_cell: as_cell(mirror_asn, server_asn, &r.url),
+                // Neither fact is a reason to reject or to reorder, but both are facts this run
+                // saw, so they ride on the row instead of being dropped between the probe and the
+                // table.
+                security_lag: detail.and_then(|d| d.security_lag),
+                redirect_host: detail.and_then(|d| d.redirected_to.as_deref()),
+            }
+        })
+        .collect()
 }
 
 /// The recommendation and the facts behind it: host, country, AS, speed, lag and signature status
@@ -1194,24 +1252,12 @@ fn run() -> Result<u8, (u8, String)> {
     };
     let mut probed: Vec<fresh::Probed> = Vec::new();
     let mut details: std::collections::HashMap<String, Detail> = std::collections::HashMap::new();
+    let reference_security = reference.as_ref().and_then(|r| r.security);
     for (m, r) in results {
         match r {
             Ok(o) => {
                 let lag = fresh::lag(baseline, o.updates_date);
-                let security_lag =
-                    match (reference.as_ref().and_then(|r| r.security), o.security_date) {
-                        (Some(rsec), Some(sec)) => Some(fresh::lag(rsec, sec)),
-                        _ => None,
-                    };
-                details.insert(
-                    o.url.clone(),
-                    Detail {
-                        country: m.country.clone(),
-                        security_date: o.security_date,
-                        security_lag,
-                        redirected_to: o.redirected_to.clone(),
-                    },
-                );
+                details.insert(o.url.clone(), detail_of(reference_security, &m.country, &o));
                 if fresh::is_stale(lag) {
                     rejected.push(Rejected {
                         host: m.url.trim_end_matches('/').to_string(),
@@ -1246,27 +1292,13 @@ fn run() -> Result<u8, (u8, String)> {
     }
     rejected.sort_by(|a, b| a.host.cmp(&b.host));
     let ranked = fresh::rank(probed);
-    let rows: Vec<Row> = ranked
-        .iter()
-        .take(args.top)
-        .map(|r| {
-            let detail = details.get(&r.url);
-            Row {
-                url: &r.url,
-                updates_date: r.updates_date,
-                lag_secs: r.lag_secs,
-                throughput_bps: r.throughput_bps,
-                latency_ms: r.latency_ms,
-                signature: &r.signature,
-                as_cell: as_cell(&mirror_asn, server_asn.as_deref(), &r.url),
-                // Both facts below are already known for every probe that succeeded; keeping them
-                // on the row is what lets the default table show them and `--verbose` print them
-                // long, instead of the two disagreeing about what the run saw.
-                security_lag: detail.and_then(|d| d.security_lag),
-                redirect_host: detail.and_then(|d| d.redirected_to.as_deref()),
-            }
-        })
-        .collect();
+    let rows = table_rows(
+        &ranked,
+        &details,
+        &mirror_asn,
+        server_asn.as_deref(),
+        args.top,
+    );
     report.block(vec![header_context(
         server_asn.as_deref(),
         list_source,
@@ -1522,8 +1554,14 @@ fn mirror_host_port(url: &str) -> Option<(String, u16)> {
     Some((host.to_string(), port))
 }
 
-/// Once public address and the AS Team Cymru names for one candidate (SPEC step 5). The holder
-/// name is `--verbose` detail and is looked up only when that flag asks for it.
+/// The AS Team Cymru names for one candidate, and (with `--verbose`) its holder name (SPEC step 5).
+/// `name` is display detail only: grouping and ranking read `asn`, never `name`.
+struct ResolvedAs {
+    ip: std::net::IpAddr,
+    asn: String,
+    name: Option<String>,
+}
+
 /// The spelling every AS answer is keyed and looked up by. The probe reports a mirror without its
 /// trailing slash, the mirror list may carry one, and a map keyed on the other spelling answers
 /// `unknown` for every row it is asked about.
@@ -1531,15 +1569,18 @@ fn as_key(url: &str) -> &str {
     url.trim_end_matches('/')
 }
 
-struct ResolvedAs {
-    ip: std::net::IpAddr,
-    asn: String,
-    name: Option<String>,
-}
+/// One total budget for every AS number. `--verbose` holder names are a separate pass with the
+/// smaller `NAME_BUDGET` of their own, so no name can spend this one.
+const AS_BUDGET: Duration = Duration::from_secs(20);
+/// The budget for `--verbose` holder names, spent after every AS number is recorded: a run that
+/// loses this detail loses only a name.
+const NAME_BUDGET: Duration = Duration::from_secs(5);
 
-/// AS of each mirror host via Team Cymru DNS, at most 8 lookups at a time and one total 20 s
-/// budget for all resolution and queries. Standard-library hostname resolution is offloaded to a
-/// worker thread because it cannot be interrupted; after the budget, results are discarded.
+/// AS of each mirror host via Team Cymru DNS, in two phases that cannot spend each other's budget:
+/// first every AS number (`resolve_asns`, `AS_BUDGET`), then, for `--verbose` only, the holder names
+/// (`attach_names`, `NAME_BUDGET`). The names start from the answers the first phase has already
+/// returned and can only fill in a name, so `--verbose` can add a name and can lose a name but
+/// cannot change which mirror has an AS — and therefore cannot change how any row groups or ranks.
 /// Returns the answers it got and, when any lookup failed, the first real reason (sorted by URL, so
 /// a run is repeatable) so the table can say why it has no AS data instead of printing `unknown`.
 fn resolve_mirror_asns(
@@ -1549,8 +1590,22 @@ fn resolve_mirror_asns(
     std::collections::HashMap<String, ResolvedAs>,
     Option<String>,
 ) {
-    use std::time::{Duration, Instant};
-    const AS_BUDGET: Duration = Duration::from_secs(20);
+    let (mut out, failure) = resolve_asns(urls);
+    if with_names {
+        attach_names(&mut out, NAME_BUDGET, |asn| cymru::lookup_name(asn).ok());
+    }
+    (out, failure)
+}
+
+/// Every AS number, at most 8 lookups at a time and one total `AS_BUDGET` for all resolution and
+/// queries. Standard-library hostname resolution is offloaded to a worker thread because it cannot
+/// be interrupted; after the budget, results are discarded.
+fn resolve_asns(
+    urls: &[String],
+) -> (
+    std::collections::HashMap<String, ResolvedAs>,
+    Option<String>,
+) {
     let deadline = Instant::now() + AS_BUDGET;
     let mut out = std::collections::HashMap::new();
     let mut failures: std::collections::BTreeMap<String, String> =
@@ -1566,7 +1621,7 @@ fn resolve_mirror_asns(
         let handles: Vec<_> = chunk
             .iter()
             .cloned()
-            .map(|url| thread::spawn(move || resolve_one(&url, with_names)))
+            .map(|url| thread::spawn(move || resolve_one(&url)))
             .collect();
         let (tx, rx) = std::sync::mpsc::channel();
         for h in handles {
@@ -1605,10 +1660,10 @@ fn resolve_mirror_asns(
     (out, failures.into_iter().next().map(|(_, why)| why))
 }
 
-/// Resolve one candidate's host, then its AS and (for `--verbose`) the AS holder. Every failure is
-/// returned with its URL so the caller can name the first one: an AS answer is information, never a
-/// reason to stop the run (SPEC.md, Resilience).
-fn resolve_one(url: &str, with_names: bool) -> (String, Result<ResolvedAs, String>) {
+/// Resolve one candidate's host, then its AS. Every failure is returned with its URL so the caller
+/// can name the first one: an AS answer is information, never a reason to stop the run (SPEC.md,
+/// Resilience).
+fn resolve_one(url: &str) -> (String, Result<ResolvedAs, String>) {
     use std::net::ToSocketAddrs;
     let fail = |why: String| (url.to_string(), Err(why));
     let Some((host, port)) = mirror_host_port(url) else {
@@ -1625,8 +1680,40 @@ fn resolve_one(url: &str, with_names: bool) -> (String, Result<ResolvedAs, Strin
         Ok(asn) => asn,
         Err(e) => return fail(format!("Team Cymru names no AS for {ip}: {e}")),
     };
-    let name = with_names.then(|| cymru::lookup_name(&asn).ok()).flatten();
-    (url.to_string(), Ok(ResolvedAs { ip, asn, name }))
+    (
+        url.to_string(),
+        Ok(ResolvedAs {
+            ip,
+            asn,
+            name: None,
+        }),
+    )
+}
+
+/// `--verbose` holder names, filled in on answers that already exist and inside `budget` of their
+/// own. `lookup` answers `None` when Cymru has no name, and a lookup that does not answer before
+/// the budget is spent leaves `name` empty: a name is display detail, so this pass adds detail or
+/// drops detail, and the AS numbers it decorates are already recorded and cannot be lost here.
+fn attach_names(
+    out: &mut std::collections::HashMap<String, ResolvedAs>,
+    budget: Duration,
+    lookup: impl Fn(&str) -> Option<String>,
+) {
+    let deadline = Instant::now() + budget;
+    // Sorted, so two runs that only fit some names inside the budget fill the same ones.
+    let mut keys: Vec<String> = out.keys().cloned().collect();
+    keys.sort();
+    for key in keys {
+        if Instant::now() >= deadline {
+            break;
+        }
+        let Some(asn) = out.get(&key).map(|resolved| resolved.asn.clone()) else {
+            continue;
+        };
+        if let Some(entry) = out.get_mut(&key) {
+            entry.name = lookup(&asn);
+        }
+    }
 }
 
 /// Read-only fallback baseline (SPEC step 8): the newest candidate date, but a date more than
@@ -2568,8 +2655,9 @@ mod tests {
         assert!(!zero[0].contains("notes") && !zero[1].contains("sec:"));
     }
 
-    /// One long host cannot wrap the table: the cell keeps the fact and cuts the name, and
-    /// `--verbose` is where the whole name is printed.
+    /// One long host cannot wrap the table: the cell keeps the fact and cuts the name, ends the cut
+    /// in `CUT_MARKER` so it cannot be read as a host of that name, and `--verbose` is where the
+    /// whole name is printed.
     #[test]
     fn a_long_redirect_host_is_cut_and_verbose_prints_it_whole() {
         let ok = verify::SignatureStatus::verified_for_test();
@@ -2581,7 +2669,7 @@ mod tests {
         );
         assert_eq!(
             note_cell(&cell),
-            Some("sec:778m redir:a-very-long-mirr".to_string())
+            Some("sec:778m redir:a-very-long-mir~".to_string())
         );
         // The cut is bounded, so a run of long hostnames cannot widen the table without limit.
         let cut = note_cell(&noted(
@@ -2591,6 +2679,28 @@ mod tests {
         ))
         .expect("a redirect is a note");
         assert_eq!(cut.len(), "redir:".len() + REDIR_HOST_MAX);
+
+        // A host of exactly the limit is not cut, so it carries no marker: the marker means "cut"
+        // and nothing else.
+        let exact = "a".repeat(REDIR_HOST_MAX);
+        assert_eq!(
+            note_cell(&noted(
+                row("http://a.example/ubuntu", 0, &ok, None),
+                None,
+                Some(&exact),
+            )),
+            Some(format!("redir:{exact}"))
+        );
+        // A non-ASCII host is cut on a character boundary, so it cannot panic, and still fits.
+        let wide = "ž".repeat(REDIR_HOST_MAX + 2);
+        let wide_cell = note_cell(&noted(
+            row("http://a.example/ubuntu", 0, &ok, None),
+            None,
+            Some(&wide),
+        ))
+        .expect("a redirect is a note");
+        assert_eq!(wide_cell.chars().count(), "redir:".len() + REDIR_HOST_MAX);
+        assert!(wide_cell.ends_with(CUT_MARKER), "{wide_cell}");
 
         // `--verbose` prints the same fact long, from the same row data.
         let mut details = std::collections::HashMap::new();
@@ -2613,6 +2723,140 @@ mod tests {
         assert!(
             verbose.iter().any(|l| l.contains("778m lag")),
             "{verbose:?}"
+        );
+    }
+
+    /// The `-updates` fixture: a real signed `InRelease`, so the probe path parses a real body.
+    const UPDATES_INRELEASE: &[u8] =
+        include_bytes!("../tests/fixtures/signed/noble-updates-InRelease");
+    /// A `-security` body whose `Date` is 6 h 09 m 30 s behind the fixture's, so its lag is a real
+    /// number instead of one the test wrote into a `Row`.
+    const SECURITY_INRELEASE: &[u8] =
+        b"-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nOrigin: Ubuntu\nDate: Thu, 12 Nov 2026  2:19:32 UTC\n";
+
+    /// One mirror answering every pocket a probe asks for. `http::Canned` always ends where it
+    /// started, so a redirect (SPEC step 7) can only come from a fake that owns the `-updates`
+    /// final URL.
+    struct Mirror {
+        security: Option<&'static [u8]>,
+        sample: Vec<u8>,
+        updates_final: Option<String>,
+    }
+
+    fn answered(body: &[u8], final_url: String) -> http::Fetched {
+        http::Fetched {
+            body: body.to_vec(),
+            elapsed: std::time::Duration::from_millis(50),
+            ttfb: std::time::Duration::from_millis(5),
+            final_url,
+        }
+    }
+
+    impl http::Fetch for Mirror {
+        fn get(
+            &self,
+            url: &str,
+            _max: u64,
+            _range: Option<(u64, u64)>,
+        ) -> Result<http::Fetched, http::HttpError> {
+            if url.ends_with("-updates/InRelease") {
+                let final_url = self
+                    .updates_final
+                    .clone()
+                    .unwrap_or_else(|| url.to_string());
+                return Ok(answered(UPDATES_INRELEASE, final_url));
+            }
+            if url.ends_with("-security/InRelease") {
+                return match self.security {
+                    Some(body) => Ok(answered(body, url.to_string())),
+                    None => Err(http::HttpError::Status(404, url.to_string())),
+                };
+            }
+            if url.ends_with("Packages.xz") {
+                return Ok(answered(&self.sample, url.to_string()));
+            }
+            Err(http::HttpError::Status(404, url.to_string()))
+        }
+    }
+
+    /// The rendered table for one probe result, through the wiring the run uses: `probe` →
+    /// `detail_of` → `table_rows` → `ranked_rows`.
+    fn table_for(outcome: &probe::Outcome, reference_security: Option<i64>) -> Vec<String> {
+        let details = std::collections::HashMap::from([(
+            outcome.url.clone(),
+            detail_of(reference_security, "Lithuania", outcome),
+        )]);
+        let no_as: std::collections::HashMap<String, ResolvedAs> = std::collections::HashMap::new();
+        let ranked = [fresh::Probed {
+            url: outcome.url.clone(),
+            updates_date: outcome.updates_date,
+            verified_updates: outcome.verified_updates,
+            lag_secs: 0,
+            throughput_bps: outcome.throughput_bps,
+            latency_ms: outcome.latency_ms,
+            same_as: false,
+            signature: outcome.updates_signature.clone(),
+        }];
+        ranked_rows(&table_rows(&ranked, &details, &no_as, None, 5))
+    }
+
+    /// The table's `notes` cell is filled from the run's own probe result, not from a `Row` a test
+    /// built: a `-security` lag and a redirect both reach the rendered table here, and neither
+    /// appears when the mirror served neither. Cutting this test off from the probe is what let the
+    /// two facts regress silently, so it stays on the real path.
+    #[test]
+    fn the_notes_come_from_the_probe_result() {
+        let mut sample = vec![0u8; 70_000];
+        sample[..6].copy_from_slice(&[0xFD, b'7', b'z', b'X', b'Z', 0]);
+
+        let redirecting = Mirror {
+            security: Some(SECURITY_INRELEASE),
+            sample: sample.clone(),
+            updates_final: Some(
+                "http://mirror2.example/ubuntu/dists/noble-updates/InRelease".to_string(),
+            ),
+        };
+        let outcome = probe::probe(&redirecting, "http://a.example/ubuntu", "noble", "amd64")
+            .expect("the fake answers every pocket the probe asks for");
+        let security_date = fresh::release_date_tolerant(
+            std::str::from_utf8(SECURITY_INRELEASE).expect("the body is ascii"),
+        )
+        .expect("-security has a parsable Date");
+        let table = table_for(&outcome, Some(outcome.updates_date));
+        assert!(
+            table[0].contains("notes"),
+            "the notes column is missing: {table:?}"
+        );
+        assert!(
+            table[1].contains(&format!(
+                "sec:{}m",
+                (outcome.updates_date - security_date) / 60
+            )),
+            "the -security lag is missing: {table:?}"
+        );
+        assert!(
+            table[1].contains("redir:mirror2.example"),
+            "the redirect is missing: {table:?}"
+        );
+
+        // The same mirror without a `-security` pocket and without a redirect: no notes column, and
+        // no token that would read as one.
+        let quiet = Mirror {
+            security: None,
+            sample,
+            updates_final: None,
+        };
+        let outcome = probe::probe(&quiet, "http://a.example/ubuntu", "noble", "amd64")
+            .expect("the fake answers every pocket the probe asks for");
+        assert_eq!(
+            (outcome.security_date, outcome.redirected_to.clone()),
+            (None, None)
+        );
+        let table = table_for(&outcome, Some(outcome.updates_date));
+        assert!(!table[0].contains("notes"), "{table:?}");
+        assert!(
+            !table[1].contains("sec:") && !table[1].contains("redir:"),
+            "{table:?}"
         );
     }
 
@@ -2651,12 +2895,14 @@ mod tests {
     }
 
     /// `--help` is where the table's shorthand is defined: without the two token names the `notes`
-    /// column is unreadable, and without the pointer a reader cannot find a cut host again.
+    /// column is unreadable, without the marker a cut host reads as a host of that name, and without
+    /// the pointer a reader cannot find the cut host again.
     #[test]
     fn the_help_defines_the_notes_column() {
         assert!(HELP.contains("notes reads sec:<n>m"), "{HELP}");
         assert!(HELP.contains("redir:<host>"), "{HELP}");
-        assert!(HELP.contains("printed in full by --verbose"), "{HELP}");
+        assert!(HELP.contains("cut and ends in ~"), "{HELP}");
+        assert!(HELP.contains("--verbose prints it in full"), "{HELP}");
         // The rule that only a verified InRelease may authorize a write stays where it was.
         assert!(HELP.contains("only ok may authorize a write"), "{HELP}");
     }
@@ -2832,6 +3078,51 @@ mod tests {
         let reason = reason.expect("a failed lookup must leave a reason");
         assert!(reason.contains("not-a-url"), "{reason}");
         assert!(reason.contains("no http(s) host"), "{reason}");
+    }
+
+    fn resolved(asn: &str) -> ResolvedAs {
+        ResolvedAs {
+            ip: "192.0.2.1".parse().expect("a literal address"),
+            asn: asn.to_string(),
+            name: None,
+        }
+    }
+
+    /// `--verbose` names are a pass of their own, with a budget that only a name can spend: spent
+    /// out, no name is even asked for and every AS answer stands exactly as it was. This is what
+    /// keeps `--verbose` from changing which mirror has an AS, and therefore from changing a group
+    /// or a rank.
+    #[test]
+    fn verbose_names_cannot_take_an_as_answer_with_them() {
+        let mut answers = std::collections::HashMap::from([
+            ("http://a.example".to_string(), resolved("12929")),
+            ("http://b.example".to_string(), resolved("64500")),
+        ]);
+        let before = answers
+            .iter()
+            .map(|(url, resolved)| (url.clone(), resolved.asn.clone()))
+            .collect::<Vec<_>>();
+
+        // No name may be asked for once the name budget is gone.
+        attach_names(&mut answers, Duration::ZERO, |_| {
+            panic!("a name was asked for after the budget")
+        });
+        assert!(answers.values().all(|resolved| resolved.name.is_none()));
+
+        // A generous budget fills both names, and a name that Cymru does not know leaves `None`.
+        attach_names(&mut answers, Duration::from_secs(30), |asn| {
+            (asn == "12929").then(|| "TELEKOM SLOVENIJE".to_string())
+        });
+        assert_eq!(
+            answers["http://a.example"].name.as_deref(),
+            Some("TELEKOM SLOVENIJE")
+        );
+        assert!(answers["http://b.example"].name.is_none());
+
+        // Whatever the names did, every AS number is the one the AS pass recorded.
+        for (url, asn) in before {
+            assert_eq!(answers[&url].asn, asn, "{url}");
+        }
     }
 
     /// `2026-11-12 08:29 UTC` is what a reader needs; the round trip pins it to the same civil
