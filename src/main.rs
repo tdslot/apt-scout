@@ -15,8 +15,12 @@ mod probe;
 pub mod sources;
 mod verify;
 
+use std::io::{self, BufRead, Write};
+use std::os::unix::fs::MetadataExt;
+use std::path::Path;
 use std::process::ExitCode;
 use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use http::{Fetch, Net};
 
@@ -31,6 +35,8 @@ struct Args {
     top: usize,
     https_only: bool,
     no_geo: bool,
+    list: bool,
+    yes: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -43,11 +49,14 @@ fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args, Strin
         top: 5,
         https_only: false,
         no_geo: false,
+        list: false,
+        yes: false,
     };
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
-            "--list" => {}
+            "--list" => a.list = true,
+            "--yes" => a.yes = true,
             "--https-only" => a.https_only = true,
             "--no-geo" => a.no_geo = true,
             "--country" => {
@@ -74,7 +83,7 @@ fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args, Strin
             }
             "-h" | "--help" => {
                 println!(
-                    "apt-scout [--country <CC>] [--no-geo] [--top N] [--https-only] [--list]\nShows the freshest, fastest Ubuntu mirrors for your country (detected, or given with --country). --no-geo skips every geolocation lookup and needs --country. Shows a read-only apt source inventory; nothing is written."
+                    "apt-scout [--country <CC>] [--no-geo] [--top N] [--https-only] [--list] [--yes]\nShows the freshest, fastest Ubuntu mirrors for your country (detected, or given with --country). --no-geo skips every geolocation lookup and needs --country.\nAs root it writes the best mirror to the apt sources after one confirmation; --yes skips that confirmation. As any other user it writes nothing, prints the one line to run under sudo, and exits 3. --list shows the ranked table and the change a write would make, and never writes whatever the user."
                 );
                 std::process::exit(0);
             }
@@ -82,6 +91,312 @@ fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args, Strin
         }
     }
     Ok(a)
+}
+
+/// What this run does about writing, from its flags and its uid (SPEC.md CLI: the uid decides
+/// whether the run writes). Every flag is an override, never a step in the workflow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// `--list`: the table and the change a write would make, nothing written, exit 0.
+    List,
+    /// A non-root run that would write: the `sudo` line, exit 3.
+    Recommend,
+    /// A root run that writes; `confirm` is false when `--yes` was given.
+    Write { confirm: bool },
+}
+
+fn decide(list: bool, root: bool, yes: bool) -> Mode {
+    if list {
+        Mode::List
+    } else if !root {
+        Mode::Recommend
+    } else {
+        Mode::Write { confirm: !yes }
+    }
+}
+
+/// The line a non-root run prints: the same command under `sudo`, rebuilt from the parsed flags so
+/// no argument of the run reaches it as an opaque string.
+fn sudo_command(args: &Args) -> String {
+    let mut line = String::from("sudo apt-scout");
+    if let Some(country) = &args.country {
+        line.push_str(&format!(" --country {country}"));
+    }
+    if args.no_geo {
+        line.push_str(" --no-geo");
+    }
+    if args.top != 5 {
+        line.push_str(&format!(" --top {}", args.top));
+    }
+    if args.https_only {
+        line.push_str(" --https-only");
+    }
+    if args.yes {
+        line.push_str(" --yes");
+    }
+    line
+}
+
+/// Build the plan a write needs, from the source inventory and the selected mirror.
+///
+/// This is where the CLI reads the apt files it may later replace, and it writes nothing: each
+/// inspected file is rewritten purely, the bytes on disk are captured as the `FileState` the
+/// writer re-checks before its first byte, and the whole set goes through `Plan::for_apply`, which
+/// refuses a mirror without a verified `-updates` proof. A file that would not change produces no
+/// write, so an inventory with nothing eligible refuses instead of planning an empty write.
+fn build_plan(
+    root: &Path,
+    inventory: &sources::Inventory,
+    archive_hosts: &[String],
+    selected: &fresh::Probed,
+    platform: plan::Platform,
+) -> Result<plan::Plan, (u8, String)> {
+    let nothing_written = "Nothing was written.";
+    let mut writes = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    for file in &inventory.files {
+        if file.issue.is_some() {
+            continue;
+        }
+        if !file.path.starts_with(root) {
+            skipped.push(format!("{}: outside the apt root", file.path.display()));
+            continue;
+        }
+        let bytes = std::fs::read(&file.path).map_err(|e| {
+            (
+                1,
+                format!(
+                    "cannot read {} while building the plan: {e}. {nothing_written}",
+                    file.path.display()
+                ),
+            )
+        })?;
+        let text = match std::str::from_utf8(&bytes) {
+            Ok(text) => text,
+            Err(e) => {
+                skipped.push(format!("{}: not UTF-8: {e}", file.path.display()));
+                continue;
+            }
+        };
+        let rewrite = sources::rewrite_source(
+            text,
+            &file.path,
+            selected.url.as_str(),
+            archive_hosts,
+            platform == plan::Platform::PopOs,
+        )
+        .map_err(|e| {
+            (
+                1,
+                format!("cannot plan the rewrite: {e}. {nothing_written}"),
+            )
+        })?;
+        skipped.extend(rewrite.skipped);
+        for planned in rewrite.files {
+            debug_assert_eq!(planned.path.parent(), file.path.parent());
+            let Ok(relative) = planned.path.strip_prefix(root) else {
+                skipped.push(format!("{}: outside the apt root", planned.path.display()));
+                continue;
+            };
+            let Ok(target) = plan::Target::parse(&relative.to_string_lossy()) else {
+                skipped.push(format!(
+                    "{}: not a writable apt target",
+                    planned.path.display()
+                ));
+                continue;
+            };
+            let new_bytes = planned.content.into_bytes();
+            let original = if planned.create_new {
+                None
+            } else {
+                Some(file_state(&planned.path)?)
+            };
+            // The rewrite is computed from one read and the plan is bound by another: if the file
+            // changed between them, the bytes the rewrite describes are no longer on disk.
+            if let Some(original) = &original
+                && original.bytes != bytes
+            {
+                return Err((
+                    1,
+                    format!(
+                        "{} changed while the plan was built, so the planned bytes no longer match the disk. Nothing was written; re-run.",
+                        planned.path.display()
+                    ),
+                ));
+            }
+            if original
+                .as_ref()
+                .is_some_and(|original| original.bytes == new_bytes)
+            {
+                continue;
+            }
+            writes.push(plan::PlannedWrite {
+                target,
+                digest: digest::sha256(&new_bytes),
+                new_bytes,
+                original,
+                create_new: planned.create_new,
+            });
+        }
+    }
+    if writes.is_empty() {
+        let why = if skipped.is_empty() {
+            "no eligible official archive URI was found".to_string()
+        } else {
+            skipped
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+        return Err((
+            1,
+            format!("no apt source file would change: {why}. {nothing_written}"),
+        ));
+    }
+    plan::Plan::for_apply(selected, platform, writes).map_err(|e| match e {
+        plan::PlanError::NoProof => (
+            1,
+            format!(
+                "cannot write {}: its -updates InRelease signature is {}, so the mirror is not proven fresh. {nothing_written}",
+                selected.url, selected.signature
+            ),
+        ),
+        other => (
+            1,
+            format!("cannot write {}: {other}. {nothing_written}", selected.url),
+        ),
+    })
+}
+
+/// `st_mode` also carries the file-type bits, and the writer records and compares
+/// `st_mode & 0o7777`. A plan that recorded the raw value would disagree with the writer about
+/// every file, so the mask is applied here to the same value the writer recomputes.
+const MODE_MASK: u32 = 0o7777;
+
+/// The bytes and metadata of a file the plan replaces, read the way the writer re-reads them. A
+/// symlink is refused here too: a plan names a target, never a path a link could redirect.
+fn file_state(path: &Path) -> Result<plan::FileState, (u8, String)> {
+    let meta = std::fs::symlink_metadata(path).map_err(|e| {
+        (
+            1,
+            format!(
+                "cannot inspect {} while building the plan: {e}. Nothing was written.",
+                path.display()
+            ),
+        )
+    })?;
+    if !meta.file_type().is_file() {
+        return Err((
+            1,
+            format!(
+                "{} is not a regular file (a symlink or a special file); apt-scout never writes through one. Nothing was written.",
+                path.display()
+            ),
+        ));
+    }
+    let bytes = std::fs::read(path).map_err(|e| {
+        (
+            1,
+            format!(
+                "cannot read {} while building the plan: {e}. Nothing was written.",
+                path.display()
+            ),
+        )
+    })?;
+    Ok(plan::FileState {
+        dev: meta.dev(),
+        ino: meta.ino(),
+        mode: meta.mode() & MODE_MASK,
+        uid: meta.uid(),
+        gid: meta.gid(),
+        bytes,
+    })
+}
+
+/// The planned change, one line per changed line of a file, for the confirmation and `--list`.
+fn plan_report(plan: &plan::Plan) -> Vec<String> {
+    let mut out = vec![format!("  mirror: {}", plan.selected_uri())];
+    for write in plan.writes() {
+        let path = format!("{}/{}", apply::APT_DIR, write.target.relative().display());
+        match &write.original {
+            None => {
+                out.push(format!("  create {path}:"));
+                for line in String::from_utf8_lossy(&write.new_bytes).lines() {
+                    out.push(format!("    + {line}"));
+                }
+            }
+            Some(original) => {
+                out.push(format!("  replace {path}:"));
+                let old = String::from_utf8_lossy(&original.bytes);
+                let new = String::from_utf8_lossy(&write.new_bytes);
+                let old_lines: Vec<&str> = old.lines().collect();
+                let new_lines: Vec<&str> = new.lines().collect();
+                if old_lines.len() == new_lines.len() {
+                    for (i, (before, after)) in old_lines.iter().zip(&new_lines).enumerate() {
+                        if before != after {
+                            out.push(format!("    line {}: - {before}", i + 1));
+                            out.push(format!("    line {}: + {after}", i + 1));
+                        }
+                    }
+                } else {
+                    out.push(format!(
+                        "    {} bytes replaced with {} bytes",
+                        original.bytes.len(),
+                        write.new_bytes.len()
+                    ));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The one confirmation before a write. The prompt is a safety rail, not a security control: the
+/// guarantee is the plan's validation, and no answer here can bypass it.
+fn confirm_write(input: &mut impl BufRead, prompt: &str) -> Result<(), (u8, String)> {
+    print!("{prompt}");
+    io::stdout().flush().map_err(|e| {
+        (
+            1,
+            format!(
+                "cannot write the confirmation prompt to standard output: {e}. Nothing was written."
+            ),
+        )
+    })?;
+    let mut answer = String::new();
+    input.read_line(&mut answer).map_err(|e| {
+        (
+            1,
+            format!("cannot read the confirmation from standard input: {e}. Nothing was written."),
+        )
+    })?;
+    match answer.trim().to_ascii_lowercase().as_str() {
+        "y" | "yes" => Ok(()),
+        "" => Err((
+            1,
+            "no answer on standard input, so nothing was written. Re-run with --yes to skip the confirmation."
+                .to_string(),
+        )),
+        _ => Err((
+            1,
+            "cancelled at the confirmation, so nothing was written.".to_string(),
+        )),
+    }
+}
+
+/// The wall clock, in seconds, that names this run's backup directory.
+fn now_secs() -> Result<u64, (u8, String)> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .map_err(|e| {
+            (
+                1,
+                format!("cannot read the system clock: {e}. Nothing was written."),
+            )
+        })
 }
 
 fn validate_geo_args(args: &Args) -> Result<(), String> {
@@ -111,7 +426,7 @@ fn validate_preflight(args: &Args, arch: &str) -> Result<(), (u8, String)> {
     Ok(())
 }
 
-fn run() -> Result<(), (u8, String)> {
+fn run() -> Result<u8, (u8, String)> {
     let args = parse_args().map_err(|e| (2, e))?;
     let (d, source) = distro::detect().map_err(|e| (1, e))?;
     if !d.is_ubuntu_family() {
@@ -129,6 +444,9 @@ fn run() -> Result<(), (u8, String)> {
     })?;
     let arch = architecture()?;
     validate_preflight(&args, &arch)?;
+    // The uid decides whether this run may write (SPEC.md CLI). `require_root` is the writer's own
+    // check, so the decision and the writer can never disagree about what root is.
+    let mode = decide(args.list, apply::require_root().is_ok(), args.yes);
     let net = Net::new();
     // Geolocation is optional (SPEC.md, Resilience): failures are reported and the run continues.
     let mut geo = geo::Geo::default();
@@ -192,7 +510,22 @@ fn run() -> Result<(), (u8, String)> {
         println!(
             "No official Ubuntu apt source URI can be changed; stopping before mirror probes."
         );
-        return Ok(());
+        return match mode {
+            // `--list` is read-only whatever the uid and exits 0 (SPEC.md Apply).
+            Mode::List => Ok(0),
+            Mode::Recommend => {
+                println!(
+                    "\nNothing was written: this run is not root and apt sources need root to change.\nRun:\n  {}",
+                    sudo_command(&args)
+                );
+                Ok(3)
+            }
+            Mode::Write { .. } => Err((
+                1,
+                "no official Ubuntu apt source URI can be changed, so the write has nothing to do. Nothing was written. Run with --list to see every file that was inspected."
+                    .to_string(),
+            )),
+        };
     }
 
     let reference = match probe::fetch_reference(&net, REFERENCE, &codename) {
@@ -252,8 +585,8 @@ fn run() -> Result<(), (u8, String)> {
         })
         .unwrap_or(0);
     // Write baseline (SPEC: Freshness trust boundary, ruling 5): verified values only, so a write
-    // fails closed when nothing verified. D9 consumes it; D6f pins the composition with tests.
-    let _write_baseline = write_baseline(
+    // fails closed when nothing verified. The writer holds the selected mirror's proof against it.
+    let trusted_baseline = write_baseline(
         reference.as_ref(),
         results
             .iter()
@@ -364,14 +697,106 @@ fn run() -> Result<(), (u8, String)> {
     for (url, why) in &rejected {
         println!("rejected {url}: {why}");
     }
-    if ranked.is_empty() {
+    let Some(best) = ranked.first() else {
         return Err((
             1,
             "no mirror passed the freshness and reachability checks; see the rejected list above"
                 .to_string(),
         ));
+    };
+    let best_asn = mirror_asn.get(&best.url).map(String::as_str);
+    println!(
+        "\nrecommended: {} — {} -updates signature, lag {}m, AS {} ({}), {:.1} MB/s, {} ms",
+        best.url,
+        signature_label(&best.signature),
+        best.lag_secs / 60,
+        best_asn.unwrap_or("unknown"),
+        as_status(server_asn.as_deref(), best_asn),
+        best.throughput_bps as f64 / 1e6,
+        best.latency_ms
+    );
+    let platform = if d.id == "pop" {
+        plan::Platform::PopOs
+    } else {
+        plan::Platform::Ubuntu
+    };
+    match mode {
+        // `--list` prints the change a write would make and never writes, whatever the uid.
+        Mode::List => {
+            match build_plan(
+                Path::new(apply::APT_DIR),
+                &apt_sources,
+                &archive_hosts,
+                best,
+                platform,
+            ) {
+                Ok(plan) => {
+                    println!("\nA write would make this change:");
+                    for line in plan_report(&plan) {
+                        println!("{line}");
+                    }
+                }
+                Err((_code, why)) => println!("\nA write would be refused: {why}"),
+            }
+            Ok(0)
+        }
+        // A run that may not write prints the one line that repeats it under `sudo`, and exits 3.
+        Mode::Recommend => {
+            println!(
+                "\nNothing was written: this run is not root and apt sources need root to change.\nRun:\n  {}",
+                sudo_command(&args)
+            );
+            Ok(3)
+        }
+        Mode::Write { confirm } => {
+            let plan = build_plan(
+                Path::new(apply::APT_DIR),
+                &apt_sources,
+                &archive_hosts,
+                best,
+                platform,
+            )?;
+            // The backup id is fixed before the confirmation so the prompt can name the directory
+            // the write will create; the writer is then handed the same instant.
+            let now = now_secs()?;
+            let backup_id = manifest::BackupId::from_secs(now).map_err(|e| {
+                (
+                    1,
+                    format!(
+                        "cannot name the backup directory for {now}: {e}. Nothing was written."
+                    ),
+                )
+            })?;
+            println!("\nThe write is planned and its bytes are bound to the files on disk:");
+            for line in plan_report(&plan) {
+                println!("{line}");
+            }
+            println!(
+                "  backup: {}/{} (every replaced file is copied there, mode 0700, before the first write)",
+                apply::BACKUP_ROOT,
+                backup_id.as_str()
+            );
+            println!("  alternatives: none (extra mirrors as comments are a TUI option)");
+            if confirm {
+                confirm_write(&mut io::stdin().lock(), "\nApply this change? [y/N] ")?;
+            }
+            let outcome = apply::apply(&plan, trusted_baseline.as_ref(), now)
+                .map_err(|e| (e.exit_code(), e.to_string()))?;
+            println!(
+                "\nbackup: {}/{}",
+                apply::BACKUP_ROOT,
+                outcome.backup_id.as_str()
+            );
+            for target in &outcome.written {
+                println!("wrote {}/{}", apply::APT_DIR, target.relative().display());
+            }
+            println!(
+                "apt sources now point at {}. Next: run 'apt update' to refresh the package lists.",
+                plan.selected_uri()
+            );
+            Ok(0)
+        }
     }
-    Ok(())
 }
 
 /// `dpkg --print-architecture`; only amd64 and i386 have mirror choice (SPEC.md Scope).
@@ -612,7 +1037,7 @@ fn main() -> ExitCode {
         return code;
     }
     match run() {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => ExitCode::from(code),
         Err((code, msg)) => {
             eprintln!("error: {msg}");
             ExitCode::from(code)
