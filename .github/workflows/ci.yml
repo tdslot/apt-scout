@@ -107,7 +107,7 @@ jobs:
         run: |
           bin=target/x86_64-unknown-linux-musl/release/apt-scout
           file "$bin"
-          if readelf -d "$bin" 2>/dev/null | rg -q NEEDED; then
+          if readelf -d "$bin" 2>/dev/null | grep -q NEEDED; then
             echo "$bin links shared libraries; it must be fully static." >&2
             readelf -d "$bin" >&2
             exit 1
