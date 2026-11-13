@@ -38,7 +38,7 @@
 
 **Write proof**: The value that ties a mirrored `InRelease` date to a successful signature verification. It is the only thing that authorizes a write.
 
-**Official archive URI**: An apt source URI pointing at `archive.ubuntu.com` or a host in the current mirror list. The only kind apt-scout rewrites.
+**Official archive URI**: An apt source URI pointing at `archive.ubuntu.com` or at a host the Launchpad mirror list names in any country, not only the run's. The only kind apt-scout rewrites.
 
 **Recommended**: Badge on the best-ranked fresh mirror; it is pre-checked in the TUI.
 
