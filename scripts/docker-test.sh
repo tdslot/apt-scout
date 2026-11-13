@@ -241,7 +241,14 @@ done
 #     failed, not that apt-scout is broken. `--list` keeps this about the verified ranking: a write
 #     case would need the harness, not this binary.
 rc=0; got=$(run bridge ubuntu:24.04 sh -c 'apt-get update -qq >/dev/null 2>&1; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gpgv ubuntu-keyring >/dev/null 2>&1 || { echo DEPENDENCY_INSTALL_FAILED; exit 9; }; /apt-scout --list --no-geo --country LT --top 3' 2>&1) || rc=$?
-if [ "$rc" = 0 ] && [[ "$got" == *"Reference InRelease signature: verified"* ]] && printf '%s\n' "$got" | grep -qE 'verified +[0-9]+m'; then
+#    The positive path is two lines of the new report, each anchored so the other cannot stand in
+#    for it: the context line says the freshness reference verified, and at least one ranked row's
+#    `sig` cell reads `ok`, the only cell value a verified `-updates` InRelease produces. A run with
+#    no keyring prints `unverified (...)` in that cell and `(unverified (...))` on the context line,
+#    so both patterns miss; an empty or unrelated report matches neither either, because both are
+#    anchored to the start and the end of the line they read.
+if [ "$rc" = 0 ] && printf '%s\n' "$got" | grep -qE '^ +[0-9]+ +https?://.*  ok$' \
+  && printf '%s\n' "$got" | grep -qE '^server AS.*reference: archive\.ubuntu\.com \(verified\)$'; then
   pass "live LT -> reference and at least one mirror verified"
 else
   fail "live LT verified row -> exit $rc: $(echo "$got" | head -12)"
