@@ -2692,7 +2692,9 @@ mod tests {
             Some(format!("redir:{exact}"))
         );
         // A non-ASCII host is cut on a character boundary, so it cannot panic, and still fits.
-        let wide = "ž".repeat(REDIR_HOST_MAX + 2);
+        // A multi-byte character that is not a Lithuanian letter: the CI English-only guard
+        // rejects the Lithuanian alphabet in `*.rs`, and this test only needs a char boundary.
+        let wide = "→".repeat(REDIR_HOST_MAX + 2);
         let wide_cell = note_cell(&noted(
             row("http://a.example/ubuntu", 0, &ok, None),
             None,
