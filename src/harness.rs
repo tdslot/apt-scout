@@ -51,7 +51,26 @@ const APPENDED_LINE: &[u8] = b"# apt-scout harness\n";
 const EXCLUDED_NAME: &str = "system-security.sources";
 
 /// Every case this build implements; the dispatch in `main` has one arm per entry.
-const CASES: [&str; 3] = ["selftest", "apply", "apply-pause"];
+const CASES: [&str; 4] = ["selftest", "apply", "apply-pause", "hostile-names"];
+
+/// The names `hostile-names` hands the real parsers: the last one must be accepted, the rest not.
+///
+/// One accepted name is in the list on purpose, so the `UNDER` half of the printed contract is
+/// exercised by a case instead of being a format nothing prints. The 65-byte entry is one byte
+/// past `SourceName::parse`'s 64-byte cap, so length is the only rule it can fail; the empty entry
+/// prints `REFUSED ` and is a refused name, not a missing one.
+const HOSTILE_NAMES: [&str; 10] = [
+    "..",
+    "../../etc/passwd",
+    "/etc/shadow",
+    "foo.txt",
+    ".list",
+    ".hidden.sources",
+    "a/b.list",
+    "",
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.sources",
+    "custom.sources",
+];
 
 /// How many cases the harness contract defines, `selftest` included.
 ///
@@ -88,6 +107,7 @@ pub fn main(args: Vec<String>) -> Option<ExitCode> {
         "selftest" => selftest(),
         "apply" => write_case(Case::Apply),
         "apply-pause" => write_case(Case::ApplyPause),
+        "hostile-names" => hostile_names(),
         _ => {
             eprintln!(
                 "error: unknown write-harness case '{name}'; cases are {}",
@@ -222,6 +242,25 @@ fn selftest() -> Result<String, Fault> {
         proof.seconds(),
         baseline()?.seconds()
     ))
+}
+
+/// Print every listed name's verdict, taken from the real parsers and the real path builder.
+///
+/// The spelling a name has as a target is the writer's own (`sources.list.d/<name>`), and the path
+/// an accepted one prints is the one `Target::relative` builds, never the input echoed back with a
+/// prefix. A runtime demonstration, not a regression guard: `plan.rs`'s enum makes an out-of-root
+/// target unrepresentable, so no case can detect a writer that opened a path outside the two
+/// roots — the type is the control. Nothing here writes.
+fn hostile_names() -> Result<String, Fault> {
+    require_container()?;
+    let mut lines = Vec::with_capacity(HOSTILE_NAMES.len());
+    for name in HOSTILE_NAMES {
+        match Target::parse(&format!("sources.list.d/{name}")) {
+            Ok(target) => lines.push(format!("UNDER {}", target.relative().display())),
+            Err(_) => lines.push(format!("REFUSED {name}")),
+        }
+    }
+    Ok(lines.join("\n"))
 }
 
 /// Refuse every write case outside a disposable container.

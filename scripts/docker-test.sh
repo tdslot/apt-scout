@@ -379,4 +379,149 @@ else
   fail "W9 substituted while paused -> exit $rc: $(echo "$got" | head -12)"
 fi
 
+# W10 and W11 are S7 and S8: a read-only rootfs stands in for a permission root would bypass, and
+# their /etc/apt layout is the committed $WFIXTURE image, because no setup at all can run against a
+# read-only rootfs. Build it here and run both cases through wro(), the only source of those flags.
+wfixture
+
+# W10 (S7) Offline, read-only rootfs with a writable /var/backups: the backup phase completes into
+#   the tmpfs and the write phase meets EROFS at its first temp file. The second run, in the same
+#   UTC second, must refuse the backup directory the first one left: a run that adopted or
+#   overwrote it would print neither the Exists line nor backups-identical=yes.
+rc=0; got=$(wro --tmpfs /var/backups "$WFIXTURE" sh -c "$WCASE_PRE
+snapshot /tmp/before
+rc1=0; /apt-scout __write-harness apply > /tmp/out1 2>&1 || rc1=\$?
+echo run1-rc=\$rc1
+snapshot /tmp/after1
+if cmp -s /tmp/before /tmp/after1; then echo run1-same=yes; else echo run1-same=no; fi
+echo tmp=\$(ls -a /etc/apt/sources.list.d | grep -c '\.apt-scout-tmp-')
+find /var/backups -type f | sort | xargs -r sha256sum > /tmp/bd1
+echo backups-before=\$(wc -l < /tmp/bd1)
+rc2=0; /apt-scout __write-harness apply > /tmp/out2 2>&1 || rc2=\$?
+echo run2-rc=\$rc2
+find /var/backups -type f | sort | xargs -r sha256sum > /tmp/bd2
+if cmp -s /tmp/bd1 /tmp/bd2; then echo backups-identical=yes; else echo backups-identical=no; fi
+snapshot /tmp/after2
+if cmp -s /tmp/before /tmp/after2; then echo same=yes; else echo same=no; fi
+echo RUN1; cat /tmp/out1
+echo RUN2; cat /tmp/out2" 2>&1) || rc=$?
+if [ "$rc" -eq 0 ] && [[ "$got" == *"run1-rc=1"* ]] && [[ "$got" == *"run2-rc=1"* ]] \
+  && [[ "$got" == *"ERR Write: cannot write /etc/apt/sources.list.d/.apt-scout-tmp-"* ]] \
+  && [[ "$got" == *"Read-only file system"* ]] \
+  && [[ "$got" == *"ERR Exists: /var/backups/apt-scout/20261112T000000Z: a backup directory for this UTC second already exists"* ]] \
+  && printf '%s\n' "$got" | grep -qx 'run1-same=yes' \
+  && printf '%s\n' "$got" | grep -qx 'same=yes' \
+  && printf '%s\n' "$got" | grep -qx 'tmp=0' \
+  && printf '%s\n' "$got" | grep -qx 'backups-before=2' \
+  && printf '%s\n' "$got" | grep -qx 'backups-identical=yes'; then
+  pass "W10 read-only /etc/apt -> ERR Write EROFS, then ERR Exists, backup unchanged"
+else
+  fail "W10 read-only /etc/apt -> exit $rc: $(echo "$got" | head -14)"
+fi
+
+# W11 (S8) Offline, read-only rootfs with no writable /var/backups at all: the refusal comes from
+#   the backup phase, so it precedes every read of a target and the whole /etc/apt tree, bytes
+#   included, is identical afterwards.
+rc=0; got=$(wro "$WFIXTURE" sh -c "$WCASE_PRE
+snapshot /tmp/before
+rc=0; /apt-scout __write-harness apply > /tmp/out 2>&1 || rc=\$?
+echo rc=\$rc
+snapshot /tmp/after
+if cmp -s /tmp/before /tmp/after; then echo same=yes; else echo same=no; fi
+if [ -e /var/backups/apt-scout ]; then echo backups=yes; else echo backups=no; fi
+cat /tmp/out" 2>&1) || rc=$?
+if [ "$rc" -eq 0 ] && [[ "$got" == *"rc=1"* ]] \
+  && [[ "$got" == *"ERR Backup: cannot write the backup of /var/backups/apt-scout: Read-only file system"* ]] \
+  && [[ "$got" == *"same=yes"* ]] && [[ "$got" == *"backups=no"* ]]; then
+  pass "W11 read-only /var/backups -> ERR Backup, exit 1, /etc/apt identical"
+else
+  fail "W11 read-only /var/backups -> exit $rc: $(echo "$got" | head -8)"
+fi
+
+# W12, W13 and W14 (S9) Offline: the three pre-created /var/backups/apt-scout states the writer
+#   must refuse. Each asserts its own reason, so one refusal cannot stand in for another, and each
+#   digests the backup root's contents, so a directory that gains a file shows up as a change.
+rc=0; got=$(WCASE_DIGESTS='/var/backups/apt-scout/*' wcase ubuntu:24.04 \
+  "$FIX_DEB822; mkdir -p /var/backups/apt-scout; chown 1000:1000 /var/backups/apt-scout; chmod 0700 /var/backups/apt-scout" \
+  "/apt-scout __write-harness apply" 2>&1) || rc=$?
+if [ "$rc" -eq 0 ] && [[ "$got" == *"rc=1"* ]] \
+  && [[ "$got" == *"ERR Backup: cannot write the backup of /var/backups/apt-scout: it is owned by uid 1000, not uid 0"* ]] \
+  && [[ "$got" == *"same=yes"* ]] && [[ "$got" == *"digests=unchanged"* ]] \
+  && [[ "$got" == *"missing /var/backups/apt-scout/*"* ]]; then
+  pass "W12 backup root owned by uid 1000 -> ERR Backup, exit 1, directory still empty"
+else
+  fail "W12 backup root owned by uid 1000 -> exit $rc: $(echo "$got" | head -8)"
+fi
+
+rc=0; got=$(WCASE_DIGESTS='/var/backups/apt-scout/*' wcase ubuntu:24.04 \
+  "$FIX_DEB822; install -d -m 0777 /var/backups/apt-scout" \
+  "/apt-scout __write-harness apply" 2>&1) || rc=$?
+if [ "$rc" -eq 0 ] && [[ "$got" == *"rc=1"* ]] \
+  && [[ "$got" == *"ERR Backup: cannot write the backup of /var/backups/apt-scout: its mode is 0o777, not 0o700"* ]] \
+  && [[ "$got" == *"same=yes"* ]] && [[ "$got" == *"digests=unchanged"* ]] \
+  && [[ "$got" == *"missing /var/backups/apt-scout/*"* ]]; then
+  pass "W13 world-writable backup root -> ERR Backup, exit 1, directory still empty"
+else
+  fail "W13 world-writable backup root -> exit $rc: $(echo "$got" | head -8)"
+fi
+
+rc=0; got=$(WCASE_DIGESTS='/tmp/evil/*' wcase ubuntu:24.04 \
+  "$FIX_DEB822; mkdir -p /tmp/evil; ln -s /tmp/evil /var/backups/apt-scout" \
+  "/apt-scout __write-harness apply" 2>&1) || rc=$?
+if [ "$rc" -eq 0 ] && [[ "$got" == *"rc=1"* ]] \
+  && [[ "$got" == *"ERR Backup: cannot write the backup of /var/backups/apt-scout: it is a symlink"* ]] \
+  && [[ "$got" == *"same=yes"* ]] && [[ "$got" == *"digests=unchanged"* ]] \
+  && [[ "$got" == *"missing /tmp/evil/*"* ]]; then
+  pass "W14 symlinked backup root -> ERR Backup, exit 1, target directory still empty"
+else
+  fail "W14 symlinked backup root -> exit $rc: $(echo "$got" | head -8)"
+fi
+
+# W15 (S11) Offline: every name's verdict from the real `Target`/`SourceName` parse and
+#   `Target::relative`'s path builder. A runtime demonstration, not a regression guard: `plan.rs`'s
+#   enum makes an out-of-root target unrepresentable, so the type is the control. The accepted name
+#   is in the list, so the UNDER half is printed by a real parse instead of being a format nothing
+#   exercises. Nine refused lines with only eight non-empty hostile names is what pins the empty
+#   name, which prints as `REFUSED ` and would otherwise be the one entry no line could be named
+#   for.
+long_name='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.sources'
+rc=0; got=$(wcase ubuntu:24.04 "$FIX_DEB822" "/apt-scout __write-harness hostile-names" 2>&1) || rc=$?
+refused=$(printf '%s\n' "$got" | grep -c '^REFUSED ' || true)
+under=$(printf '%s\n' "$got" | grep -c '^UNDER ' || true)
+unrefused=
+for name in '..' '../../etc/passwd' '/etc/shadow' 'foo.txt' '.list' '.hidden.sources' 'a/b.list' "$long_name"; do
+  printf '%s\n' "$got" | grep -qxF "REFUSED $name" || unrefused="$unrefused '$name'"
+done
+if [ "$rc" -eq 0 ] && [ -n "$refused" ] && [ "$refused" -eq 9 ] && [ -n "$under" ] && [ "$under" -eq 1 ] \
+  && [ -z "$unrefused" ] \
+  && [[ "$got" == *"UNDER sources.list.d/custom.sources"* ]] \
+  && [[ "$got" != *"UNDER sources.list.d/.."* ]] \
+  && [[ "$got" == *"same=yes"* ]] && [[ "$got" == *"backups=no"* ]]; then
+  pass "W15 hostile names -> $refused refused, $under accepted, /etc/apt identical"
+else
+  fail "W15 hostile names -> exit $rc refused=$refused under=$under unrefused='$unrefused': $(echo "$got" | head -14)"
+fi
+
+# W22 Offline: the positive path. Without it every refusal above could pass on a harness broken
+#   enough to refuse everything. The target it names is the one $FIX_DEB822 guarantees, the backup
+#   holds the pre-run copy and its manifest, and the snapshot diff is exactly two changed lines,
+#   both of that one file, so no other /etc/apt path moved.
+rc=0; got=$(wcase ubuntu:24.04 "$FIX_DEB822" "/apt-scout __write-harness apply && stat -c 'stat=%a %U:%G' /etc/apt/sources.list.d/ubuntu.sources && grep -q mirror.example.invalid /etc/apt/sources.list.d/ubuntu.sources && echo replaced && find /var/backups/apt-scout -mindepth 1 | sort && grep -q archive.ubuntu.com /var/backups/apt-scout/20261112T000000Z/sources.list.d/ubuntu.sources && echo backup-pre=yes" 2>&1) || rc=$?
+diffchanged=$(printf '%s\n' "$got" | grep -cE '^[-+]([fdl] |[0-9a-f]{64}  )' || true)
+others=$(printf '%s\n' "$got" | grep -E '^[-+]([fdl] |[0-9a-f]{64}  )' | grep -vc 'sources.list.d/ubuntu.sources' || true)
+if [ "$rc" -eq 0 ] && printf '%s\n' "$got" | grep -qx 'rc=0' \
+  && printf '%s\n' "$got" | grep -qxF 'OK backup=20261112T000000Z wrote=sources.list.d/ubuntu.sources' \
+  && printf '%s\n' "$got" | grep -qxF 'stat=644 root:root' \
+  && printf '%s\n' "$got" | grep -qxF 'replaced' \
+  && printf '%s\n' "$got" | grep -qxF 'backup-pre=yes' \
+  && printf '%s\n' "$got" | grep -qxF '/var/backups/apt-scout/20261112T000000Z/MANIFEST' \
+  && printf '%s\n' "$got" | grep -qxF '/var/backups/apt-scout/20261112T000000Z/sources.list.d/ubuntu.sources' \
+  && [[ "$got" == *"same=no"* ]] && [[ "$got" == *"backups=yes"* ]] \
+  && [[ "$got" != *".apt-scout-tmp-"* ]] \
+  && [ -n "$diffchanged" ] && [ "$diffchanged" -eq 2 ] && [ -n "$others" ] && [ "$others" -eq 0 ]; then
+  pass "W22 positive write -> OK line, mirror host, backup with manifest, only that file changed"
+else
+  fail "W22 positive write -> exit $rc diff=$diffchanged others=$others: $(echo "$got" | head -14)"
+fi
+
 exit $status
