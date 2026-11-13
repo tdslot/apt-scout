@@ -120,6 +120,8 @@ MODE
 
 TABLE
   sig reads ok only for a verified -updates InRelease; only ok may authorize a write.
+  notes reads sec:<n>m for a -security lag and redir:<host> for a redirect to another host;
+  a host cut to fit the table is printed in full by --verbose.
 
 EXIT CODES
   0 success    1 refusal or failure    2 usage    3 not root
@@ -585,7 +587,7 @@ fn titled(left: &str, right: &str) -> String {
 /// The one line under the table when no row has AS data: the run's own reason for it, because a
 /// column of `unknown` would read as an answer (SPEC step 9).
 fn as_note(rows: &[Row], reason: Option<&str>) -> Option<String> {
-    if rows.is_empty() || rows.iter().any(|row| row.as_match.is_some()) {
+    if rows.is_empty() || rows.iter().any(|row| row.as_cell.is_some()) {
         return None;
     }
     Some(format!(
@@ -610,29 +612,53 @@ struct Row<'a> {
     throughput_bps: u64,
     latency_ms: u64,
     signature: &'a verify::SignatureStatus,
-    /// `Some` only when the run has an AS for this mirror; the column exists when any row has one.
-    as_match: Option<&'a str>,
+    /// `12929 same` when the run has the mirror's AS; the column exists when any row has one.
+    as_cell: Option<String>,
+    /// The mirror's `-security` lag, which is informational only and never rejects (SPEC step 8).
+    security_lag: Option<i64>,
+    /// The host this mirror redirected to, when it is not its own host (SPEC step 7).
+    redirect_host: Option<&'a str>,
 }
 
-/// The ranked table (SPEC step 9): rank, mirror, lag, speed, delay, AS match, signature. The AS
+/// The narrowest the `as` column may be: a table with AS data still says `unknown` for a mirror the
+/// lookup could not name, and that word must fit the column it shares with the ASNs.
+const AS_MIN_WIDTH: usize = 7;
+
+/// The most columns a redirect host may take in the `notes` cell. A host longer than this is cut,
+/// so one long name cannot wrap the table; `--verbose` prints it in full.
+const REDIR_HOST_MAX: usize = 16;
+
+/// The ranked table (SPEC step 9): rank, mirror, lag, speed, delay, AS, signature, notes. The AS
 /// column is left out entirely when no row has AS data, so it can never read as "every mirror is
-/// unknown".
+/// unknown"; the notes column is left out when no shown row has a note, so a plain table gains no
+/// empty column.
 fn ranked_rows(rows: &[Row]) -> Vec<String> {
-    let with_as = rows.iter().any(|row| row.as_match.is_some());
+    // Both facts SPEC step 9 asks for, in one cell: the ASN the lookup answered and whether it is
+    // the server's. A fixed printed width would either cut a 6-digit ASN or waste columns on a
+    // 4-digit one, so the column is as wide as the widest cell it holds.
+    let as_width = rows
+        .iter()
+        .filter_map(|row| row.as_cell.as_deref())
+        .map(str::len)
+        .max()
+        .map(|widest| widest.max(AS_MIN_WIDTH));
+    let notes: Vec<Option<String>> = rows.iter().map(note_cell).collect();
+    let with_notes = notes.iter().any(Option::is_some);
     let mut out = Vec::new();
-    out.push(if with_as {
-        format!(
-            "  {:>2}  {:<44} {:>5} {:>10} {:>9} {:>7}  {}",
-            "#", "mirror", "lag", "speed", "delay", "as", "sig"
-        )
-    } else {
-        format!(
-            "  {:>2}  {:<44} {:>5} {:>10} {:>9}  {}",
-            "#", "mirror", "lag", "speed", "delay", "sig"
-        )
-    });
+    let mut head = format!(
+        "  {:>2}  {:<44} {:>5} {:>10} {:>9}",
+        "#", "mirror", "lag", "speed", "delay"
+    );
+    if let Some(width) = as_width {
+        head.push_str(&format!(" {:>width$}", "as"));
+    }
+    head.push_str("  sig");
+    if with_notes {
+        head.push_str("  notes");
+    }
+    out.push(head);
     for (i, row) in rows.iter().enumerate() {
-        let cells = format!(
+        let mut line = format!(
             "  {:>2}  {:<44.44} {:>5} {:>10} {:>9}",
             i + 1,
             row.url,
@@ -640,17 +666,52 @@ fn ranked_rows(rows: &[Row]) -> Vec<String> {
             format!("{:.1} MB/s", row.throughput_bps as f64 / 1e6),
             format!("{} ms", row.latency_ms)
         );
-        out.push(match row.as_match {
-            Some(found) => format!("{cells} {found:>7}  {}", signature_cell(row.signature)),
-            None => format!("{cells}  {}", signature_cell(row.signature)),
-        });
+        if let Some(width) = as_width {
+            let cell = row.as_cell.as_deref().unwrap_or("unknown");
+            line.push_str(&format!(" {cell:>width$}"));
+        }
+        line.push_str(&format!("  {}", signature_cell(row.signature)));
+        if let Some(note) = &notes[i] {
+            line.push_str(&format!("  {note}"));
+        }
+        out.push(line);
     }
     out
 }
 
-/// The recommendation and the facts behind it: host, country, AS match, speed, lag and signature
-/// status (SPEC.md CLI), in one line so nothing repeats the table.
-fn recommendation(best: &fresh::Probed, country: &str, as_match: Option<&str>) -> String {
+/// The trailing `notes` cell, last so the facts it carries never push a row's other columns around:
+/// `sec:778m` for a `-security` lag and `redir:<host>` for a redirect to another host. Both are
+/// facts SPEC.md asks the default output to show (steps 7 and 8) and both were `--verbose`-only
+/// after the report rewrite. `None` when the row has neither, so the column can be omitted.
+fn note_cell(row: &Row) -> Option<String> {
+    let security = row
+        .security_lag
+        .filter(|lag| *lag > 0)
+        .map(|lag| format!("sec:{}m", lag / 60));
+    let redirect = row
+        .redirect_host
+        .map(|host| format!("redir:{}", host_prefix(host, REDIR_HOST_MAX)));
+    match (security, redirect) {
+        (None, None) => None,
+        (Some(sec), None) => Some(sec),
+        (None, Some(redir)) => Some(redir),
+        (Some(sec), Some(redir)) => Some(format!("{sec} {redir}")),
+    }
+}
+
+/// At most `room` bytes of a host, cut on a character boundary so a non-ASCII name cannot panic.
+fn host_prefix(host: &str, room: usize) -> &str {
+    let mut end = room.min(host.len());
+    while !host.is_char_boundary(end) {
+        end -= 1;
+    }
+    &host[..end]
+}
+
+/// The recommendation and the facts behind it: host, country, AS, speed, lag and signature status
+/// (SPEC.md CLI), in one line so nothing repeats the table. The AS cell is the table's own, so the
+/// ASN the tie-break used is named here too instead of the bare match word.
+fn recommendation(best: &fresh::Probed, country: &str, as_cell: Option<&str>) -> String {
     format!(
         "  {} — {} {}, {}, AS {}, {}m lag, {:.1} MB/s, {} ms",
         best.url,
@@ -661,7 +722,7 @@ fn recommendation(best: &fresh::Probed, country: &str, as_match: Option<&str>) -
         },
         signature_words(&best.signature),
         country,
-        as_match.unwrap_or("unknown"),
+        as_cell.unwrap_or("unknown"),
         best.lag_secs / 60,
         best.throughput_bps as f64 / 1e6,
         best.latency_ms
@@ -1188,14 +1249,22 @@ fn run() -> Result<u8, (u8, String)> {
     let rows: Vec<Row> = ranked
         .iter()
         .take(args.top)
-        .map(|r| Row {
-            url: &r.url,
-            updates_date: r.updates_date,
-            lag_secs: r.lag_secs,
-            throughput_bps: r.throughput_bps,
-            latency_ms: r.latency_ms,
-            signature: &r.signature,
-            as_match: as_match(&mirror_asn, server_asn.as_deref(), &r.url),
+        .map(|r| {
+            let detail = details.get(&r.url);
+            Row {
+                url: &r.url,
+                updates_date: r.updates_date,
+                lag_secs: r.lag_secs,
+                throughput_bps: r.throughput_bps,
+                latency_ms: r.latency_ms,
+                signature: &r.signature,
+                as_cell: as_cell(&mirror_asn, server_asn.as_deref(), &r.url),
+                // Both facts below are already known for every probe that succeeded; keeping them
+                // on the row is what lets the default table show them and `--verbose` print them
+                // long, instead of the two disagreeing about what the run saw.
+                security_lag: detail.and_then(|d| d.security_lag),
+                redirect_host: detail.and_then(|d| d.redirected_to.as_deref()),
+            }
         })
         .collect();
     report.block(vec![header_context(
@@ -1217,13 +1286,10 @@ fn run() -> Result<u8, (u8, String)> {
         report.print();
         return Err(no_fresh_mirror());
     };
+    let best_cell = as_cell(&mirror_asn, server_asn.as_deref(), &best.url);
     report.block(vec![
         "Recommendation".to_string(),
-        recommendation(
-            best,
-            country_name,
-            as_match(&mirror_asn, server_asn.as_deref(), &best.url),
-        ),
+        recommendation(best, country_name, best_cell.as_deref()),
     ]);
 
     let platform = if d.id == "pop" {
@@ -1396,17 +1462,28 @@ fn signature_words(status: &verify::SignatureStatus) -> &'static str {
     }
 }
 
-/// The `as` column value for one mirror: `same`, `diff` or `unknown`, and `None` when the run has
-/// no AS for that mirror at all. `unknown` therefore means the lookup answered with no usable AS,
-/// and `None` means it never answered (SPEC step 9: never imply an AS preference).
-fn as_match(
+/// The `as` cell value for one mirror: the ASN Team Cymru answered and whether it is the server's,
+/// together (`12929 same`), because SPEC step 9 asks for both facts and one cell can carry both.
+/// `None` when the run has no AS answer for this mirror at all, which the table prints as
+/// `unknown`: never imply an AS preference the lookup did not support.
+fn as_cell(
     resolved: &std::collections::HashMap<String, ResolvedAs>,
     server_asn: Option<&str>,
     url: &str,
-) -> Option<&'static str> {
-    resolved
-        .get(as_key(url))
-        .map(|found| as_status(server_asn, Some(&found.asn)))
+) -> Option<String> {
+    resolved.get(as_key(url)).map(|found| {
+        format!(
+            "{} {}",
+            asn_number(&found.asn),
+            as_status(server_asn, Some(&found.asn))
+        )
+    })
+}
+
+/// `AS12929` as `12929`: the cell already says what the number is, and the prefix would spend two
+/// columns of every row on nothing.
+fn asn_number(asn: &str) -> &str {
+    asn.strip_prefix("AS").unwrap_or(asn)
 }
 
 fn as_status(server_asn: Option<&str>, mirror_asn: Option<&str>) -> &'static str {
@@ -2366,7 +2443,7 @@ mod tests {
         url: &'a str,
         lag_secs: i64,
         signature: &'a verify::SignatureStatus,
-        as_match: Option<&'a str>,
+        as_cell: Option<&'a str>,
     ) -> Row<'a> {
         Row {
             url,
@@ -2375,13 +2452,28 @@ mod tests {
             throughput_bps: 1_200_000,
             latency_ms: 1235,
             signature,
-            as_match,
+            as_cell: as_cell.map(str::to_string),
+            security_lag: None,
+            redirect_host: None,
         }
+    }
+
+    /// The same row with the two facts the `notes` column carries. `--verbose` prints them long; the
+    /// table prints them compact, and both read the same row.
+    fn noted<'a>(
+        mut row: Row<'a>,
+        security_lag: Option<i64>,
+        redirect_host: Option<&'a str>,
+    ) -> Row<'a> {
+        row.security_lag = security_lag;
+        row.redirect_host = redirect_host;
+        row
     }
 
     /// The AS column exists only when the run has AS data for at least one row: a table of
     /// `unknown` would read as "every lookup answered", which is exactly the silent failure the
-    /// column used to have.
+    /// column used to have. When it does exist, every row carries a cell, so the columns stay
+    /// aligned and a mirror without an answer says `unknown` rather than writing nothing.
     #[test]
     fn the_ranked_table_renders_the_as_column_only_with_as_data() {
         let ok = verify::SignatureStatus::verified_for_test();
@@ -2400,16 +2492,173 @@ mod tests {
                     .to_string(),
             ]
         );
-        let with = ranked_rows(&[row("http://a.example/ubuntu", 0, &ok, Some("same"))]);
+        let with = ranked_rows(&[
+            row("http://a.example/ubuntu", 0, &ok, Some("12929 same")),
+            row("http://b.example/ubuntu", 0, &ok, None),
+        ]);
         assert_eq!(
             with,
             [
-                "   #  mirror                                         lag      speed     delay      as  sig"
+                "   #  mirror                                         lag      speed     delay         as  sig"
                     .to_string(),
-                "   1  http://a.example/ubuntu                         0m   1.2 MB/s   1235 ms    same  ok"
+                "   1  http://a.example/ubuntu                         0m   1.2 MB/s   1235 ms 12929 same  ok"
+                    .to_string(),
+                "   2  http://b.example/ubuntu                         0m   1.2 MB/s   1235 ms    unknown  ok"
                     .to_string(),
             ]
         );
+    }
+
+    /// The `notes` column: the two facts SPEC.md asks the default output to show, compact, and only
+    /// when a shown row has one — a run with no lag and no redirect gains no empty column.
+    #[test]
+    fn the_notes_column_carries_each_fact_and_only_when_present() {
+        let ok = verify::SignatureStatus::verified_for_test();
+        let plain = ranked_rows(&[row("http://a.example/ubuntu", 0, &ok, None)]);
+        assert_eq!(
+            plain[0],
+            "   #  mirror                                         lag      speed     delay  sig"
+        );
+        assert_eq!(
+            plain[1],
+            "   1  http://a.example/ubuntu                         0m   1.2 MB/s   1235 ms  ok"
+        );
+
+        // A `-security` lag is informational only (it never rejects), but it is shown.
+        let lagging = ranked_rows(&[noted(
+            row("http://a.example/ubuntu", 0, &ok, None),
+            Some(778 * 60),
+            None,
+        )]);
+        assert_eq!(
+            lagging[0],
+            "   #  mirror                                         lag      speed     delay  sig  notes"
+        );
+        assert_eq!(
+            lagging[1],
+            "   1  http://a.example/ubuntu                         0m   1.2 MB/s   1235 ms  ok  sec:778m"
+        );
+
+        // A mirror that redirects to another host says which one, by default.
+        let redirected = ranked_rows(&[noted(
+            row("http://a.example/ubuntu", 0, &ok, None),
+            None,
+            Some("mirror2.example"),
+        )]);
+        assert_eq!(
+            redirected[1],
+            "   1  http://a.example/ubuntu                         0m   1.2 MB/s   1235 ms  ok  redir:mirror2.example"
+        );
+
+        // Both facts, one row; a zero lag is not one of them.
+        let both = ranked_rows(&[noted(
+            row("http://a.example/ubuntu", 0, &ok, None),
+            Some(60),
+            Some("mirror2.example"),
+        )]);
+        assert_eq!(
+            both[1],
+            "   1  http://a.example/ubuntu                         0m   1.2 MB/s   1235 ms  ok  sec:1m redir:mirror2.example"
+        );
+        let zero = ranked_rows(&[noted(
+            row("http://a.example/ubuntu", 0, &ok, None),
+            Some(0),
+            None,
+        )]);
+        assert!(!zero[0].contains("notes") && !zero[1].contains("sec:"));
+    }
+
+    /// One long host cannot wrap the table: the cell keeps the fact and cuts the name, and
+    /// `--verbose` is where the whole name is printed.
+    #[test]
+    fn a_long_redirect_host_is_cut_and_verbose_prints_it_whole() {
+        let ok = verify::SignatureStatus::verified_for_test();
+        let long = "a-very-long-mirror-host.example.org";
+        let cell = noted(
+            row("http://a.example/ubuntu", 0, &ok, None),
+            Some(778 * 60),
+            Some(long),
+        );
+        assert_eq!(
+            note_cell(&cell),
+            Some("sec:778m redir:a-very-long-mirr".to_string())
+        );
+        // The cut is bounded, so a run of long hostnames cannot widen the table without limit.
+        let cut = note_cell(&noted(
+            row("http://a.example/ubuntu", 0, &ok, None),
+            None,
+            Some(long),
+        ))
+        .expect("a redirect is a note");
+        assert_eq!(cut.len(), "redir:".len() + REDIR_HOST_MAX);
+
+        // `--verbose` prints the same fact long, from the same row data.
+        let mut details = std::collections::HashMap::new();
+        details.insert(
+            "http://a.example/ubuntu".to_string(),
+            Detail {
+                country: "Lithuania".to_string(),
+                security_date: Some(400),
+                security_lag: Some(778 * 60),
+                redirected_to: Some(long.to_string()),
+            },
+        );
+        let verbose = detail_section(&[cell], &details, &std::collections::HashMap::new());
+        assert!(
+            verbose
+                .iter()
+                .any(|l| l == &format!("     redirects to {long}")),
+            "{verbose:?}"
+        );
+        assert!(
+            verbose.iter().any(|l| l.contains("778m lag")),
+            "{verbose:?}"
+        );
+    }
+
+    /// The table is a terminal table, so its width is pinned: one column that grows turns every row
+    /// into a wrapped row. Measured on the shapes the default report prints, each with the longest
+    /// fact its cells can carry: a `--no-geo` row (no AS column — what the 44-column mirror column
+    /// was sized for), a row with an AS cell and a note, and the widest row this report can produce
+    /// (an `unavailable` signature and a full-length note). The arithmetic of the widest row is
+    /// `6 prefix + 44 mirror + 6 lag + 11 speed + 10 delay + 10 as + 2 + 11 sig + 2 + 31 notes`; the
+    /// redirect host is the only cell that can grow with input, and `REDIR_HOST_MAX` is what bounds
+    /// it, so the `notes` column costs a fixed 33 columns instead of an unbounded amount. Reaching
+    /// 80 for this row would mean dropping the full mirror URL (which the container matrix anchors
+    /// on) or one of the numeric columns — a layout decision, not a note-column one.
+    #[test]
+    fn the_ranked_table_width_is_pinned() {
+        let ok = verify::SignatureStatus::verified_for_test();
+        let bad = verify::SignatureStatus::Unavailable("no gpgv".into());
+        let url = "http://lt.archive.ubuntu.com/ubuntu";
+        let longest_note = "a-very-long-mirror-host.example.org";
+        let width = |rows: &[Row]| {
+            ranked_rows(rows)
+                .iter()
+                .map(|line| line.chars().count())
+                .max()
+                .unwrap_or(0)
+        };
+        let no_as = width(&[row(url, 0, &ok, None)]);
+        let a_note = width(&[noted(row(url, 0, &ok, None), Some(778 * 60), None)]);
+        let with_as = width(&[row(url, 0, &ok, Some("12929 same"))]);
+        let widest = width(&[noted(
+            row(url, 0, &bad, Some("12929 diff")),
+            Some(10_080 * 60),
+            Some(longest_note),
+        )]);
+        assert_eq!((no_as, a_note, with_as, widest), (82, 91, 93, 136));
+    }
+
+    /// `--help` is where the table's shorthand is defined: without the two token names the `notes`
+    /// column is unreadable, and without the pointer a reader cannot find a cut host again.
+    #[test]
+    fn the_help_defines_the_notes_column() {
+        assert!(HELP.contains("notes reads sec:<n>m"), "{HELP}");
+        assert!(HELP.contains("redir:<host>"), "{HELP}");
+        assert!(HELP.contains("printed in full by --verbose"), "{HELP}");
+        // The rule that only a verified InRelease may authorize a write stays where it was.
+        assert!(HELP.contains("only ok may authorize a write"), "{HELP}");
     }
 
     /// "N of M usable" counts what is shown against what survived, and the right-hand note says what
@@ -2430,7 +2679,7 @@ mod tests {
         assert_eq!(as_note(&[], Some("whatever")), None);
         assert_eq!(
             as_note(
-                &[row("http://a.example/ubuntu", 0, &ok, Some("same"))],
+                &[row("http://a.example/ubuntu", 0, &ok, Some("12929 same"))],
                 Some("x")
             ),
             None
@@ -2446,13 +2695,14 @@ mod tests {
         );
     }
 
-    /// The recommendation's reason carries every fact SPEC.md CLI asks for in it.
+    /// The recommendation's reason carries every fact SPEC.md CLI asks for in it, and it names the
+    /// AS the tie-break used: the bare match word cannot be checked against the table.
     #[test]
     fn the_recommendation_carries_country_as_lag_speed_and_signature() {
         let best = probed(MIRROR, verify::SignatureStatus::verified_for_test());
         assert_eq!(
-            recommendation(&best, "Lithuania", Some("same")),
-            "  https://mirror.example/ubuntu/ — freshest verified, Lithuania, AS same, 0m lag, 1.0 MB/s, 10 ms"
+            recommendation(&best, "Lithuania", Some("12929 same")),
+            "  https://mirror.example/ubuntu/ — freshest verified, Lithuania, AS 12929 same, 0m lag, 1.0 MB/s, 10 ms"
         );
         // A mirror one generation behind says so instead of claiming to be the freshest.
         let mut lagging = best;
@@ -2752,12 +3002,16 @@ mod tests {
         let verified = verify::SignatureStatus::verified_for_test();
         let unverified = verify::SignatureStatus::Unavailable("no gpgv in this image".into());
         let rows = vec![
-            row(selected, 0, &verified, Some("same")),
-            row(
-                "http://mirrors.usinternet.com/ubuntu",
-                0,
-                &unverified,
-                Some("diff"),
+            row(selected, 0, &verified, Some("12929 same")),
+            noted(
+                row(
+                    "http://mirrors.usinternet.com/ubuntu",
+                    0,
+                    &unverified,
+                    Some("3356 diff"),
+                ),
+                Some(778 * 60),
+                Some("mirror2.example"),
             ),
         ];
         let rejected = vec![
@@ -2799,7 +3053,7 @@ mod tests {
             recommendation(
                 &probed(selected, verify::SignatureStatus::verified_for_test()),
                 "United States",
-                Some("same"),
+                Some("12929 same"),
             ),
         ]);
         let mut planned = vec![titled("Planned change", "nothing is written with --list")];
@@ -2820,15 +3074,15 @@ mod tests {
             String::new(),
             "Ranked — 2 of 2 usable, 2 rejected             lag = -updates age vs freshest"
                 .to_string(),
-            "   #  mirror                                         lag      speed     delay      as  sig"
+            "   #  mirror                                         lag      speed     delay         as  sig  notes"
                 .to_string(),
-            "   1  https://mirror.example/ubuntu/                  0m   1.2 MB/s   1235 ms    same  ok"
+            "   1  https://mirror.example/ubuntu/                  0m   1.2 MB/s   1235 ms 12929 same  ok"
                 .to_string(),
-            "   2  http://mirrors.usinternet.com/ubuntu            0m   1.2 MB/s   1235 ms    diff  unavailable"
+            "   2  http://mirrors.usinternet.com/ubuntu            0m   1.2 MB/s   1235 ms  3356 diff  unavailable  sec:778m redir:mirror2.example"
                 .to_string(),
             String::new(),
             "Recommendation".to_string(),
-            "  https://mirror.example/ubuntu/ — freshest verified, United States, AS same, 0m lag, 1.0 MB/s, 10 ms"
+            "  https://mirror.example/ubuntu/ — freshest verified, United States, AS 12929 same, 0m lag, 1.0 MB/s, 10 ms"
                 .to_string(),
             String::new(),
             "Planned change                                 nothing is written with --list"
@@ -2863,25 +3117,26 @@ mod tests {
             "http://a.example/ubuntu"
         );
         assert_eq!(
-            as_match(&resolved, Some("AS64500"), "http://a.example/ubuntu"),
-            Some("same")
+            as_cell(&resolved, Some("AS64500"), "http://a.example/ubuntu"),
+            Some("64500 same".to_string())
         );
         assert_eq!(
-            as_match(&resolved, Some("AS64500"), "http://a.example/ubuntu/"),
-            Some("same")
+            as_cell(&resolved, Some("AS64500"), "http://a.example/ubuntu/"),
+            Some("64500 same".to_string())
         );
         assert_eq!(
-            as_match(&resolved, Some("AS64501"), "http://a.example/ubuntu"),
-            Some("diff")
+            as_cell(&resolved, Some("AS64501"), "http://a.example/ubuntu"),
+            Some("64500 diff".to_string())
         );
         // No answer for that host at all: no column value, so the note explains the gap.
         assert_eq!(
-            as_match(&resolved, Some("AS64500"), "http://b.example/ubuntu"),
+            as_cell(&resolved, Some("AS64500"), "http://b.example/ubuntu"),
             None
         );
+        // The lookup answered but the server's own AS is unknown: the ASN is still a fact.
         assert_eq!(
-            as_match(&resolved, None, "http://a.example/ubuntu"),
-            Some("unknown")
+            as_cell(&resolved, None, "http://a.example/ubuntu"),
+            Some("64500 unknown".to_string())
         );
     }
 }

@@ -217,13 +217,22 @@ rc=0; got=$(run bridge ubuntu:24.04 sh -c 'rm -f /etc/apt/sources.list; rm -rf /
 #    so their absence is still what proves the early stop.
 if [ "$rc" = 0 ] && printf '%s\n' "$got" | grep -q '^Sources ' && [[ "$got" == *"packages.example.org"* ]] && [[ "$got" == *"is not an official Ubuntu archive mirror"* ]] && [[ "$got" == *"No official Ubuntu apt source URI can be changed"* ]] && [[ "$got" != *"reference:"* ]] && [[ "$got" != *"Ranked"* ]]; then pass "third-party-only apt sources -> stop before probes"; else fail "third-party-only sources -> exit $rc: $(echo "$got" | head -8)"; fi
 
+# The `notes` column is the table's last one and is printed only when a shown row has a fact for
+# it, so a ranked row ends either at its `sig` cell or at up to two note tokens: `sec:<n>m` for a
+# -security lag, `redir:<host>` for a redirect, either alone or both. Anchoring the tail to that
+# grammar is what keeps `  ok$` a claim about the `sig` cell: any other tail misses, and a row whose
+# signature is not `ok` misses too.
+notes_tail='(  (sec:[0-9]+m|redir:[^ ]+|sec:[0-9]+m redir:[^ ]+))?$'
+
 # 11. Live: missing gpgv keeps ranking read-only usable but marks signatures unavailable.
 #     The case is about the ranking, and a root run without `--list` would try to write, so `--list`
 #     keeps it on the read-only path it was written for.
 rc=0; got=$(run bridge ubuntu:24.04 sh -c 'mv /usr/bin/gpgv /usr/bin/gpgv.disabled 2>/dev/null || true; /apt-scout --list --no-geo --country LT --top 2' 2>&1) || rc=$?
 #    The `sig` cell reads `unavailable` for every row, and `--no-geo` is the run that has no AS data,
-#    so the one note under the table is the run's own reason rather than a column of `unknown`.
-if [ "$rc" = 0 ] && printf '%s\n' "$got" | grep -qE '^ +[0-9]+ +https?://.*  unavailable$' && [[ "$got" == *"note: AS data unavailable (--no-geo skips every AS lookup)"* ]]; then pass "missing gpgv -> unavailable signatures, AS note says why, ranking still works"; else fail "missing gpgv -> exit $rc: $(echo "$got" | head -8)"; fi
+#    so the one note under the table is the run's own reason rather than a column of `unknown`. A row
+#    may end at a `notes` cell (a live mirror can lag on -security or redirect); the anchor admits
+#    only that grammar.
+if [ "$rc" = 0 ] && printf '%s\n' "$got" | grep -qE "^ +[0-9]+ +https?://.*  unavailable${notes_tail}" && [[ "$got" == *"note: AS data unavailable (--no-geo skips every AS lookup)"* ]]; then pass "missing gpgv -> unavailable signatures, AS note says why, ranking still works"; else fail "missing gpgv -> exit $rc: $(echo "$got" | head -8)"; fi
 
 # 12. Live (needs internet): real Launchpad + real mirrors, every supported Ubuntu release.
 #    Checks shape, not specific mirrors: a ranked table with at least one fresh mirror. `--list` is
@@ -246,8 +255,9 @@ rc=0; got=$(run bridge ubuntu:24.04 sh -c 'apt-get update -qq >/dev/null 2>&1; D
 #    `sig` cell reads `ok`, the only cell value a verified `-updates` InRelease produces. A run with
 #    no keyring prints `unverified (...)` in that cell and `(unverified (...))` on the context line,
 #    so both patterns miss; an empty or unrelated report matches neither either, because both are
-#    anchored to the start and the end of the line they read.
-if [ "$rc" = 0 ] && printf '%s\n' "$got" | grep -qE '^ +[0-9]+ +https?://.*  ok$' \
+#    anchored to the start and the end of the line they read. The row's end is its `sig` cell or a
+#    `notes` cell after it, and only the note grammar above may stand there.
+if [ "$rc" = 0 ] && printf '%s\n' "$got" | grep -qE "^ +[0-9]+ +https?://.*  ok${notes_tail}" \
   && printf '%s\n' "$got" | grep -qE '^server AS.*reference: archive\.ubuntu\.com \(verified\)$'; then
   pass "live LT -> reference and at least one mirror verified"
 else
