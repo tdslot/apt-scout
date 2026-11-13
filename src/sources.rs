@@ -385,14 +385,32 @@ pub fn mirror_root(url: &str) -> Option<MirrorRoot> {
     })
 }
 
+/// Collapse repeated slashes and drop a trailing one, so that no spelling of a path can change what
+/// it admits: `/ubuntu`, `/ubuntu/` and `//ubuntu//` are one tree, and `/` alone stays `/`. A list
+/// spells a tree with the trailing slash and a run writes the URI without it, so the two sides of the
+/// comparison below must not disagree about a slash that names no segment.
+fn normalize_path(path: &str) -> String {
+    let mut normalized = String::with_capacity(path.len() + 1);
+    for segment in path.split('/').filter(|s| !s.is_empty()) {
+        normalized.push('/');
+        normalized.push_str(segment);
+    }
+    if normalized.is_empty() {
+        normalized.push('/');
+    }
+    normalized
+}
+
 /// Segment-wise prefix test: a listed `/ubuntu` admits `/ubuntu`, `/ubuntu/` and
-/// `/ubuntu/dists/...`, never `/ubuntufoo`; a listed `/` admits the whole host. The comparison is
-/// byte-exact, because only the host is case-insensitive.
+/// `/ubuntu/dists/...`, never `/ubuntufoo`; a listed `/` admits the whole host. Both sides are
+/// normalised first, so a trailing or repeated slash is the same tree on either side. Nothing else is
+/// ignored: the comparison is byte-exact, because only the host is case-insensitive.
 fn path_admits(root: &str, path: &str) -> bool {
+    let root = normalize_path(root);
+    let path = normalize_path(path);
     root == "/"
         || path == root
-        || (path.starts_with(root)
-            && (root.ends_with('/') || path.as_bytes().get(root.len()) == Some(&b'/')))
+        || (path.starts_with(&root) && path.as_bytes().get(root.len()) == Some(&b'/'))
 }
 
 /// Hosts that are never replaced, whatever a mirror list names: a `-security` or `ports` archive is
@@ -464,7 +482,6 @@ fn is_rewritable(uri: &str, roots: &[MirrorRoot], pop_os_system_sources: bool) -
         return false;
     }
     let path = tail.split(['?', '#']).next().unwrap_or_default();
-    let path = if path.is_empty() { "/" } else { path };
     let policy_match = roots
         .iter()
         .any(|r| r.host.eq_ignore_ascii_case(&host) && path_admits(&r.path, path));
@@ -472,7 +489,7 @@ fn is_rewritable(uri: &str, roots: &[MirrorRoot], pop_os_system_sources: bool) -
         if !policy_match || !pop_os_system_sources {
             return false;
         }
-        return path == "/ubuntu" || path == "/ubuntu/";
+        return normalize_path(path) == "/ubuntu";
     }
     host == "archive.ubuntu.com" || host.ends_with(".archive.ubuntu.com") || policy_match
 }
@@ -1195,9 +1212,9 @@ mod tests {
         ] {
             assert!(is_rewritable(admitted, &hosts, false), "{admitted}");
         }
-        // A listed path is a prefix of the on-disk path and never a sibling of it, so the slash-less
-        // spelling of that same tree is reported skip and left alone rather than guessed through.
-        assert!(!is_rewritable(
+        // The slash-less spelling of that same tree is that same tree: a list spells `.../ubuntu/`
+        // and a run writes `.../ubuntu`, so the two spellings cannot disagree.
+        assert!(is_rewritable(
             "http://ftp.uni-stuttgart.de/pub/linux/debian/ubuntu",
             &hosts,
             false
@@ -1229,6 +1246,115 @@ mod tests {
         assert!(is_rewritable(
             "http://archive.ubuntu.com/anything/at/all",
             &hosts,
+            false
+        ));
+    }
+
+    /// A trailing slash names the same tree on both sides, and a repeated slash is another spelling
+    /// of the same path. The list spells `.../ubuntu/` while a run writes `.../ubuntu`, so a rule that
+    /// read the two as different trees refused every mirror this tool had already written.
+    #[test]
+    fn a_trailing_slash_never_changes_what_a_path_admits() {
+        for (root, path) in [
+            ("/ubuntu", "/ubuntu/"),
+            ("/ubuntu/", "/ubuntu"),
+            ("/ubuntu", "/ubuntu"),
+            ("/ubuntu", "/ubuntu/dists/x"),
+            ("/ubuntu/", "/ubuntu/dists/x"),
+            ("//ubuntu//", "/ubuntu"),
+            ("/ubuntu-mirror/archive/", "/ubuntu-mirror/archive"),
+            ("/", "/anything/at/all"),
+            ("/", "/"),
+            ("/", ""),
+        ] {
+            assert!(path_admits(root, path), "{root} must admit {path}");
+        }
+        for (root, path) in [
+            ("/ubuntu", "/ubuntufoo"),
+            ("/ubuntu/", "/ubuntufoo"),
+            ("/ubuntu", "/ubuntu-x"),
+            ("/ubuntu/x", "/ubuntu"),
+            ("/ubuntu", "/"),
+        ] {
+            assert!(!path_admits(root, path), "{root} must not admit {path}");
+        }
+    }
+
+    /// The pair the live runs actually produce: the Launchpad page lists a mirror at `.../ubuntu/`
+    /// and `probe::probe` writes the selected URI without that slash. Every entry of the real page
+    /// that is eligible as listed must stay eligible as written, and one level below it, or a second
+    /// `--country` run cannot recognize the mirror the first one wrote (W23, W24).
+    #[test]
+    fn a_launchpad_entry_admits_the_uri_a_run_writes() {
+        let html = include_str!("../tests/fixtures/launchpad-full-82-countries.html");
+        let mirrors = crate::mirrors::parse_launchpad(html).expect("the page fixture parses");
+        let roots: Vec<MirrorRoot> = mirrors
+            .iter()
+            .filter(|m| crate::mirrors::validate_url(&m.url).is_ok())
+            .filter_map(|m| mirror_root(&m.url))
+            .collect();
+        assert!(
+            roots.len() > 500,
+            "the page fixture must yield a broad set, not {}: a handful of entries cannot tell the \
+             page's spellings apart",
+            roots.len()
+        );
+        let mut checked = 0;
+        for mirror in &mirrors {
+            if crate::mirrors::validate_url(&mirror.url).is_err()
+                || !is_rewritable(&mirror.url, &roots, false)
+            {
+                continue;
+            }
+            checked += 1;
+            let written = mirror.url.trim_end_matches('/');
+            assert!(
+                is_rewritable(written, &roots, false),
+                "{} is listed as eligible, so the URI a run writes for it must be too",
+                mirror.url
+            );
+            assert!(
+                is_rewritable(&format!("{written}/dists/noble/InRelease"), &roots, false),
+                "{} names a tree, so everything below it is eligible too",
+                mirror.url
+            );
+        }
+        assert!(
+            checked > 300,
+            "only {checked} entries were eligible: the page fixture went stale"
+        );
+    }
+
+    /// The same normalisation on the two hosts that carry a rule of their own: `apt.pop-os.org` still
+    /// needs the explicit policy host and its own `/ubuntu` tree, and the canonical archive is
+    /// recognized at any path, so a trailing slash changes neither answer.
+    #[test]
+    fn the_special_hosts_ignore_a_trailing_slash_too() {
+        let pop = roots(&[("apt.pop-os.org", "/ubuntu/")]);
+        for uri in [
+            "http://apt.pop-os.org/ubuntu",
+            "http://apt.pop-os.org/ubuntu/",
+        ] {
+            assert!(is_rewritable(uri, &pop, true), "{uri}");
+            assert!(
+                !is_rewritable(uri, &pop, false),
+                "{uri} still needs the Pop!_OS policy host"
+            );
+        }
+        assert!(!is_rewritable("http://apt.pop-os.org/ubuntu-x", &pop, true));
+        assert!(!is_rewritable("http://apt.pop-os.org/", &pop, true));
+        // The canonical archive is recognized at any path with no list entry naming it at all; a
+        // host that merely resembles it is not.
+        for uri in [
+            "http://archive.ubuntu.com/ubuntu",
+            "http://archive.ubuntu.com/ubuntu/",
+            "http://de.archive.ubuntu.com/ubuntu/",
+        ] {
+            assert!(is_rewritable(uri, HOSTS, false), "{uri}");
+        }
+        assert!(!is_rewritable(
+            "http://notarchive.ubuntu.com/ubuntu",
+            HOSTS,
             false
         ));
     }

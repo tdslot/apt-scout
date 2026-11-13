@@ -2396,6 +2396,48 @@ mod tests {
         }
     }
 
+    /// A run writes the selected mirror URI without the trailing slash the page spells
+    /// (`probe::probe` trims it), so a later run must still recognize it: the roots of a German run
+    /// name a Norwegian mirror at `/archive/`, and the URI that first run wrote is `/archive`. Checked
+    /// at the seam the run itself uses — the inventory — so this fails if the whole-host or
+    /// own-country-only version of the rule ever comes back, not only if one helper regresses.
+    #[test]
+    fn a_mirror_a_run_wrote_stays_rewritable_under_a_country_change() {
+        let net = Canned(vec![(LAUNCHPAD, Ok(LAUNCHPAD_OK))]);
+        let (_, src, roots) = load_candidates(&net, "DE", "Germany", false).unwrap();
+        assert_eq!(src, "Launchpad");
+        assert!(
+            roots
+                .iter()
+                .any(|r| r.host == "ubuntu.uib.no" && r.path == "/archive/"),
+            "the fixture lists this mirror in Norway, so a German run's set must still name it: \
+             {roots:?}"
+        );
+        let apt = TempApt::new("country-change");
+        apt.write(
+            "sources.list",
+            "deb http://ubuntu.uib.no/archive noble main\n",
+        );
+        let inventory = sources::inventory(&apt.0, &roots, false);
+        assert!(
+            inventory.has_rewritable_uri(),
+            "run 2 cannot recognize the mirror run 1 wrote: {:?}",
+            inventory.files[0].entries
+        );
+        // The seeded lines that made W24 fail stay refused while that line is eligible.
+        apt.write(
+            "sources.list",
+            "deb http://ubuntu.uib.no/archive noble main\ndeb http://deb.example.com/stable ./\ndeb https://ppa.launchpadcontent.net/x/y/ubuntu noble main\n",
+        );
+        let mixed = sources::inventory(&apt.0, &roots, false);
+        let rewritable: Vec<bool> = mixed.files[0]
+            .entries
+            .iter()
+            .flat_map(|e| e.rewritable.iter().copied())
+            .collect();
+        assert_eq!(rewritable, [true, false, false]);
+    }
+
     #[test]
     fn the_uid_and_the_flags_decide_whether_the_run_writes() {
         // `--list` never writes, whatever the uid, and exits 0 (SPEC.md CLI table).
