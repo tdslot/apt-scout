@@ -99,11 +99,12 @@ impl Inventory {
 }
 
 /// Parse legacy apt source lines. Comments/blank lines are ignored. Every active deb/deb-src line
-/// becomes one entry. `archive_hosts` includes the canonical archive and currently known mirrors.
+/// becomes one entry. `roots` is every host and path prefix this run can recognize as an Ubuntu
+/// archive mirror, from any country, plus the canonical archive.
 pub fn parse_legacy(
     text: &str,
     file: &Path,
-    archive_hosts: &[String],
+    roots: &[MirrorRoot],
     pop_os_system_sources: bool,
 ) -> Vec<Entry> {
     let mut entries = Vec::new();
@@ -150,15 +151,17 @@ pub fn parse_legacy(
             entries.push(invalid(file, i + 1, Format::Legacy, "missing suite".into()));
             continue;
         };
-        let rewritable = is_rewritable(uri, archive_hosts, pop_os_system_sources)
-            && !suite.ends_with("-security");
+        let rewritable =
+            is_rewritable(uri, roots, pop_os_system_sources) && !suite.ends_with("-security");
         let issue = if suite.ends_with("-security") {
             Some("security suite is never rewritten".into())
         } else if uri.starts_with("mirror://") || uri.starts_with("mirror+file:") {
             Some(format!(
                 "mirror URI scheme in '{uri}' is unsupported and will be left unchanged"
             ))
-        } else if !is_rewritable(uri, archive_hosts, pop_os_system_sources) {
+        } else if let Some(reason) = dot_segment_reason(uri) {
+            Some(reason)
+        } else if !is_rewritable(uri, roots, pop_os_system_sources) {
             Some(format!(
                 "URI '{uri}' is not an official Ubuntu archive mirror"
             ))
@@ -184,7 +187,7 @@ pub fn parse_legacy(
 pub fn parse_deb822(
     text: &str,
     file: &Path,
-    archive_hosts: &[String],
+    roots: &[MirrorRoot],
     pop_os_system_sources: bool,
 ) -> Vec<Entry> {
     let mut out = Vec::new();
@@ -239,16 +242,21 @@ pub fn parse_deb822(
                 issue.is_none()
                     && enabled
                     && (!has_security || pop_security_split)
-                    && is_rewritable(uri, archive_hosts, pop_os_system_sources)
+                    && is_rewritable(uri, roots, pop_os_system_sources)
             })
             .collect::<Vec<_>>();
         if issue.is_none() && !enabled {
             *issue = Some("stanza disabled (Enabled: no)".into());
         }
         if issue.is_none()
+            && let Some(reason) = uris.iter().find_map(|uri| dot_segment_reason(uri))
+        {
+            *issue = Some(reason);
+        }
+        if issue.is_none()
             && uris
                 .iter()
-                .any(|uri| !is_rewritable(uri, archive_hosts, pop_os_system_sources))
+                .any(|uri| !is_rewritable(uri, roots, pop_os_system_sources))
         {
             *issue = Some("one or more URIs are not official Ubuntu archive mirror hosts".into());
         }
@@ -316,7 +324,134 @@ fn invalid(file: &Path, line: usize, format: Format, issue: String) -> Entry {
     }
 }
 
-fn is_rewritable(uri: &str, archive_hosts: &[String], pop_os_system_sources: bool) -> bool {
+/// Where a mirror list says an Ubuntu archive lives: a host and the path prefix of the tree it
+/// serves. Membership is recognizability, not trust (SPEC: Apply).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MirrorRoot {
+    /// Lowercase, no trailing dot.
+    pub host: String,
+    /// Starts with `/` and is never empty; `/` admits every path on the host.
+    pub path: String,
+}
+
+/// The `(host, path)` pair a listed URL names, or `None` when its authority or path cannot be read.
+/// The authority is parsed the way `is_rewritable` parses one — bracketed IPv6, optional port, host
+/// lowercased with the trailing dot trimmed — and the port is dropped, because eligibility never
+/// compares it. A caller validates the URL first; a host this cannot read contributes nothing rather
+/// than being guessed at, and the run reports it as left out.
+pub fn mirror_root(url: &str) -> Option<MirrorRoot> {
+    let (scheme, rest) = url.split_once("://")?;
+    if !matches!(scheme, "http" | "https") {
+        return None;
+    }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let tail = &rest[authority.len()..];
+    if authority.is_empty() || authority.contains('@') {
+        return None;
+    }
+    let (host, port) = if let Some(v6) = authority.strip_prefix('[') {
+        let (host, after) = v6.split_once(']')?;
+        let port = match after {
+            "" => None,
+            suffix if suffix.starts_with(':') => Some(&suffix[1..]),
+            _ => return None,
+        };
+        (host, port)
+    } else {
+        match authority.rsplit_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (authority, None),
+        }
+    };
+    if let Some(port) = port
+        && (port.is_empty()
+            || !port.bytes().all(|b| b.is_ascii_digit())
+            || !matches!(port.parse::<u16>(), Ok(p) if p > 0))
+    {
+        return None;
+    }
+    if host.is_empty()
+        || !host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
+    {
+        return None;
+    }
+    let host = host.trim_end_matches('.');
+    if host.is_empty() {
+        return None;
+    }
+    let path = tail.split(['?', '#']).next().unwrap_or_default();
+    // A listing that names a dot segment is left out of the set rather than resolved into something
+    // else, and the caller reports it with the other entries that cannot enter it.
+    if dot_segment(path).is_some() {
+        return None;
+    }
+    Some(MirrorRoot {
+        host: host.to_ascii_lowercase(),
+        path: if path.is_empty() {
+            "/".to_string()
+        } else {
+            path.to_string()
+        },
+    })
+}
+
+/// The first segment of `path` that names a directory hop rather than a directory, spelled as it was
+/// written: `.` or `..`, plainly or with either dot percent-encoded (`%2e%2e`, `%2E%2E`, `.%2e`,
+/// `%2e.`). Nothing here decodes escapes in general and nothing resolves a segment: a dot segment is
+/// only ever found so that the path can be refused. A listed `/ubuntu` admits an on-disk
+/// `/ubuntu/../debian` under the whole-segment rule while that path names the `/debian` tree, and
+/// refusing is both the smaller answer and the one a spelling cannot walk around.
+fn dot_segment(path: &str) -> Option<&str> {
+    path.split('/').find(|segment| {
+        let plain = segment.replace("%2e", ".").replace("%2E", ".");
+        plain == "." || plain == ".."
+    })
+}
+
+/// Collapse repeated slashes and drop a trailing one, so that no spelling of a path can change what
+/// it admits: `/ubuntu`, `/ubuntu/` and `//ubuntu//` are one tree, and `/` alone stays `/`. A list
+/// spells a tree with the trailing slash and a run writes the URI without it, so the two sides of the
+/// comparison below must not disagree about a slash that names no segment.
+fn normalize_path(path: &str) -> String {
+    let mut normalized = String::with_capacity(path.len() + 1);
+    for segment in path.split('/').filter(|s| !s.is_empty()) {
+        normalized.push('/');
+        normalized.push_str(segment);
+    }
+    if normalized.is_empty() {
+        normalized.push('/');
+    }
+    normalized
+}
+
+/// Segment-wise prefix test: a listed `/ubuntu` admits `/ubuntu`, `/ubuntu/` and
+/// `/ubuntu/dists/...`, never `/ubuntufoo`; a listed `/` admits the whole host. Both sides are
+/// normalised first, so a trailing or repeated slash is the same tree on either side. Nothing else is
+/// ignored: the comparison is byte-exact, because only the host is case-insensitive.
+fn path_admits(root: &str, path: &str) -> bool {
+    let root = normalize_path(root);
+    let path = normalize_path(path);
+    root == "/"
+        || path == root
+        || (path.starts_with(&root) && path.as_bytes().get(root.len()) == Some(&b'/'))
+}
+
+/// Hosts that are never replaced, whatever a mirror list names: a `-security` or `ports` archive is
+/// not an install mirror, and a PPA is a third-party repository (SPEC: Apply).
+const NEVER_REWRITE: [&str; 4] = [
+    "security.ubuntu.com",
+    "ports.ubuntu.com",
+    "ppa.launchpad.net",
+    "ppa.launchpadcontent.net",
+];
+
+/// Whether this URI token may be replaced by the selected mirror. Membership in `roots` answers
+/// recognizability only, and it is asked last: the refusal list and the Pop!_OS path and suite
+/// conditions are decided first, whatever the list names, and a `-security` suite is refused by the
+/// caller.
+fn is_rewritable(uri: &str, roots: &[MirrorRoot], pop_os_system_sources: bool) -> bool {
     if uri.chars().any(|c| c.is_whitespace() || c.is_control()) || uri.contains(['\\', '@']) {
         return false;
     }
@@ -362,24 +497,60 @@ fn is_rewritable(uri: &str, archive_hosts: &[String], pop_os_system_sources: boo
         return false;
     }
     let host = host.trim_end_matches('.').to_ascii_lowercase();
-    if matches!(host.as_str(), "security.ubuntu.com" | "ports.ubuntu.com") {
+    // The refusal list is explicit and runs before any membership test, whatever a list names:
+    // a PPA was safe before only because no list happened to name one, which is not a control.
+    if NEVER_REWRITE.contains(&host.as_str())
+        || ["launchpad.net", "launchpadcontent.net"]
+            .iter()
+            .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+    {
         return false;
     }
-    let policy_match = archive_hosts
+    let path = tail.split(['?', '#']).next().unwrap_or_default();
+    // Refused before any host or membership test, so neither a listed path nor the canonical archive's
+    // any-path rule can admit a tree the token does not name.
+    if dot_segment(path).is_some() {
+        return false;
+    }
+    let policy_match = roots
         .iter()
-        .any(|h| h.trim_end_matches('.').eq_ignore_ascii_case(&host));
+        .any(|r| r.host.eq_ignore_ascii_case(&host) && path_admits(&r.path, path));
     if host == "apt.pop-os.org" {
         if !policy_match || !pop_os_system_sources {
             return false;
         }
-        let path = tail.split(['?', '#']).next().unwrap_or_default();
-        return path == "/ubuntu" || path == "/ubuntu/";
+        return normalize_path(path) == "/ubuntu";
     }
     host == "archive.ubuntu.com" || host.ends_with(".archive.ubuntu.com") || policy_match
 }
 
+/// Why a URI token with a dot segment is not eligible, naming the segment it found so that the
+/// skipped entry is actionable on its own. `None` when the token carries no dot segment, because the
+/// refusal then has another reason to state.
+fn dot_segment_reason(uri: &str) -> Option<String> {
+    let (_, rest) = uri.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let path = rest[authority.len()..]
+        .split(['?', '#'])
+        .next()
+        .unwrap_or_default();
+    let segment = dot_segment(path)?;
+    Some(format!(
+        "URI '{uri}' carries a '{segment}' path segment, so it is left unchanged"
+    ))
+}
+
+/// The reason a URI token was left alone: a dot segment is named, and every other refusal keeps the
+/// line a reader already knows.
+fn refusal_reason(uri: &str) -> String {
+    dot_segment_reason(uri).unwrap_or_else(|| format!("{uri} was not changed"))
+}
+
 /// Discover apt source files without following symlinks. Non-UTF8 files are reported, not guessed.
-pub fn inventory(root: &Path, archive_hosts: &[String], pop_os: bool) -> Inventory {
+/// `roots` is every host and path prefix this run can recognize as an Ubuntu archive mirror, from
+/// any country, plus the canonical archive: membership makes a URI eligible for replacement and
+/// nothing else, and `is_rewritable` still refuses the hosts that are never replaced.
+pub fn inventory(root: &Path, roots: &[MirrorRoot], pop_os: bool) -> Inventory {
     match std::fs::symlink_metadata(root) {
         Ok(meta) if meta.file_type().is_dir() => {}
         Ok(_) => {
@@ -506,11 +677,11 @@ pub fn inventory(root: &Path, archive_hosts: &[String], pop_os: bool) -> Invento
                     parse_deb822(
                         &text,
                         &path,
-                        archive_hosts,
+                        roots,
                         pop_os && path.file_name().is_some_and(|n| n == "system.sources"),
                     )
                 } else {
-                    parse_legacy(&text, &path, archive_hosts, false)
+                    parse_legacy(&text, &path, roots, false)
                 };
                 FileReport {
                     path,
@@ -797,11 +968,14 @@ fn pop_security_content(
 }
 
 /// Produce a byte-preserving apt source rewrite plan. This function performs no filesystem IO.
+/// `roots` is every host and path prefix this run can recognize as an Ubuntu archive mirror, from
+/// any country, plus the canonical archive; `is_rewritable` decides membership and keeps refusing
+/// the hosts that are never replaced, whatever a list names.
 pub fn rewrite_source(
     text: &str,
     file: &Path,
     selected_uri: &str,
-    archive_hosts: &[String],
+    roots: &[MirrorRoot],
     pop_os: bool,
 ) -> Result<RewritePlan, String> {
     crate::mirrors::validate_url(selected_uri)
@@ -813,7 +987,7 @@ pub fn rewrite_source(
     let mut created_security = String::new();
 
     if !is_deb822 {
-        let entries = parse_legacy(text, file, archive_hosts, false);
+        let entries = parse_legacy(text, file, roots, false);
         let lines = physical_lines(text);
         for entry in entries {
             let Some(uri) = entry.uris.first() else {
@@ -824,9 +998,10 @@ pub fn rewrite_source(
             };
             if !entry.rewritable.first().copied().unwrap_or(false) {
                 skipped.push(format!(
-                    "{}:{}: {uri} was not changed",
+                    "{}:{}: {}",
                     file.display(),
-                    entry.line
+                    entry.line,
+                    refusal_reason(uri)
                 ));
                 continue;
             }
@@ -844,7 +1019,7 @@ pub fn rewrite_source(
     } else {
         for stanza_range in stanza_ranges(text) {
             let stanza = &text[stanza_range.clone()];
-            let entries = parse_deb822(stanza, file, archive_hosts, is_pop_system);
+            let entries = parse_deb822(stanza, file, roots, is_pop_system);
             if entries.len() != 1 {
                 continue;
             }
@@ -881,9 +1056,10 @@ pub fn rewrite_source(
                     ));
                 } else if let Some(uri) = entry.uris.get(i) {
                     skipped.push(format!(
-                        "{}:{}: {uri} was not changed",
+                        "{}:{}: {}",
                         file.display(),
-                        entry.line
+                        entry.line,
+                        refusal_reason(uri)
                     ));
                 }
             }
@@ -961,14 +1137,36 @@ pub fn rewrite_source(
 #[cfg(test)]
 mod tests {
     use super::*;
-    const HOSTS: &[String] = &[];
+    const HOSTS: &[MirrorRoot] = &[];
+
+    /// Listed entries at `/` — the whole-host case — for the tests whose subject is not the path.
+    fn listed(hosts: &[&str]) -> Vec<MirrorRoot> {
+        hosts
+            .iter()
+            .map(|host| MirrorRoot {
+                host: (*host).to_string(),
+                path: "/".to_string(),
+            })
+            .collect()
+    }
+
+    /// Listed entries as `(host, path)` pairs, for the tests that turn on the path.
+    fn roots(pairs: &[(&str, &str)]) -> Vec<MirrorRoot> {
+        pairs
+            .iter()
+            .map(|(host, path)| MirrorRoot {
+                host: (*host).to_string(),
+                path: (*path).to_string(),
+            })
+            .collect()
+    }
 
     #[test]
     fn rewrite_legacy_changes_only_eligible_uri_and_round_trips() {
         let input = "# Keep header\r\ndeb [arch=amd64 signed-by=/key] http://archive.ubuntu.com/ubuntu noble main # keep comment\r\ndeb-src https://security.ubuntu.com/ubuntu noble-security main\r\ndeb https://ppa.example/ubuntu noble main\r\n";
         let expected = "# Keep header\r\ndeb [arch=amd64 signed-by=/key] https://mirror.example/ubuntu/ noble main # keep comment\r\ndeb-src https://security.ubuntu.com/ubuntu noble-security main\r\ndeb https://ppa.example/ubuntu noble main\r\n";
         let path = Path::new("/etc/apt/sources.list");
-        let hosts = vec!["archive.ubuntu.com".into(), "mirror.example".into()];
+        let hosts = listed(&["archive.ubuntu.com", "mirror.example"]);
         let result =
             rewrite_source(input, path, "https://mirror.example/ubuntu/", &hosts, false).unwrap();
         assert_eq!(result.files.len(), 1);
@@ -985,11 +1183,460 @@ mod tests {
         assert_eq!(round_trip.files[0].content, input);
     }
 
+    /// A host another country's Launchpad entry names is eligible for replacement, so a mirror this
+    /// tool wrote stays rewritable after a `--country` change. The exceptions still come first: a
+    /// PPA, a third-party host, a `-security` stanza and a `mirror://` URI are reported and left
+    /// byte for byte, and `security.ubuntu.com` is refused even while it is in the host set.
+    #[test]
+    fn rewrite_recognizes_a_foreign_mirror_host() {
+        let input = "# keep\ndeb http://ubuntu.uib.no/archive/ noble main\ndeb https://ppa.example.net/ubuntu noble main\ndeb http://security.ubuntu.com/ubuntu noble-security main\ndeb mirror://mirror.example/ubuntu noble main\n";
+        let expected = "# keep\ndeb https://mirror.example/ubuntu/ noble main\ndeb https://ppa.example.net/ubuntu noble main\ndeb http://security.ubuntu.com/ubuntu noble-security main\ndeb mirror://mirror.example/ubuntu noble main\n";
+        // `security.ubuntu.com` is in the set on purpose: the exception is checked before the set,
+        // so this test cannot pass because the host happened to be missing from it.
+        let hosts = roots(&[
+            ("archive.ubuntu.com", "/"),
+            ("ubuntu.uib.no", "/archive/"),
+            ("security.ubuntu.com", "/"),
+        ]);
+        let path = Path::new("/etc/apt/sources.list");
+        let plan = rewrite_source(input, path, "https://mirror.example/ubuntu/", &hosts, false)
+            .expect("the selected mirror is valid");
+        assert_eq!(plan.files.len(), 1);
+        assert_eq!(plan.files[0].content, expected);
+        // Each refusal names the file, the line and the host, so the printed report is actionable
+        // on its own and a `skip` can never be silent.
+        assert_eq!(
+            plan.skipped,
+            [
+                "/etc/apt/sources.list:3: https://ppa.example.net/ubuntu was not changed",
+                "/etc/apt/sources.list:4: http://security.ubuntu.com/ubuntu was not changed",
+                "/etc/apt/sources.list:5: mirror://mirror.example/ubuntu was not changed",
+            ]
+        );
+        assert!(is_rewritable(
+            "http://ubuntu.uib.no/archive/",
+            &hosts,
+            false
+        ));
+        assert!(!is_rewritable(
+            "http://security.ubuntu.com/ubuntu",
+            &hosts,
+            false
+        ));
+        assert!(!is_rewritable(
+            "http://ports.ubuntu.com/ubuntu-ports",
+            &roots(&[("archive.ubuntu.com", "/"), ("ports.ubuntu.com", "/")]),
+            false
+        ));
+        assert!(!is_rewritable(
+            "https://ppa.example.net/ubuntu",
+            &hosts,
+            false
+        ));
+    }
+
+    /// Eligibility is the listed host **and** the listed path, compared by whole segments: a mirror
+    /// host carries several trees and only the Ubuntu tree may be replaced, so the SPEC's Debian line
+    /// is left alone even though its host is a listed Ubuntu mirror (SPEC: Apply).
+    #[test]
+    fn rewrite_requires_the_listed_path() {
+        let path = Path::new("/etc/apt/sources.list");
+        let hosts = roots(&[
+            ("ftp.uni-stuttgart.de", "/pub/linux/debian/ubuntu/"),
+            ("archive.ubuntu.com", "/"),
+        ]);
+        let input = "deb http://ftp.uni-stuttgart.de/debian trixie main\ndeb http://archive.ubuntu.com/ubuntu noble main\n";
+        let expected = "deb http://ftp.uni-stuttgart.de/debian trixie main\ndeb https://mirror.example/ubuntu/ noble main\n";
+        let plan = rewrite_source(input, path, "https://mirror.example/ubuntu/", &hosts, false)
+            .expect("the selected mirror is valid");
+        assert_eq!(
+            plan.files[0].content, expected,
+            "the Debian line is untouched"
+        );
+        assert_eq!(
+            plan.skipped,
+            ["/etc/apt/sources.list:1: http://ftp.uni-stuttgart.de/debian was not changed"],
+            "a skipped entry names the file, the line and the host"
+        );
+        // The same host inside the listed tree is eligible, with the listed trailing slash or
+        // below it.
+        for admitted in [
+            "http://ftp.uni-stuttgart.de/pub/linux/debian/ubuntu/",
+            "http://ftp.uni-stuttgart.de/pub/linux/debian/ubuntu/dists/noble/InRelease",
+        ] {
+            assert!(is_rewritable(admitted, &hosts, false), "{admitted}");
+        }
+        // The slash-less spelling of that same tree is that same tree: a list spells `.../ubuntu/`
+        // and a run writes `.../ubuntu`, so the two spellings cannot disagree.
+        assert!(is_rewritable(
+            "http://ftp.uni-stuttgart.de/pub/linux/debian/ubuntu",
+            &hosts,
+            false
+        ));
+
+        // A listed entry without a trailing slash admits its own tree by whole segments only.
+        let ubuntu = roots(&[("mirror.example", "/ubuntu")]);
+        for admitted in [
+            "http://mirror.example/ubuntu",
+            "http://mirror.example/ubuntu/",
+            "http://mirror.example/ubuntu/dists/noble/InRelease",
+        ] {
+            assert!(is_rewritable(admitted, &ubuntu, false), "{admitted}");
+        }
+        assert!(!is_rewritable(
+            "http://mirror.example/ubuntufoo",
+            &ubuntu,
+            false
+        ));
+        // The port is not part of the comparison.
+        assert!(is_rewritable(
+            "http://mirror.example:8080/ubuntu/",
+            &ubuntu,
+            false
+        ));
+
+        // A listed `/` names no narrower tree, so every path on that host is admitted: the
+        // whole-host case the SPEC states rather than hides.
+        assert!(is_rewritable(
+            "http://archive.ubuntu.com/anything/at/all",
+            &hosts,
+            false
+        ));
+    }
+
+    /// A dot segment names a different tree than the path it is written inside: `..` walks out of the
+    /// listed `/ubuntu`, so `http://host/ubuntu/../debian` still starts with the listed segment while the
+    /// tree it really names is `/debian`, and rewriting it would substitute a tree the list never named.
+    /// Every spelling is refused instead of decoded or resolved, because resolving is the step that has to
+    /// agree with an intermediary, and refusing needs no agreement (SPEC: Apply).
+    #[test]
+    fn a_dot_segment_is_never_eligible_in_any_spelling() {
+        let ubuntu = roots(&[("mirror.example", "/ubuntu")]);
+        for uri in [
+            "http://mirror.example/ubuntu/../debian",
+            "http://mirror.example/ubuntu/../debian/dists/trixie/InRelease",
+            "http://mirror.example/ubuntu/%2e%2e/debian",
+            "http://mirror.example/ubuntu/%2E%2E/debian",
+            "http://mirror.example/ubuntu/.%2e/debian",
+            "http://mirror.example/ubuntu/%2e./debian",
+            "http://mirror.example/../ubuntu",
+            "http://mirror.example/ubuntu/./",
+        ] {
+            assert!(!is_rewritable(uri, &ubuntu, false), "{uri} must be refused");
+        }
+        // A listed `/` and the canonical archive's any-path rule admit every path, so only the dot-segment
+        // refusal can keep `..` out there; the traversal would otherwise reach a tree no list named.
+        for uri in [
+            "http://archive.ubuntu.com/ubuntu/../debian",
+            "http://de.archive.ubuntu.com/ubuntu/%2e%2e/debian",
+        ] {
+            assert!(!is_rewritable(uri, HOSTS, false), "{uri} must be refused");
+        }
+        // The rule bans segments, not dots: a dot inside a name is a name.
+        for admitted in [
+            "http://mirror.example/ubuntu/v1.2/",
+            "http://mirror.example/ubuntu/v1.2/dists/noble/InRelease",
+            "http://mirror.example/ubuntu/..foo",
+            "http://mirror.example/ubuntu/v1.2..3/",
+        ] {
+            assert!(is_rewritable(admitted, &ubuntu, false), "{admitted}");
+        }
+    }
+
+    /// The skipped token says which segment it found, and the line keeps its bytes, so a refusal is never
+    /// silent and never half-applied (SPEC: Apply).
+    #[test]
+    fn a_dot_segment_is_reported_and_the_line_is_left_alone() {
+        let hosts = roots(&[("mirror.example", "/ubuntu")]);
+        let input = "deb http://mirror.example/ubuntu/../debian trixie main\ndeb http://mirror.example/ubuntu/%2e%2e/debian trixie main\ndeb http://mirror.example/ubuntu/v1.2/ noble main\n";
+        let plan = rewrite_source(
+            input,
+            Path::new("/etc/apt/sources.list"),
+            "https://mirror.example/ubuntu/",
+            &hosts,
+            false,
+        )
+        .expect("the selected mirror is valid");
+        assert_eq!(
+            plan.skipped,
+            [
+                "/etc/apt/sources.list:1: URI 'http://mirror.example/ubuntu/../debian' carries a '..' path segment, so it is left unchanged",
+                "/etc/apt/sources.list:2: URI 'http://mirror.example/ubuntu/%2e%2e/debian' carries a '%2e%2e' path segment, so it is left unchanged",
+            ]
+        );
+        let rewritten = &plan.files[0].content;
+        assert!(
+            rewritten.contains("deb http://mirror.example/ubuntu/../debian trixie main"),
+            "the refused line keeps its bytes: {rewritten}"
+        );
+        assert!(
+            rewritten.contains("deb https://mirror.example/ubuntu/ noble main"),
+            "its harmless sibling is still rewritten: {rewritten}"
+        );
+
+        // The same refusal reaches the deb822 path and the inventory report, not only the rewrite plan.
+        let stanza = "Types: deb\nURIs: http://mirror.example/ubuntu/../debian\nSuites: trixie\nComponents: main\n";
+        let parsed = parse_deb822(
+            stanza,
+            Path::new("/etc/apt/sources.list.d/x.sources"),
+            &hosts,
+            false,
+        );
+        assert_eq!(
+            parsed[0].issue.as_deref(),
+            Some(
+                "URI 'http://mirror.example/ubuntu/../debian' carries a '..' path segment, so it is left unchanged"
+            )
+        );
+        assert!(parsed[0].rewritable.iter().all(|v| !*v));
+    }
+
+    /// A list entry whose path carries a dot segment names a tree this cannot read without resolving it,
+    /// and resolving is how a listed `/ubuntu` would end up admitting `/debian`. It is left out of the
+    /// set instead, so the run reports it and nothing is admitted through it.
+    #[test]
+    fn a_listed_entry_with_a_dot_segment_never_enters_the_set() {
+        for url in [
+            "http://mirror.example/ubuntu/../debian",
+            "http://mirror.example/ubuntu/%2e%2e/debian",
+            "http://mirror.example/ubuntu/%2E%2E/debian",
+            "http://mirror.example/ubuntu/.%2e/debian",
+            "http://mirror.example/ubuntu/%2e./debian",
+            "http://mirror.example/../ubuntu",
+        ] {
+            assert_eq!(mirror_root(url), None, "{url} must not enter the set");
+        }
+        // A dot inside a name is still an ordinary entry.
+        assert_eq!(
+            mirror_root("http://mirror.example/ubuntu/v1.2/"),
+            Some(MirrorRoot {
+                host: "mirror.example".to_string(),
+                path: "/ubuntu/v1.2/".to_string(),
+            })
+        );
+    }
+
+    /// A trailing slash names the same tree on both sides, and a repeated slash is another spelling
+    /// of the same path. The list spells `.../ubuntu/` while a run writes `.../ubuntu`, so a rule that
+    /// read the two as different trees refused every mirror this tool had already written.
+    #[test]
+    fn a_trailing_slash_never_changes_what_a_path_admits() {
+        for (root, path) in [
+            ("/ubuntu", "/ubuntu/"),
+            ("/ubuntu/", "/ubuntu"),
+            ("/ubuntu", "/ubuntu"),
+            ("/ubuntu", "/ubuntu/dists/x"),
+            ("/ubuntu/", "/ubuntu/dists/x"),
+            ("//ubuntu//", "/ubuntu"),
+            ("/ubuntu-mirror/archive/", "/ubuntu-mirror/archive"),
+            ("/", "/anything/at/all"),
+            ("/", "/"),
+            ("/", ""),
+        ] {
+            assert!(path_admits(root, path), "{root} must admit {path}");
+        }
+        for (root, path) in [
+            ("/ubuntu", "/ubuntufoo"),
+            ("/ubuntu/", "/ubuntufoo"),
+            ("/ubuntu", "/ubuntu-x"),
+            ("/ubuntu/x", "/ubuntu"),
+            ("/ubuntu", "/"),
+        ] {
+            assert!(!path_admits(root, path), "{root} must not admit {path}");
+        }
+    }
+
+    /// The pair the live runs actually produce: the Launchpad page lists a mirror at `.../ubuntu/`
+    /// and `probe::probe` writes the selected URI without that slash. Every entry of the real page
+    /// that is eligible as listed must stay eligible as written, and one level below it, or a second
+    /// `--country` run cannot recognize the mirror the first one wrote (W23, W24).
+    #[test]
+    fn a_launchpad_entry_admits_the_uri_a_run_writes() {
+        let html = include_str!("../tests/fixtures/launchpad-full-82-countries.html");
+        let mirrors = crate::mirrors::parse_launchpad(html).expect("the page fixture parses");
+        let roots: Vec<MirrorRoot> = mirrors
+            .iter()
+            .filter(|m| crate::mirrors::validate_url(&m.url).is_ok())
+            .filter_map(|m| mirror_root(&m.url))
+            .collect();
+        assert!(
+            roots.len() > 500,
+            "the page fixture must yield a broad set, not {}: a handful of entries cannot tell the \
+             page's spellings apart",
+            roots.len()
+        );
+        let mut checked = 0;
+        for mirror in &mirrors {
+            if crate::mirrors::validate_url(&mirror.url).is_err()
+                || !is_rewritable(&mirror.url, &roots, false)
+            {
+                continue;
+            }
+            checked += 1;
+            let written = mirror.url.trim_end_matches('/');
+            assert!(
+                is_rewritable(written, &roots, false),
+                "{} is listed as eligible, so the URI a run writes for it must be too",
+                mirror.url
+            );
+            assert!(
+                is_rewritable(&format!("{written}/dists/noble/InRelease"), &roots, false),
+                "{} names a tree, so everything below it is eligible too",
+                mirror.url
+            );
+        }
+        assert!(
+            checked > 300,
+            "only {checked} entries were eligible: the page fixture went stale"
+        );
+    }
+
+    /// The same normalisation on the two hosts that carry a rule of their own: `apt.pop-os.org` still
+    /// needs the explicit policy host and its own `/ubuntu` tree, and the canonical archive is
+    /// recognized at any path, so a trailing slash changes neither answer.
+    #[test]
+    fn the_special_hosts_ignore_a_trailing_slash_too() {
+        let pop = roots(&[("apt.pop-os.org", "/ubuntu/")]);
+        for uri in [
+            "http://apt.pop-os.org/ubuntu",
+            "http://apt.pop-os.org/ubuntu/",
+        ] {
+            assert!(is_rewritable(uri, &pop, true), "{uri}");
+            assert!(
+                !is_rewritable(uri, &pop, false),
+                "{uri} still needs the Pop!_OS policy host"
+            );
+        }
+        assert!(!is_rewritable("http://apt.pop-os.org/ubuntu-x", &pop, true));
+        assert!(!is_rewritable("http://apt.pop-os.org/", &pop, true));
+        // The canonical archive is recognized at any path with no list entry naming it at all; a
+        // host that merely resembles it is not.
+        for uri in [
+            "http://archive.ubuntu.com/ubuntu",
+            "http://archive.ubuntu.com/ubuntu/",
+            "http://de.archive.ubuntu.com/ubuntu/",
+        ] {
+            assert!(is_rewritable(uri, HOSTS, false), "{uri}");
+        }
+        assert!(!is_rewritable(
+            "http://notarchive.ubuntu.com/ubuntu",
+            HOSTS,
+            false
+        ));
+    }
+
+    /// The refusal list is explicit and is checked before any membership test: every host below is in
+    /// the set at `/`, so only the refusal can skip it (SPEC: Apply).
+    #[test]
+    fn ppa_and_security_hosts_are_refused_before_membership() {
+        let hosts = roots(&[
+            ("security.ubuntu.com", "/"),
+            ("ports.ubuntu.com", "/"),
+            ("ppa.launchpad.net", "/"),
+            ("ppa.launchpadcontent.net", "/"),
+            ("launchpad.net", "/"),
+            ("sub.launchpad.net", "/"),
+            ("ubuntu.uib.no", "/"),
+        ]);
+        let refused = [
+            "http://security.ubuntu.com/ubuntu",
+            "http://ports.ubuntu.com/ubuntu-ports",
+            "https://ppa.launchpad.net/x/y/ubuntu",
+            "https://ppa.launchpadcontent.net/x/y/ubuntu",
+            "https://launchpad.net/whatever",
+            "https://sub.launchpad.net/whatever",
+        ];
+        for uri in refused {
+            assert!(
+                !is_rewritable(uri, &hosts, false),
+                "{uri} is listed at '/' in this set, so only the refusal list can skip it"
+            );
+        }
+        // The positive control: another host in the same set, at the same `/`, is eligible.
+        assert!(is_rewritable(
+            "https://ubuntu.uib.no/any/path",
+            &hosts,
+            false
+        ));
+        // A host no list names is skipped for the membership reason, not for a refusal.
+        assert!(!is_rewritable("https://example.net/ubuntu", &hosts, false));
+
+        // The same lines, through the rewrite plan: each refusal is reported, never silent.
+        let input = "deb http://security.ubuntu.com/ubuntu noble main\ndeb http://ports.ubuntu.com/ubuntu-ports noble main\ndeb https://ppa.launchpad.net/x/y/ubuntu noble main\ndeb https://ppa.launchpadcontent.net/x/y/ubuntu noble main\ndeb https://launchpad.net/whatever noble main\ndeb https://sub.launchpad.net/whatever noble main\ndeb https://ubuntu.uib.no/any/path noble main\n";
+        let plan = rewrite_source(
+            input,
+            Path::new("/etc/apt/sources.list"),
+            "https://mirror.example/ubuntu/",
+            &hosts,
+            false,
+        )
+        .expect("the selected mirror is valid");
+        assert_eq!(plan.skipped.len(), refused.len(), "{:?}", plan.skipped);
+        let rewritten = &plan.files[0].content;
+        assert!(
+            rewritten.contains("deb https://mirror.example/ubuntu/ noble main"),
+            "{rewritten}"
+        );
+        for kept in refused {
+            assert!(
+                rewritten.contains(kept),
+                "{kept} must stay byte for byte: {rewritten}"
+            );
+        }
+    }
+
+    /// `mirror_root` builds the set and `is_rewritable` reads an on-disk URI, so the two must agree on
+    /// what a host and a path are. A port, a bracketed address and a trailing dot are the shapes where
+    /// a second reading of an authority drifts.
+    #[test]
+    fn mirror_root_agrees_with_is_rewritable_on_the_authority() {
+        assert_eq!(
+            mirror_root("https://Mirror.Example:8443/ubuntu/?release=noble"),
+            Some(MirrorRoot {
+                host: "mirror.example".to_string(),
+                path: "/ubuntu/".to_string(),
+            })
+        );
+        let root = mirror_root("https://mirror.example:8443/ubuntu/").expect("a host and a path");
+        assert!(is_rewritable(
+            "http://mirror.example:8080/ubuntu/dists/noble/InRelease",
+            std::slice::from_ref(&root),
+            false
+        ));
+        // A URL with no path names the whole host, on both sides.
+        assert_eq!(
+            mirror_root("http://mirror.example").map(|r| r.path),
+            Some("/".to_string())
+        );
+        // A trailing dot is a spelling of the same host on both sides.
+        assert_eq!(
+            mirror_root("http://mirror.example./ubuntu/").map(|r| r.host),
+            Some("mirror.example".to_string())
+        );
+        assert!(is_rewritable(
+            "http://MIRROR.example./ubuntu/",
+            &roots(&[("mirror.example", "/ubuntu/")]),
+            false
+        ));
+        // Bracketed IPv6: neither side treats an address with ':' in it as a mirror host, so a listed
+        // address can never make a URI eligible by accident.
+        assert_eq!(mirror_root("http://[2001:db8::1]/ubuntu/"), None);
+        assert!(!is_rewritable(
+            "http://[2001:db8::1]/ubuntu/",
+            &roots(&[("2001:db8::1", "/")]),
+            false
+        ));
+        // An authority or a port neither side can read contributes nothing rather than being guessed.
+        assert_eq!(mirror_root("http://mirror.example:0/ubuntu/"), None);
+        assert_eq!(mirror_root("ftp://mirror.example/ubuntu/"), None);
+        assert_eq!(mirror_root("http://user:pw@mirror.example/ubuntu/"), None);
+    }
+
     #[test]
     fn rewrite_deb822_changes_only_uri_tokens_and_preserves_bytes() {
         let input = "# top\r\nTypes: deb\r\nURIs: http://archive.ubuntu.com/ubuntu\r\n https://ppa.example/ubuntu\r\nSuites: noble noble-updates\r\nComponents: main\r\nSigned-By: /usr/share/keyrings/ubuntu.gpg\r\n\r\nTypes: deb\r\nURIs: http://archive.ubuntu.com/ubuntu\r\nSuites: noble\r\nEnabled: no\r\n\r\nTypes: deb\r\nURIs: http://archive.ubuntu.com/ubuntu\r\nSuites: noble-security\r\n";
         let expected = "# top\r\nTypes: deb\r\nURIs: https://mirror.example/ubuntu/\r\n https://ppa.example/ubuntu\r\nSuites: noble noble-updates\r\nComponents: main\r\nSigned-By: /usr/share/keyrings/ubuntu.gpg\r\n\r\nTypes: deb\r\nURIs: http://archive.ubuntu.com/ubuntu\r\nSuites: noble\r\nEnabled: no\r\n\r\nTypes: deb\r\nURIs: http://archive.ubuntu.com/ubuntu\r\nSuites: noble-security\r\n";
-        let hosts = vec!["archive.ubuntu.com".into(), "mirror.example".into()];
+        let hosts = listed(&["archive.ubuntu.com", "mirror.example"]);
         let path = Path::new("ubuntu.sources");
         let result =
             rewrite_source(input, path, "https://mirror.example/ubuntu/", &hosts, false).unwrap();
@@ -1011,7 +1658,7 @@ mod tests {
         let expected_main = "# Pop source\r\nTypes: deb\r\nURIs: https://mirror.example/ubuntu/\r\nSuites: jammy jammy-updates jammy-backports\r\nComponents: main\r\nX-Repolib-Default-Mirror: http://apt.pop-os.org/ubuntu\r\nEnabled: yes\r\nSigned-By: /usr/share/keyrings/pop-archive-keyring.gpg\r\nX-Repolib-Name: Pop_OS\r\n";
         let expected_security = "Types: deb\r\nURIs: http://apt.pop-os.org/ubuntu\r\nSuites: jammy-security\r\nComponents: main\r\nEnabled: yes\r\nSigned-By: /usr/share/keyrings/pop-archive-keyring.gpg\r\nX-Repolib-Name: Pop_OS Security\r\n";
         let path = Path::new("/etc/apt/sources.list.d/system.sources");
-        let hosts = vec!["apt.pop-os.org".into(), "mirror.example".into()];
+        let hosts = listed(&["apt.pop-os.org", "mirror.example"]);
         let result =
             rewrite_source(input, path, "https://mirror.example/ubuntu/", &hosts, true).unwrap();
         assert_eq!(result.files.len(), 2);
@@ -1329,7 +1976,7 @@ mod tests {
 
     #[test]
     fn pop_os_official_ubuntu_uri_requires_explicit_policy_host() {
-        let hosts = vec!["apt.pop-os.org".to_string()];
+        let hosts = listed(&["apt.pop-os.org"]);
         let security_only = parse_deb822(
             "Types: deb\nURIs: http://apt.pop-os.org/ubuntu\nSuites: jammy-security\nComponents: main\n",
             Path::new("system.sources"),
@@ -1424,7 +2071,7 @@ mod tests {
 
     #[test]
     fn security_and_ports_hosts_are_never_rewritable_even_if_listed() {
-        let hosts = vec!["security.ubuntu.com".into(), "ports.ubuntu.com".into()];
+        let hosts = listed(&["security.ubuntu.com", "ports.ubuntu.com"]);
         let entries = parse_legacy(
             "deb http://security.ubuntu.com/ubuntu noble main\ndeb http://ports.ubuntu.com/ubuntu noble main\n",
             Path::new("x.list"),
@@ -1436,7 +2083,7 @@ mod tests {
 
     #[test]
     fn current_mirror_host_is_recognized_but_host_matching_is_exact() {
-        let hosts = vec!["mirror.example".to_string()];
+        let hosts = listed(&["mirror.example"]);
         assert!(
             parse_legacy(
                 "deb https://mirror.example/ubuntu noble main\n",

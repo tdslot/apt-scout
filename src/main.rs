@@ -215,7 +215,7 @@ fn already_at_mirror(file: &sources::FileReport, selected_uri: &str) -> bool {
 fn build_plan(
     root: &Path,
     inventory: &sources::Inventory,
-    archive_hosts: &[String],
+    roots: &[sources::MirrorRoot],
     selected: &fresh::Probed,
     platform: plan::Platform,
 ) -> Result<PlannedChange, (u8, String)> {
@@ -253,7 +253,7 @@ fn build_plan(
             text,
             &file.path,
             selected.url.as_str(),
-            archive_hosts,
+            roots,
             platform == plan::Platform::PopOs,
         )
         .map_err(|e| {
@@ -484,10 +484,19 @@ fn validate_preflight(args: &Args, arch: &str) -> Result<(), (u8, String)> {
     Ok(())
 }
 
+/// What the operator can do when no apt source URI is eligible. A host the loaded mirror list does
+/// not name is the usual cause, and the fix is to put the URIs back by hand until `--restore` ships
+/// (D10), so the report and the write error carry the same sentence instead of drifting apart.
+fn no_eligible_hint(list_source: &str) -> String {
+    format!(
+        "The sources here point at a host the mirror list from {list_source} does not name, so nothing here can be replaced: set those URIs back to archive.ubuntu.com and run again (--restore arrives with D10)."
+    )
+}
+
 /// No apt source file holds an official Ubuntu archive URI, so the run stops before probing. SPEC.md
 /// Apply: `--list` exits 0, a non-root run prints the `sudo` line and exits 3, and a root run that was
 /// going to write exits 1.
-fn no_eligible_uri(mode: Mode, args: &Args) -> Result<u8, (u8, String)> {
+fn no_eligible_uri(mode: Mode, args: &Args, list_source: &str) -> Result<u8, (u8, String)> {
     match mode {
         // `--list` is read-only whatever the uid and exits 0 (SPEC.md Apply).
         Mode::List => Ok(0),
@@ -500,8 +509,10 @@ fn no_eligible_uri(mode: Mode, args: &Args) -> Result<u8, (u8, String)> {
         }
         Mode::Write { .. } => Err((
             1,
-            "no official Ubuntu apt source URI can be changed, so the write has nothing to do. Nothing was written. Run with --list to see every file that was inspected."
-                .to_string(),
+            format!(
+                "no official Ubuntu apt source URI can be changed, so the write has nothing to do. Nothing was written. {}. Run with --list to see every file that was inspected.",
+                no_eligible_hint(list_source)
+            ),
         )),
     }
 }
@@ -1115,28 +1126,31 @@ fn run() -> Result<u8, (u8, String)> {
         )
     })?;
 
-    let (mut cands, list_source) = load_candidates(&net, &country, country_name, args.https_only)?;
+    let (mut cands, list_source, list_roots) =
+        load_candidates(&net, &country, country_name, args.https_only)?;
     // Different list sources can name the same mirror twice (with and without a trailing slash).
     let mut seen = std::collections::HashSet::new();
     cands.retain(|m| seen.insert(m.url.trim_end_matches('/').to_ascii_lowercase()));
     cands.truncate(MAX_CANDIDATES);
 
-    let mut archive_hosts = vec!["archive.ubuntu.com".to_string()];
+    // The places the loaded list says an Ubuntu archive lives. Eligibility is host **and** path from
+    // every country's Launchpad entry, so a mirror this tool wrote survives `--country`; `--https-only`
+    // never narrows it, and every entry passed `validate_url` before it entered (SPEC: Apply).
+    let mut roots = vec![sources::MirrorRoot {
+        host: "archive.ubuntu.com".to_string(),
+        path: "/".to_string(),
+    }];
     if d.id == "pop" {
-        archive_hosts.push("apt.pop-os.org".to_string());
+        roots.push(sources::MirrorRoot {
+            host: "apt.pop-os.org".to_string(),
+            path: "/".to_string(),
+        });
     }
-    archive_hosts.extend(
-        cands
-            .iter()
-            .filter_map(|m| mirror_host_port(&m.url).map(|(host, _)| host)),
-    );
-    archive_hosts.sort_unstable();
-    archive_hosts.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
-    let apt_sources = sources::inventory(
-        std::path::Path::new(apply::APT_DIR),
-        &archive_hosts,
-        d.id == "pop",
-    );
+    roots.extend(list_roots);
+    roots.sort_unstable_by(|a, b| a.host.cmp(&b.host).then_with(|| a.path.cmp(&b.path)));
+    roots.dedup_by(|a, b| a.host.eq_ignore_ascii_case(&b.host) && a.path == b.path);
+    let apt_sources =
+        sources::inventory(std::path::Path::new(apply::APT_DIR), &roots, d.id == "pop");
     let distro_label = match d.version_id.as_deref() {
         Some(v) => format!("Ubuntu {v} ({codename})"),
         None => format!("Ubuntu ({codename})"),
@@ -1154,8 +1168,9 @@ fn run() -> Result<u8, (u8, String)> {
             "No official Ubuntu apt source URI can be changed; stopping before mirror probes."
                 .to_string(),
         );
+        report.line(no_eligible_hint(list_source));
         report.print();
-        return no_eligible_uri(mode, &args);
+        return no_eligible_uri(mode, &args, list_source);
     }
 
     let reference = match probe::fetch_reference(&net, REFERENCE, &codename) {
@@ -1359,7 +1374,7 @@ fn run() -> Result<u8, (u8, String)> {
         match build_plan(
             Path::new(apply::APT_DIR),
             &apt_sources,
-            &archive_hosts,
+            &roots,
             best,
             platform,
         ) {
@@ -1749,14 +1764,60 @@ fn write_baseline(
         .or_else(|| fallback_baseline(candidates))
 }
 
-/// SPEC step 3: Launchpad first, then `mirrors.ubuntu.com/<CC>.txt`. Returns the candidates and the
-/// name of the source that supplied them; every failed source is reported with its reason.
+/// What one mirror-list source produced: the candidates, the name of the list that supplied them,
+/// and the run's mirror roots (see `load_candidates` for the contract between the first and last).
+type LoadedCandidates = (Vec<mirrors::Mirror>, &'static str, Vec<sources::MirrorRoot>);
+
+/// The `(host, path)` pairs of `urls`, in the order the list gave them, plus every URL that failed
+/// candidate validation. A URL whose authority or path does not parse contributes nothing, so a tree
+/// is never guessed from a broken link.
+fn mirror_roots<'a>(
+    urls: impl Iterator<Item = &'a str>,
+) -> (Vec<sources::MirrorRoot>, Vec<String>) {
+    let mut roots = Vec::new();
+    let mut rejected = Vec::new();
+    for url in urls {
+        match mirrors::validate_url(url) {
+            Ok(()) => match sources::mirror_root(url) {
+                Some(root) => roots.push(root),
+                None => rejected.push(url.to_string()),
+            },
+            Err(_) => rejected.push(url.to_string()),
+        }
+    }
+    (roots, rejected)
+}
+
+/// Report the entries a list named that never entered the rewrite set. An entry that fails candidate
+/// validation is left out **and said so**, on the same channel as the fallback warning, rather than
+/// silently trusted (SPEC: Apply).
+fn report_rejected(list: &str, rejected: &[String]) {
+    if rejected.is_empty() {
+        return;
+    }
+    eprintln!(
+        "warning: {list} names {} mirror URL(s) that cannot make an apt source rewritable, so they are left out of that set: {}",
+        rejected.len(),
+        rejected.join(", ")
+    );
+}
+
+/// SPEC step 3: Launchpad first, then `mirrors.ubuntu.com/<CC>.txt`. Returns the candidates, the
+/// name of the source that supplied them, and the run's mirror roots; every failed source is
+/// reported with its reason.
+///
+/// Contract for the third element: every mirror in the returned `Vec<Mirror>` has its `(host, path)`
+/// in it. From Launchpad that set is every host and path the page names, in every country, collected
+/// before the country filter and before `keep`, so a mirror a previous run wrote stays rewritable
+/// after the operator changes country and `--https-only` does not narrow what is recognized (SPEC:
+/// Apply). When the run falls back to `<CC>.txt`, the set is that file's validated entries, because
+/// that list arrives over plain HTTP: the set fails closed rather than widening on an unverified list.
 fn load_candidates(
     net: &dyn Fetch,
     cc: &str,
     country_name: &str,
     https_only: bool,
-) -> Result<(Vec<mirrors::Mirror>, &'static str), (u8, String)> {
+) -> Result<LoadedCandidates, (u8, String)> {
     let keep =
         |m: &mirrors::Mirror| mirrors::validate_url(&m.url).is_ok() && (!https_only || m.https);
     let mut failures = Vec::new();
@@ -1764,12 +1825,16 @@ fn load_candidates(
     match net.get(LAUNCHPAD, http::MAX_PAGE, None) {
         Ok(page) => match mirrors::parse_launchpad(&String::from_utf8_lossy(&page.body)) {
             Ok(all) => {
+                // Every country's entry, not only this run's, and before `keep`: eligibility answers
+                // recognizability, never use. Both list sources pass the same validation here.
+                let (roots, rejected) = mirror_roots(all.iter().map(|m| m.url.as_str()));
+                report_rejected("Launchpad", &rejected);
                 let found: Vec<_> = all
                     .into_iter()
                     .filter(|m| m.country == country_name && keep(m))
                     .collect();
                 if !found.is_empty() {
-                    return Ok((found, "Launchpad"));
+                    return Ok((found, "Launchpad", roots));
                 }
                 failures.push(format!(
                     "Launchpad lists no usable mirrors for {country_name}"
@@ -1783,7 +1848,7 @@ fn load_candidates(
     let url = format!("{TEXT_LIST}/{cc}.txt");
     match net.get(&url, http::MAX_SMALL, None) {
         Ok(got) => {
-            let found: Vec<_> = mirrors::parse_text_list(&String::from_utf8_lossy(&got.body))
+            let all: Vec<_> = mirrors::parse_text_list(&String::from_utf8_lossy(&got.body))
                 .into_iter()
                 .map(|u| mirrors::Mirror {
                     country: country_name.to_string(),
@@ -1793,14 +1858,20 @@ fn load_candidates(
                     speed: None,
                     status: mirrors::Status::Unknown,
                 })
-                .filter(keep)
                 .collect();
+            // One validation for both sources: `mirror_roots` is the only place an entry enters the
+            // set, so a list cannot skip the candidate check the other list applies. `--https-only`
+            // still does not narrow it — it picks what may be selected, never what may be recognized,
+            // so a mirror written over `http` stays rewritable in a later run.
+            let (roots, rejected) = mirror_roots(all.iter().map(|m| m.url.as_str()));
+            report_rejected("mirrors.ubuntu.com", &rejected);
+            let found: Vec<_> = all.into_iter().filter(keep).collect();
             if !found.is_empty() {
                 eprintln!(
                     "warning: {}. Using {url} instead (its URLs come over plain HTTP, so they are unverified).",
                     failures.join("; ")
                 );
-                return Ok((found, "mirrors.ubuntu.com (unverified)"));
+                return Ok((found, "mirrors.ubuntu.com (unverified)", roots));
             }
             failures.push(format!("{url} has no usable mirrors"));
         }
@@ -1837,6 +1908,17 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
     use crate::http::Canned;
+
+    /// Every host listed at `/` — the whole-host case — as the eligibility set these tests use.
+    fn listed(hosts: &[&str]) -> Vec<sources::MirrorRoot> {
+        hosts
+            .iter()
+            .map(|host| sources::MirrorRoot {
+                host: (*host).to_string(),
+                path: "/".to_string(),
+            })
+            .collect()
+    }
 
     /// The one hook into `build_plan`'s second read of a planned file: `(path, the bytes to hand back
     /// instead of the disk's)`. It is consumed by the next read of that path, so it cannot leak into
@@ -2050,6 +2132,8 @@ mod tests {
 
     const LT_TXT: &[u8] = b"https://mirror.vpsnet.com/ubuntu/\nhttp://ubuntu.mirror.vu.lt/ubuntu/\nftp://x.example/\n";
     const LAUNCHPAD_OK: &[u8] = include_bytes!("../tests/fixtures/launchpad-archivemirrors.html");
+    /// A page with no country section at all: present, but not a mirror list.
+    const LAUNCHPAD_EMPTY: &[u8] = b"<html></html>";
 
     #[test]
     fn launchpad_is_preferred() {
@@ -2057,7 +2141,7 @@ mod tests {
             (LAUNCHPAD, Ok(LAUNCHPAD_OK)),
             ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
         ]);
-        let (c, src) = load_candidates(&net, "LT", "Lithuania", false).unwrap();
+        let (c, src, _) = load_candidates(&net, "LT", "Lithuania", false).unwrap();
         assert_eq!(src, "Launchpad");
         assert!(c.iter().all(|m| m.country == "Lithuania"));
         assert!(c.len() >= 4);
@@ -2069,7 +2153,7 @@ mod tests {
             (LAUNCHPAD, Err(503)),
             ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
         ]);
-        let (c, src) = load_candidates(&net, "LT", "Lithuania", false).unwrap();
+        let (c, src, _) = load_candidates(&net, "LT", "Lithuania", false).unwrap();
         assert_eq!(src, "mirrors.ubuntu.com (unverified)");
         assert_eq!(c.len(), 2); // the ftp:// line is dropped
         assert!(c.iter().any(|m| m.https));
@@ -2084,7 +2168,7 @@ mod tests {
                 Ok(b"http://ftp.is.example/ubuntu/\n"),
             ),
         ]);
-        let (c, src) = load_candidates(&net, "IS", "Iceland", false).unwrap();
+        let (c, src, _) = load_candidates(&net, "IS", "Iceland", false).unwrap();
         assert_eq!(src, "mirrors.ubuntu.com (unverified)");
         assert_eq!(c.len(), 1);
     }
@@ -2095,7 +2179,7 @@ mod tests {
             (LAUNCHPAD, Err(503)),
             ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
         ]);
-        let (c, _) = load_candidates(&net, "LT", "Lithuania", true).unwrap();
+        let (c, _, _) = load_candidates(&net, "LT", "Lithuania", true).unwrap();
         assert_eq!(c.len(), 1);
         assert!(c[0].https);
     }
@@ -2107,9 +2191,79 @@ mod tests {
             (LAUNCHPAD, Err(503)),
             ("http://mirrors.ubuntu.com/LT.txt", Ok(txt)),
         ]);
-        let (c, _) = load_candidates(&net, "LT", "Lithuania", false).unwrap();
+        let (c, _, roots) = load_candidates(&net, "LT", "Lithuania", false).unwrap();
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].url, "http://ok.example/ubuntu/");
+        // The fallback list arrives over plain HTTP, so only its validated entries join the set: a
+        // loopback or metadata address named there can never become rewritable.
+        assert_eq!(
+            roots,
+            [sources::MirrorRoot {
+                host: "ok.example".to_string(),
+                path: "/ubuntu/".to_string(),
+            }]
+        );
+    }
+
+    /// The real page with one mirror's only `http` link pointed at a loopback address: a list entry
+    /// that fails candidate validation. Fixture-derived on purpose, so the page keeps the shape the
+    /// parser reads instead of being a hand-written one that could drift from it.
+    fn launchpad_one_bad() -> &'static [u8] {
+        Box::leak(
+            String::from_utf8_lossy(LAUNCHPAD_OK)
+                .replace("http://ftp.litnet.lt/ubuntu/", "http://127.0.0.1/ubuntu/")
+                .into_bytes()
+                .into_boxed_slice(),
+        )
+    }
+
+    /// An entry that fails candidate validation, or whose path carries a dot segment, never enters the
+    /// rewrite set, and the run reports it instead of trusting it: one `validate_url` filter for the
+    /// Launchpad page and the fallback alike (SPEC: Apply).
+    #[test]
+    fn mirror_roots_drops_and_reports_invalid_entries() {
+        let (roots, rejected) = mirror_roots(
+            [
+                "http://mirror.example/ubuntu/",
+                "http://127.0.0.1/ubuntu/",
+                "http://2130706433/ubuntu/",
+                "http://mirror.example:0/ubuntu/",
+                "http://mirror.example/ubuntu/../debian",
+                "http://mirror.example/ubuntu/%2e%2e/debian",
+            ]
+            .into_iter(),
+        );
+        assert_eq!(
+            roots,
+            [sources::MirrorRoot {
+                host: "mirror.example".to_string(),
+                path: "/ubuntu/".to_string(),
+            }]
+        );
+        assert_eq!(
+            rejected,
+            [
+                "http://127.0.0.1/ubuntu/",
+                "http://2130706433/ubuntu/",
+                "http://mirror.example:0/ubuntu/",
+                "http://mirror.example/ubuntu/../debian",
+                "http://mirror.example/ubuntu/%2e%2e/debian",
+            ]
+        );
+
+        // The same rule on the Launchpad side: its valid entries are still in the set, the invalid
+        // one is in neither the set nor silence.
+        let net = Canned(vec![(LAUNCHPAD, Ok(launchpad_one_bad()))]);
+        let (_, src, roots) = load_candidates(&net, "DE", "Germany", false).unwrap();
+        assert_eq!(src, "Launchpad");
+        assert!(
+            roots.iter().all(|r| r.host != "127.0.0.1"),
+            "a loopback entry must not enter the set: {roots:?}"
+        );
+        assert!(
+            roots.iter().any(|r| r.host == "ubuntu.uib.no"),
+            "its valid entries are still there: {roots:?}"
+        );
     }
 
     #[test]
@@ -2123,6 +2277,169 @@ mod tests {
         assert!(msg.contains("Launchpad"), "{msg}");
         assert!(msg.contains("LT.txt"), "{msg}");
         assert!(msg.contains("--country"), "{msg}");
+    }
+
+    /// The rewrite-eligibility set is every host and path the Launchpad page names, in every country,
+    /// so a mirror this tool wrote stays rewritable after the operator changes country (SPEC: Apply).
+    #[test]
+    fn the_host_list_names_every_country_not_only_the_run_s_country() {
+        let net = Canned(vec![(LAUNCHPAD, Ok(LAUNCHPAD_OK))]);
+        let (cands, src, roots) = load_candidates(&net, "DE", "Germany", false).unwrap();
+        assert_eq!(src, "Launchpad");
+        assert!(cands.iter().all(|m| m.country == "Germany"));
+        assert!(
+            roots.iter().any(|r| r.host == "ftp.uni-stuttgart.de"),
+            "a German mirror's host: {roots:?}"
+        );
+        assert!(
+            roots.iter().any(|r| r.host == "ubuntu.uib.no"),
+            "a Norwegian mirror written by an earlier run must stay recognizable: {roots:?}"
+        );
+        assert!(
+            roots.iter().any(|r| r.host == "ftp.litnet.lt"),
+            "a Lithuanian mirror written by an earlier run must stay recognizable: {roots:?}"
+        );
+        // The path travels with the host: `ubuntu.uib.no` is listed under `/archive/`.
+        assert!(
+            roots
+                .iter()
+                .any(|r| r.host == "ubuntu.uib.no" && r.path == "/archive/"),
+            "the listed path must be the one carried in the set: {roots:?}"
+        );
+    }
+
+    /// `--https-only` filters candidates, never eligibility: a mirror written over `http` stays
+    /// recognizable in a later `--https-only` run, so the fix is not order-dependent.
+    #[test]
+    fn https_only_does_not_narrow_the_host_list() {
+        let net = Canned(vec![(LAUNCHPAD, Ok(LAUNCHPAD_OK))]);
+        let (cands, _, roots) = load_candidates(&net, "DE", "Germany", true).unwrap();
+        assert!(cands.iter().all(|m| m.https));
+        // ftp.litnet.lt's only HTTP link in the fixture is `http`, so no candidate may carry it,
+        // while its host must still be in the set.
+        assert!(
+            cands
+                .iter()
+                .all(|m| m.url != "http://ftp.litnet.lt/ubuntu/")
+        );
+        assert!(
+            roots.iter().any(|r| r.host == "ftp.litnet.lt"),
+            "an http-only mirror host must stay recognizable: {roots:?}"
+        );
+    }
+
+    /// The same rule on the fallback list: `--https-only` drops the `http` candidates, and a mirror
+    /// an earlier run wrote over `http` stays recognizable. Candidate validation still applies,
+    /// because this list arrives over plain HTTP.
+    #[test]
+    fn https_only_does_not_narrow_the_fallback_host_list() {
+        let net = Canned(vec![
+            (LAUNCHPAD, Err(503)),
+            ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
+        ]);
+        let (cands, _, roots) = load_candidates(&net, "LT", "Lithuania", true).unwrap();
+        assert_eq!(cands.len(), 1);
+        assert!(cands.iter().all(|m| m.https));
+        assert!(
+            roots.iter().any(|r| r.host == "ubuntu.mirror.vu.lt"),
+            "an http mirror host must stay recognizable: {roots:?}"
+        );
+        // The `ftp://` line: not a candidate and not an entry, whatever the flags say.
+        assert_eq!(roots.len(), 2, "{roots:?}");
+    }
+
+    /// The contract `main` relies on when it builds the set from the third element alone:
+    /// every returned candidate's `(host, path)` is in the returned set, in both branches.
+    #[test]
+    fn every_candidate_host_is_in_the_returned_host_list() {
+        let cases = vec![
+            (Canned(vec![(LAUNCHPAD, Ok(LAUNCHPAD_OK))]), "DE", "Germany"),
+            (
+                Canned(vec![
+                    (LAUNCHPAD, Err(503)),
+                    ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
+                ]),
+                "LT",
+                "Lithuania",
+            ),
+        ];
+        for (net, cc, name) in cases {
+            let (cands, src, roots) = load_candidates(&net, cc, name, false).unwrap();
+            assert!(!cands.is_empty(), "{src}");
+            for m in &cands {
+                let mine = sources::mirror_root(&m.url).expect("a validated candidate has a host");
+                assert!(roots.contains(&mine), "{src}: {mine:?} is not in {roots:?}");
+            }
+        }
+    }
+
+    /// Launchpad is the only list that names every country, so when it is unavailable or unreadable
+    /// the set is the entries of the list the run did load: it shrinks, and a foreign host stays
+    /// unrecognized rather than becoming rewritable on an unverified list.
+    #[test]
+    fn the_host_list_shrinks_to_the_fallback_when_launchpad_fails() {
+        for launchpad in [Err(500), Ok(LAUNCHPAD_EMPTY)] {
+            let net = Canned(vec![
+                (LAUNCHPAD, launchpad),
+                ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
+            ]);
+            let (cands, src, roots) = load_candidates(&net, "LT", "Lithuania", false).unwrap();
+            assert_eq!(src, "mirrors.ubuntu.com (unverified)");
+            let mut expected: Vec<sources::MirrorRoot> = cands
+                .iter()
+                .map(|m| sources::mirror_root(&m.url).expect("a validated candidate has a host"))
+                .collect();
+            expected.sort_unstable_by(|a, b| a.host.cmp(&b.host).then_with(|| a.path.cmp(&b.path)));
+            let mut got = roots.clone();
+            got.sort_unstable_by(|a, b| a.host.cmp(&b.host).then_with(|| a.path.cmp(&b.path)));
+            assert_eq!(got, expected);
+            // No entry of the Launchpad fixture may leak in through the fallback.
+            for foreign in ["ubuntu.uib.no", "ftp.litnet.lt", "ftp.uni-stuttgart.de"] {
+                assert!(!roots.iter().any(|r| r.host == foreign), "{roots:?}");
+            }
+        }
+    }
+
+    /// A run writes the selected mirror URI without the trailing slash the page spells
+    /// (`probe::probe` trims it), so a later run must still recognize it: the roots of a German run
+    /// name a Norwegian mirror at `/archive/`, and the URI that first run wrote is `/archive`. Checked
+    /// at the seam the run itself uses — the inventory — so this fails if the whole-host or
+    /// own-country-only version of the rule ever comes back, not only if one helper regresses.
+    #[test]
+    fn a_mirror_a_run_wrote_stays_rewritable_under_a_country_change() {
+        let net = Canned(vec![(LAUNCHPAD, Ok(LAUNCHPAD_OK))]);
+        let (_, src, roots) = load_candidates(&net, "DE", "Germany", false).unwrap();
+        assert_eq!(src, "Launchpad");
+        assert!(
+            roots
+                .iter()
+                .any(|r| r.host == "ubuntu.uib.no" && r.path == "/archive/"),
+            "the fixture lists this mirror in Norway, so a German run's set must still name it: \
+             {roots:?}"
+        );
+        let apt = TempApt::new("country-change");
+        apt.write(
+            "sources.list",
+            "deb http://ubuntu.uib.no/archive noble main\n",
+        );
+        let inventory = sources::inventory(&apt.0, &roots, false);
+        assert!(
+            inventory.has_rewritable_uri(),
+            "run 2 cannot recognize the mirror run 1 wrote: {:?}",
+            inventory.files[0].entries
+        );
+        // The seeded lines that made W24 fail stay refused while that line is eligible.
+        apt.write(
+            "sources.list",
+            "deb http://ubuntu.uib.no/archive noble main\ndeb http://deb.example.com/stable ./\ndeb https://ppa.launchpadcontent.net/x/y/ubuntu noble main\n",
+        );
+        let mixed = sources::inventory(&apt.0, &roots, false);
+        let rewritable: Vec<bool> = mixed.files[0]
+            .entries
+            .iter()
+            .flat_map(|e| e.rewritable.iter().copied())
+            .collect();
+        assert_eq!(rewritable, [true, false, false]);
     }
 
     #[test]
@@ -2228,7 +2545,7 @@ mod tests {
         let apt = TempApt::new("already");
         let current = format!("deb {MIRROR} noble main\n");
         apt.write("sources.list", &current);
-        let hosts = vec!["mirror.example".to_string()];
+        let hosts = listed(&["mirror.example"]);
         let inventory = sources::inventory(&apt.0, &hosts, false);
         assert!(inventory.has_rewritable_uri());
         let change = build_plan(
@@ -2255,10 +2572,7 @@ mod tests {
         // Not valid UTF-8: the inventory reports the file instead of dropping it, and the plan has to
         // pass that report on (SPEC.md Apply: every skipped file with its reason).
         std::fs::write(apt.0.join("sources.list.d/bad.list"), [0xff, 0xfe]).expect("fixture file");
-        let hosts = vec![
-            "archive.ubuntu.com".to_string(),
-            "mirror.example".to_string(),
-        ];
+        let hosts = listed(&["archive.ubuntu.com", "mirror.example"]);
         let inventory = sources::inventory(&apt.0, &hosts, false);
         let change = build_plan(
             &apt.0,
@@ -2285,10 +2599,7 @@ mod tests {
         let apt = TempApt::new("changed");
         let original = "deb http://archive.ubuntu.com/ubuntu noble main\n";
         apt.write("sources.list", original);
-        let hosts = vec![
-            "archive.ubuntu.com".to_string(),
-            "mirror.example".to_string(),
-        ];
+        let hosts = listed(&["archive.ubuntu.com", "mirror.example"]);
         let inventory = sources::inventory(&apt.0, &hosts, false);
         // The rewrite is computed from one read; the plan is bound by a second one. Hand that second
         // read different bytes, which is what a file edited between the two reads looks like.
@@ -2321,11 +2632,11 @@ mod tests {
     fn the_run_level_exit_codes_are_pinned() {
         let args = parse_args_from(["--country", "LT"].into_iter().map(str::to_string)).unwrap();
         // No eligible URI, `--list`: read-only whatever the uid (SPEC.md CLI table).
-        assert_eq!(no_eligible_uri(Mode::List, &args), Ok(0));
+        assert_eq!(no_eligible_uri(Mode::List, &args, "Launchpad"), Ok(0));
         // No eligible URI, non-root: the `sudo` line and exit 3.
-        assert_eq!(no_eligible_uri(Mode::Recommend, &args), Ok(3));
+        assert_eq!(no_eligible_uri(Mode::Recommend, &args, "Launchpad"), Ok(3));
         // No eligible URI, root that was going to write: exit 1, and it says nothing was written.
-        let (code, msg) = no_eligible_uri(Mode::Write { confirm: true }, &args)
+        let (code, msg) = no_eligible_uri(Mode::Write { confirm: true }, &args, "Launchpad")
             .expect_err("a root run with nothing to write must fail");
         assert_eq!(code, 1);
         assert!(
@@ -2333,6 +2644,20 @@ mod tests {
             "{msg}"
         );
         assert!(msg.contains("Nothing was written"), "{msg}");
+        // The refusal says what to do: name the host as the problem and point at the URIs to set
+        // back, with `--restore` explicitly still to come (D10).
+        assert!(
+            msg.contains("set those URIs back to archive.ubuntu.com"),
+            "{msg}"
+        );
+        assert!(msg.contains("--restore"), "{msg}");
+        // The hint is one line and names the list the run did load, so the reason is checkable.
+        for source in ["Launchpad", "mirrors.ubuntu.com (unverified)"] {
+            let hint = no_eligible_hint(source);
+            assert!(hint.contains(source), "{hint}");
+            assert!(hint.contains("archive.ubuntu.com"), "{hint}");
+            assert!(!hint.contains('\n'), "the hint stays one line: {hint}");
+        }
         // Nothing survived the checks: exit 1 with the reason, never a panic on an empty ranking.
         let (code, msg) = no_fresh_mirror();
         assert_eq!(code, 1);
@@ -2347,7 +2672,7 @@ mod tests {
         let apt = TempApt::new("no-proof");
         let original = "deb http://archive.ubuntu.com/ubuntu noble main\n";
         apt.write("sources.list", original);
-        let hosts = vec!["archive.ubuntu.com".to_string()];
+        let hosts = listed(&["archive.ubuntu.com"]);
         let inventory = sources::inventory(&apt.0, &hosts, false);
         assert!(inventory.has_rewritable_uri());
         let selected = probed(
@@ -2376,7 +2701,7 @@ mod tests {
             "sources.list",
             "deb https://security.ubuntu.com/ubuntu noble-security main\ndeb https://ppa.example/ubuntu noble main\n",
         );
-        let hosts = vec!["archive.ubuntu.com".to_string()];
+        let hosts = listed(&["archive.ubuntu.com"]);
         let inventory = sources::inventory(&apt.0, &hosts, false);
         assert!(!inventory.has_rewritable_uri());
         let (code, msg) = build_plan(
@@ -2399,10 +2724,7 @@ mod tests {
         apt.write("sources.list", legacy);
         let deb822 = "# noble\nTypes: deb\nURIs: http://archive.ubuntu.com/ubuntu\nSuites: noble noble-updates\nComponents: main\n";
         apt.write("sources.list.d/ubuntu.sources", deb822);
-        let hosts = vec![
-            "archive.ubuntu.com".to_string(),
-            "mirror.example".to_string(),
-        ];
+        let hosts = listed(&["archive.ubuntu.com", "mirror.example"]);
         let inventory = sources::inventory(&apt.0, &hosts, false);
         let plan = build_plan(
             &apt.0,
@@ -2469,7 +2791,7 @@ mod tests {
         let apt = TempApt::new("pop");
         let system = "Types: deb\nURIs: http://apt.pop-os.org/ubuntu\nSuites: jammy jammy-security jammy-updates\nComponents: main\n";
         apt.write("sources.list.d/system.sources", system);
-        let hosts = vec!["apt.pop-os.org".to_string(), "mirror.example".to_string()];
+        let hosts = listed(&["apt.pop-os.org", "mirror.example"]);
         let inventory = sources::inventory(&apt.0, &hosts, true);
         let plan = build_plan(
             &apt.0,
@@ -3139,19 +3461,33 @@ mod tests {
     }
 
     /// The Sources section is the inventory, one line per file and per URI, with the reason a URI
-    /// is skipped (SPEC.md Apply).
+    /// is skipped (SPEC.md Apply). A host another country's Launchpad entry names is `rewrite`, a
+    /// listed host at a path outside the listed tree is `skip`, while the PPA and `-security` lines
+    /// keep their own reasons.
     #[test]
     fn the_sources_section_lists_every_file_entry_and_reason() {
         let apt = TempApt::new("sources-section");
         apt.write(
             "sources.list",
-            "deb http://archive.ubuntu.com/ubuntu noble main\ndeb https://security.ubuntu.com/ubuntu noble-security main\ndeb https://ppa.example/ubuntu noble main\n",
+            "deb http://archive.ubuntu.com/ubuntu noble main\ndeb http://ubuntu.uib.no/archive/ noble-updates main\ndeb https://security.ubuntu.com/ubuntu noble-security main\ndeb https://ppa.example/ubuntu noble main\ndeb http://ubuntu.uib.no/debian trixie main\n",
         );
         apt.write("sources.list.d/empty.list", "# nothing active\n");
         std::fs::write(apt.0.join("sources.list.d/bad.list"), [0xff, 0xfe]).expect("fixture file");
+        // `ubuntu.uib.no` is a Norwegian mirror listed at `/archive/`: a run in another country still
+        // recognizes its Ubuntu tree, and only that tree.
         let hosts = vec![
-            "archive.ubuntu.com".to_string(),
-            "mirror.example".to_string(),
+            sources::MirrorRoot {
+                host: "archive.ubuntu.com".to_string(),
+                path: "/".to_string(),
+            },
+            sources::MirrorRoot {
+                host: "mirror.example".to_string(),
+                path: "/".to_string(),
+            },
+            sources::MirrorRoot {
+                host: "ubuntu.uib.no".to_string(),
+                path: "/archive/".to_string(),
+            },
         ];
         let inventory = sources::inventory(&apt.0, &hosts, false);
         let lines = sources_section(&apt.0, &inventory);
@@ -3161,8 +3497,10 @@ mod tests {
             &lines[1..],
             [
                 "  sources.list                              rewrite  line 1  archive.ubuntu.com",
-                "  sources.list                              skip     line 2  security.ubuntu.com — security suite is never rewritten",
-                "  sources.list                              skip     line 3  ppa.example — URI 'https://ppa.example/ubuntu' is not an official Ubuntu archive mirror",
+                "  sources.list                              rewrite  line 2  ubuntu.uib.no",
+                "  sources.list                              skip     line 3  security.ubuntu.com — security suite is never rewritten",
+                "  sources.list                              skip     line 4  ppa.example — URI 'https://ppa.example/ubuntu' is not an official Ubuntu archive mirror",
+                "  sources.list                              skip     line 5  ubuntu.uib.no — URI 'http://ubuntu.uib.no/debian' is not an official Ubuntu archive mirror",
                 "  sources.list.d/bad.list                   skip     file is not valid UTF-8; skipped without changes",
                 "  sources.list.d/empty.list                 no active entries",
             ]
@@ -3276,10 +3614,7 @@ mod tests {
             "sources.list.d/ubuntu.sources",
             "# noble\nTypes: deb\nURIs: http://archive.ubuntu.com/ubuntu\nSuites: noble noble-updates\nComponents: main\n\nTypes: deb\nURIs: http://security.ubuntu.com/ubuntu\nSuites: noble-security\nComponents: main\n",
         );
-        let hosts = vec![
-            "archive.ubuntu.com".to_string(),
-            "mirror.arizona.edu".to_string(),
-        ];
+        let hosts = listed(&["archive.ubuntu.com", "mirror.arizona.edu"]);
         let inventory = sources::inventory(&apt.0, &hosts, false);
         let selected = MIRROR;
         let plan = build_plan(
