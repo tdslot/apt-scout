@@ -17,11 +17,12 @@ const SAMPLE_BYTES: u64 = 1_048_576;
 /// Smaller bodies are not a usable throughput sample (the real file is several MB).
 const MIN_SAMPLE: u64 = 64 * 1024;
 
-/// Both `Date`s of one `-updates` `InRelease`: the tolerant one ranking uses, and the signed one a
-/// write may trust (SPEC step 8, ruling 4).
+/// Both `Date`s of one `-updates` `InRelease`: the tolerant one ranking uses, and the verified one a
+/// write may trust (SPEC step 8, ruling 4). The verified date is not read here: verification hands it
+/// out, so a caller cannot pair this body's shown date with a proof of its own (D25).
 struct PocketDate {
     shown: i64,
-    signed: Option<fresh::SignedDate>,
+    verified: Option<verify::VerifiedDate>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -29,9 +30,9 @@ pub struct Outcome {
     pub url: String,
     /// The `-updates` `InRelease` `Date` used for lag, ranking and display (tolerant parse).
     pub updates_date: i64,
-    /// `Some` only when that `Date` came from inside the cleartext-signed region; the only date a
-    /// write may trust (SPEC step 8).
-    pub signed_updates_date: Option<fresh::SignedDate>,
+    /// The `Date` verification read inside the region it hashed, `Some` only when that pass handed
+    /// one out; the only date a write may trust (SPEC step 8).
+    pub verified_updates: Option<verify::VerifiedDate>,
     /// OpenPGP status of the deciding `-updates` InRelease. Ranking can use unverified dates, but
     /// write decisions must require `Verified`.
     pub updates_signature: SignatureStatus,
@@ -43,14 +44,6 @@ pub struct Outcome {
     pub throughput_bps: u64,
     /// Set when the mirror answered from a different host than the one listed (SPEC step 7).
     pub redirected_to: Option<String>,
-}
-
-impl Outcome {
-    /// The only form of a mirror date a write may use (SPEC: Freshness trust boundary).
-    pub fn verified_updates(&self) -> Option<verify::VerifiedDate> {
-        self.updates_signature
-            .verified_date(self.signed_updates_date?)
-    }
 }
 
 #[derive(Debug)]
@@ -75,20 +68,13 @@ impl fmt::Display for ProbeError {
 pub struct Reference {
     /// The `-updates` reference `Date` used for lag and display (tolerant parse).
     pub updates: i64,
-    /// `Some` only when it came from inside the cleartext-signed region.
-    pub signed_updates_date: Option<fresh::SignedDate>,
+    /// The `Date` verification read inside the region it hashed, `Some` only when that pass handed
+    /// one out. The only form of the freshness baseline a write may use (SPEC: Freshness trust
+    /// boundary).
+    pub verified_updates: Option<verify::VerifiedDate>,
     pub updates_signature: SignatureStatus,
     /// `None` when the archive has no readable `-security` InRelease; it is informational only.
     pub security: Option<i64>,
-}
-
-impl Reference {
-    /// The only form of the freshness baseline a write may use; `None` when the reference is not
-    /// `Verified` *or* its `Date` did not come from the signed region.
-    pub fn verified_updates(&self) -> Option<verify::VerifiedDate> {
-        self.updates_signature
-            .verified_date(self.signed_updates_date?)
-    }
 }
 
 fn inrelease_url(base: &str, suite: &str) -> String {
@@ -96,7 +82,7 @@ fn inrelease_url(base: &str, suite: &str) -> String {
 }
 
 /// The deciding pocket: the whole file is fetched under the verification cap and its OpenPGP
-/// signature is checked. Returns both dates (tolerant for ranking, strict for a write), the
+/// signature is checked. Returns both dates (tolerant for ranking, verified for a write), the
 /// request's time to first byte, the final URL and the signature status.
 fn date_of_verified(
     net: &dyn Fetch,
@@ -109,10 +95,10 @@ fn date_of_verified(
         .map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&got.body);
     let shown = fresh::release_date_tolerant(&text).map_err(|e| format!("{url}: {e}"))?;
-    let signed = fresh::release_date(&text).ok();
     let signature = verify::verify_inrelease(&got.body);
+    let verified = signature.proof_date();
     Ok((
-        PocketDate { shown, signed },
+        PocketDate { shown, verified },
         got.ttfb.as_millis() as u64,
         got.final_url,
         signature,
@@ -160,12 +146,12 @@ pub fn fetch_reference(
     let text = String::from_utf8_lossy(&got.body);
     let updates = fresh::release_date_tolerant(&text)
         .map_err(|e| ReferenceError::Other(format!("{url}: {e}")))?;
-    let signed_updates_date = fresh::release_date(&text).ok();
     let updates_signature = verify::verify_inrelease(&got.body);
+    let verified_updates = updates_signature.proof_date();
     let security = date_of_cheap(net, base, &format!("{codename}-security")).ok();
     Ok(Reference {
         updates,
-        signed_updates_date,
+        verified_updates,
         updates_signature,
         security,
     })
@@ -201,7 +187,7 @@ pub fn probe(
     Ok(Outcome {
         url: base.to_string(),
         updates_date: updates.shown,
-        signed_updates_date: updates.signed,
+        verified_updates: updates.verified,
         updates_signature,
         security_date,
         redirected_to: other_host(base, &updates_final),
@@ -318,7 +304,7 @@ mod tests {
     fn reference() -> Reference {
         Reference {
             updates: fresh::release_date_tolerant(UPD).unwrap(),
-            signed_updates_date: fresh::release_date(UPD).ok(),
+            verified_updates: None,
             updates_signature: SignatureStatus::Invalid("test fixture is unsigned".into()),
             security: Some(fresh::release_date_tolerant(SEC).unwrap()),
         }
@@ -597,7 +583,7 @@ mod tests {
             "probe must not report an unsigned body as verified, got {}",
             o.updates_signature
         );
-        assert!(o.verified_updates().is_none());
+        assert!(o.verified_updates.is_none());
     }
 
     #[test]
@@ -612,7 +598,7 @@ mod tests {
             "fetch_reference must keep the verifier's verdict, got {}",
             r.updates_signature
         );
-        assert!(r.verified_updates().is_none());
+        assert!(r.verified_updates.is_none());
     }
 
     /// Ruling 4, read half: a prefixed `-updates` body is still ranked, and exposes no trusted date even
@@ -639,12 +625,8 @@ mod tests {
             fresh::parse_date("Thu, 1 Jan 2099 00:00:00 UTC").unwrap()
         );
         assert_eq!(
-            o.signed_updates_date, None,
+            o.verified_updates, None,
             "the Date is outside the signed region"
-        );
-        assert!(
-            o.verified_updates().is_none(),
-            "a Date gpgv never signed must not be trusted"
         );
     }
 
@@ -661,8 +643,7 @@ mod tests {
             r.updates,
             fresh::parse_date("Thu, 1 Jan 2099 00:00:00 UTC").unwrap()
         );
-        assert_eq!(r.signed_updates_date, None);
-        assert!(r.verified_updates().is_none());
+        assert_eq!(r.verified_updates, None);
     }
 
     #[test]
@@ -686,15 +667,11 @@ mod tests {
             (M_SAMPLE, Ok(XZ_OK)),
         ]);
         let o = probe(&c, "http://m.example/ubuntu", "noble", "amd64").unwrap();
+        assert!(o.updates_signature.is_verified(), "{}", o.updates_signature);
+        // The verified date is the one verification read inside the region it hashed, and for a
+        // proper cleartext-signed body that is the same instant the tolerant read shows.
         assert_eq!(
-            o.updates_signature,
-            SignatureStatus::verified_for_test(),
-            "{}",
-            o.updates_signature
-        );
-        assert!(o.signed_updates_date.is_some());
-        assert_eq!(
-            o.verified_updates().map(|d| d.seconds()),
+            o.verified_updates.map(|d| d.seconds()),
             Some(o.updates_date)
         );
     }

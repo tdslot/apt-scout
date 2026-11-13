@@ -20,9 +20,9 @@ use std::time::{Duration, Instant};
 
 use crate::apply::{self, APT_DIR, ApplyError};
 use crate::digest::sha256;
-use crate::fresh::{self, Probed, SignedDate};
+use crate::fresh::{self, Probed};
 use crate::plan::{FileState, Plan, PlanError, PlannedWrite, Platform, SourceName, Target};
-use crate::verify::{SignatureStatus, VerifiedDate};
+use crate::verify::{self, SignatureStatus, VerifiedDate};
 
 /// The `now_secs` every case hands `apply::apply`: 2026-11-12T00:00:00Z.
 ///
@@ -260,7 +260,7 @@ fn written_of(targets: &[Target]) -> String {
 
 /// The one case that touches no file.
 fn selftest() -> Result<String, Fault> {
-    let proof = proof_date()?;
+    let proof = proof()?;
     let stale = stale_date()?;
     let stale_lag = fresh::lag(stale.seconds(), proof.seconds());
     if !fresh::is_stale(stale_lag) {
@@ -312,19 +312,19 @@ fn require_container() -> Result<(), Fault> {
 
 /// Build this case's plan from the apt configuration on disk. No network, no parameters.
 fn plan_for(case: Case) -> Result<Plan, Fault> {
-    let proof = proof_date()?;
+    let proof = proof()?;
     let probed = probed_from(proof.seconds(), Some(proof));
     Plan::for_apply(&probed, case.platform(), writes_for(case)?).map_err(Fault::Plan)
 }
 
 /// The mirror every case plans against. Its URL is unresolvable, so no case can depend on it
-/// answering, and `signed` is the date the proof was taken from, or `None` when the only date the
-/// mirror showed was outside the signed region.
-fn probed_from(updates_date: i64, signed: Option<SignedDate>) -> Probed {
+/// answering, and `verified` is the date the verification pass handed out, or `None` when the only
+/// date the mirror showed was outside the signed region.
+fn probed_from(updates_date: i64, verified: Option<VerifiedDate>) -> Probed {
     Probed {
         url: MIRROR_URL.to_string(),
         updates_date,
-        signed_updates_date: signed,
+        verified_updates: verified,
         lag_secs: 0,
         throughput_bps: 1,
         latency_ms: 1,
@@ -486,15 +486,21 @@ fn fixture_text() -> Result<&'static str, Fault> {
         .map_err(|e| Fault::Harness(format!("harness fixture is unusable: it is not UTF-8: {e}")))
 }
 
-/// The strict parse of one `InRelease` body, as the freshness baseline needs it.
-fn fixture_date(text: &str) -> Result<SignedDate, Fault> {
-    fresh::release_date(text)
-        .map_err(|e| Fault::Harness(format!("harness fixture is unusable: {e}")))
+/// The verified date of one `InRelease` body: the verifier's in-region read of that body, with a
+/// proof attached. The harness can name no other date — `VerifiedDate` has one constructor and it
+/// lives in `verify` (D25).
+fn verified_date(text: &str) -> Result<VerifiedDate, Fault> {
+    verify::verified_date_for_test(text).ok_or_else(|| {
+        Fault::Harness(
+            "harness fixture is unusable: the strict in-region parse found no Date to trust"
+                .to_string(),
+        )
+    })
 }
 
 /// The mirror's proof, and the baseline of every case but `stale`: `1_794_472_142`.
-fn proof_date() -> Result<SignedDate, Fault> {
-    fixture_date(fixture_text()?)
+fn proof() -> Result<VerifiedDate, Fault> {
+    verified_date(fixture_text()?)
 }
 
 /// The fixture with its `Date:` line moved one second past `fresh::MAX_LAG_SECS`.
@@ -509,8 +515,8 @@ fn stale_inrelease() -> Result<String, Fault> {
 }
 
 /// The stale body's date: `1_794_558_543`, exactly `MAX_LAG_SECS + 1` after the proof.
-fn stale_date() -> Result<SignedDate, Fault> {
-    fixture_date(&stale_inrelease()?)
+fn stale_date() -> Result<VerifiedDate, Fault> {
+    verified_date(&stale_inrelease()?)
 }
 
 /// The fixture with a `Date:` line the signature does not cover placed before the armour.
@@ -522,9 +528,9 @@ fn prefixed_body() -> Result<String, Fault> {
     Ok(format!("{STALE_DATE_LINE}\n{}", fixture_text()?))
 }
 
-/// The run's verified baseline: a `Verified` status and the strict-parsed proof date.
+/// The run's verified baseline: the date the verification pass read in the fixture's signed region.
 fn baseline() -> Result<VerifiedDate, Fault> {
-    verified(proof_date()?)
+    proof()
 }
 
 /// The baseline this case runs with, if it has one.
@@ -533,21 +539,9 @@ fn baseline_of(case: Case) -> Result<Option<VerifiedDate>, Fault> {
         // The writer's own refusal: a run that cannot say how old its mirror is may not write.
         Case::NoBaseline => Ok(None),
         // `MAX_LAG_SECS + 1` ahead of the mirror's proof, so `check_freshness` must refuse it.
-        Case::Stale => Ok(Some(verified(stale_date()?)?)),
+        Case::Stale => Ok(Some(stale_date()?)),
         _ => Ok(Some(baseline()?)),
     }
-}
-
-/// A verified date for one strict-parsed date, or a harness fault when the status cannot give one.
-fn verified(date: SignedDate) -> Result<VerifiedDate, Fault> {
-    let Some(verified) = SignatureStatus::verified_for_test().verified_date(date) else {
-        return Err(Fault::Harness(
-            "harness baseline is unusable: a verified status and a strict-parsed date always yield \
-             a verified date"
-                .to_string(),
-        ));
-    };
-    Ok(verified)
 }
 
 /// The one case that proves the strict in-region parse is what authorizes a write.

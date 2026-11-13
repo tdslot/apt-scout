@@ -671,7 +671,7 @@ fn run() -> Result<u8, (u8, String)> {
         results
             .iter()
             .filter_map(|(_, r)| r.as_ref().ok())
-            .filter_map(|o| o.verified_updates())
+            .filter_map(|o| o.verified_updates)
             .collect(),
     );
     // AS of each candidate (SPEC step 5): informational, never a reason to fail; skipped with --no-geo.
@@ -720,7 +720,7 @@ fn run() -> Result<u8, (u8, String)> {
                     probed.push(fresh::Probed {
                         url: o.url,
                         updates_date: o.updates_date,
-                        signed_updates_date: o.signed_updates_date,
+                        verified_updates: o.verified_updates,
                         lag_secs: lag,
                         throughput_bps: o.throughput_bps,
                         latency_ms: o.latency_ms,
@@ -1069,7 +1069,7 @@ fn write_baseline(
     candidates: Vec<verify::VerifiedDate>,
 ) -> Option<verify::VerifiedDate> {
     reference
-        .and_then(|r| r.verified_updates())
+        .and_then(|r| r.verified_updates)
         .or_else(|| fallback_baseline(candidates))
 }
 
@@ -1271,13 +1271,14 @@ mod tests {
         assert_eq!(mirror_host_port("not-a-url"), None);
     }
 
-    /// A `VerifiedDate` built the only way one exists: a `Date` the strict parser accepted inside the
-    /// armour, plus a `Verified` status.
+    /// A `VerifiedDate` built the only way one exists: the verifier's in-region read of the body, with
+    /// a proof attached. A test that could name the date without that read would be the abuse this
+    /// type exists to make inexpressible.
     fn vd(rfc: &str) -> verify::VerifiedDate {
-        let body = format!("-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nDate: {rfc}\n");
-        verify::SignatureStatus::verified_for_test()
-            .verified_date(fresh::release_date(&body).unwrap())
-            .unwrap()
+        verify::verified_date_for_test(&format!(
+            "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nDate: {rfc}\n"
+        ))
+        .expect("the armour and the date parse")
     }
 
     #[test]
@@ -1324,20 +1325,18 @@ mod tests {
             ])),
             Some(21_600)
         );
-        // an unverified date cannot enter at all: only `Verified` + a parsed signed date builds the type
-        let signed = fresh::release_date(
-            "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nDate: Thu, 01 Jan 1970 00:16:40 UTC\n",
-        )
-        .unwrap();
-        assert!(
+        // an unverified date cannot enter at all: only a verification pass hands a `VerifiedDate` out
+        assert_eq!(
             verify::SignatureStatus::Invalid("bad".into())
-                .verified_date(signed)
-                .is_none()
+                .proof_date()
+                .map(|d| d.seconds()),
+            None
         );
-        assert!(
+        assert_eq!(
             verify::SignatureStatus::Unavailable("missing".into())
-                .verified_date(signed)
-                .is_none()
+                .proof_date()
+                .map(|d| d.seconds()),
+            None
         );
     }
 
@@ -1346,18 +1345,13 @@ mod tests {
         let reference_date = fresh::parse_date("Thu, 12 Nov 2026  8:29:02 UTC").unwrap();
         let verified = probe::Reference {
             updates: reference_date,
-            signed_updates_date: Some(
-                fresh::release_date(
-                    "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nDate: Thu, 12 Nov 2026  8:29:02 UTC\n",
-                )
-                .unwrap(),
-            ),
+            verified_updates: Some(vd("Thu, 12 Nov 2026  8:29:02 UTC")),
             updates_signature: verify::SignatureStatus::verified_for_test(),
             security: None,
         };
         let unverified = probe::Reference {
             updates: reference_date,
-            signed_updates_date: None,
+            verified_updates: None,
             updates_signature: verify::SignatureStatus::Invalid("unsigned".into()),
             security: None,
         };
@@ -1532,18 +1526,15 @@ mod tests {
         }
     }
 
-    /// A probed mirror shaped the way `probe::probe` builds one: the signed `Date` and the status
-    /// meet in the same value, so only a `Verified` status can yield a proof.
+    /// A probed mirror shaped the way `probe::probe` builds one: the verified date is the one the
+    /// verification pass handed out, so a mirror whose status did not verify carries none.
     fn probed(url: &str, signature: verify::SignatureStatus) -> fresh::Probed {
         fresh::Probed {
             url: url.to_string(),
             updates_date: 1000,
-            signed_updates_date: Some(
-                fresh::release_date(
-                    "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nDate: Thu, 01 Jan 1970 00:16:40 UTC\n",
-                )
-                .expect("the armour and the date parse"),
-            ),
+            verified_updates: signature
+                .is_verified()
+                .then(|| vd("Thu, 01 Jan 1970 00:16:40 UTC")),
             lag_secs: 0,
             throughput_bps: 1_000_000,
             latency_ms: 10,

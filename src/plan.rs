@@ -114,15 +114,16 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// Both halves of the proposal come from `probed` (its URL and its `verified_updates`), so a
-    /// URI and a `VerifiedDate` from two different probes cannot be paired by the caller. The
-    /// platform comes from the caller because the create rule is the only rule that needs it.
+    /// Both halves of the proposal come from `probed` (its URL and the `verified_updates` verification
+    /// handed it), so a URI and a `VerifiedDate` from two different probes cannot be paired by the
+    /// caller, and a probe that verifies nothing yields `NoProof`. The platform comes from the caller
+    /// because the create rule is the only rule that needs it.
     pub fn for_apply(
         probed: &Probed,
         platform: Platform,
         writes: Vec<PlannedWrite>,
     ) -> Result<Plan, PlanError> {
-        let proof = probed.verified_updates().ok_or(PlanError::NoProof)?;
+        let proof = probed.verified_updates.ok_or(PlanError::NoProof)?;
         let plan = Plan {
             selected_uri: probed.url.clone(),
             proof,
@@ -256,11 +257,16 @@ mod tests {
         fresh::release_date(&format!("{ARM}\nHash: SHA512\n\nDate: {rfc}\n")).unwrap()
     }
 
-    fn proof() -> VerifiedDate { SignatureStatus::verified_for_test().verified_date(signed(RFC_A)).unwrap() }
+    /// A verified date, minted the only way a test can: the verifier's own in-region read.
+    fn proof_of(rfc: &str) -> Option<VerifiedDate> {
+        crate::verify::verified_date_for_test(&format!("{ARM}\nHash: SHA512\n\nDate: {rfc}\n"))
+    }
+
+    fn proof() -> VerifiedDate { proof_of(RFC_A).unwrap() }
 
     fn probe(url: &str, rfc: &str) -> Probed {
         let date = signed(rfc);
-        Probed { url: url.to_string(), updates_date: date.seconds(), signed_updates_date: Some(date),
+        Probed { url: url.to_string(), updates_date: date.seconds(), verified_updates: proof_of(rfc),
             lag_secs: 0, throughput_bps: 0, latency_ms: 0, same_as: false,
             signature: SignatureStatus::verified_for_test() }
     }
@@ -368,8 +374,12 @@ mod tests {
         assert_ne!(plan.proof().seconds(), fresh::parse_date(RFC_B).unwrap());
         assert_eq!(plan.writes().len(), 1);
         let unavailable = SignatureStatus::Unavailable("no gpgv".to_string());
-        let unverified = Probed { signature: unavailable, ..probe("https://a.example/ubuntu", RFC_A) };
+        let unverified = Probed { signature: unavailable, verified_updates: None,
+            ..probe("https://a.example/ubuntu", RFC_A) };
         assert_eq!(Plan::for_apply(&unverified, Platform::PopOs, vec![]), Err(PlanError::NoProof));
-        let unsigned = Probed { signed_updates_date: None, ..probe("https://a.example/ubuntu", RFC_A) };
+        // A verified status around a date from outside the signed region yields no proof either;
+        // that body is `verify::tests::gpgv_accepts_a_prefixed_body`'s, and it carries no
+        // `verified_updates` at all.
+        let unsigned = Probed { verified_updates: None, ..probe("https://a.example/ubuntu", RFC_A) };
         assert_eq!(Plan::for_apply(&unsigned, Platform::PopOs, vec![]), Err(PlanError::NoProof));    }
 }
