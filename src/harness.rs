@@ -50,8 +50,23 @@ const APPENDED_LINE: &[u8] = b"# apt-scout harness\n";
 /// target would build a plan `Plan::validate` has to refuse, so this name is never selected.
 const EXCLUDED_NAME: &str = "system-security.sources";
 
+/// What the `apply-pop` case puts in the file it creates: the security suite the plan restores.
+/// The creation's mode is the writer's own (`apply::FILE_MODE`), never a plan field.
+const SECURITY_SOURCES: &[u8] =
+    b"Types: deb\nURIs: http://archive.ubuntu.com/ubuntu\nSuites: noble-security\nComponents: main universe\n";
+
 /// Every case this build implements; the dispatch in `main` has one arm per entry.
-const CASES: [&str; 4] = ["selftest", "apply", "apply-pause", "hostile-names"];
+const CASES: [&str; 9] = [
+    "selftest",
+    "apply",
+    "apply-pop",
+    "apply-pause",
+    "hostile-names",
+    "no-baseline",
+    "stale",
+    "digest-mismatch",
+    "prefixed",
+];
 
 /// The names `hostile-names` hands the real parsers: the last one must be accepted, the rest not.
 ///
@@ -106,8 +121,13 @@ pub fn main(args: Vec<String>) -> Option<ExitCode> {
     let outcome = match name {
         "selftest" => selftest(),
         "apply" => write_case(Case::Apply),
+        "apply-pop" => write_case(Case::ApplyPop),
         "apply-pause" => write_case(Case::ApplyPause),
         "hostile-names" => hostile_names(),
+        "no-baseline" => write_case(Case::NoBaseline),
+        "stale" => write_case(Case::Stale),
+        "digest-mismatch" => digest_mismatch(),
+        "prefixed" => prefixed(),
         _ => {
             eprintln!(
                 "error: unknown write-harness case '{name}'; cases are {}",
@@ -121,12 +141,21 @@ pub fn main(args: Vec<String>) -> Option<ExitCode> {
 
 /// Which case is running: the inputs its plan and its baseline depend on.
 ///
-/// A variant per case that needs a plan. A case that differs only in a fixture, a baseline or a
-/// write list gets its own variant when it lands, and one dispatch arm beside the ones above.
+/// A variant per case that builds a plan through `plan_for`. A case that reads no apt file
+/// (`selftest`), writes no plan (`hostile-names`) or prints before it refuses (`digest-mismatch`,
+/// `prefixed`) has none, and each of those is a function of its own.
 #[derive(Clone, Copy)]
 enum Case {
     Apply,
     ApplyPause,
+    /// The replace write plus the one creation a stock Pop!_OS install needs.
+    ApplyPop,
+    /// `apply` with no baseline at all.
+    NoBaseline,
+    /// `apply` with a baseline `fresh::MAX_LAG_SECS + 1` ahead of the mirror's proof.
+    Stale,
+    /// `apply`'s write, carrying a digest that does not describe its bytes.
+    DigestMismatch,
 }
 
 impl Case {
@@ -136,7 +165,10 @@ impl Case {
     /// distribution, so a Pop case needs a platform value and nothing else.
     fn platform(self) -> Platform {
         match self {
-            Case::Apply | Case::ApplyPause => Platform::Ubuntu,
+            // The only case whose plan creates a file: `plan::validate` refuses a creation on any
+            // other platform, so this value is what makes the two-write plan representable.
+            Case::ApplyPop => Platform::PopOs,
+            _ => Platform::Ubuntu,
         }
     }
 }
@@ -208,8 +240,8 @@ fn write_case(case: Case) -> Result<String, Fault> {
         PAUSE_ENABLED.store(true, Ordering::SeqCst);
     }
     let plan = plan_for(case)?;
-    let baseline = baseline()?;
-    let outcome = apply::apply(&plan, Some(&baseline), NOW_SECS).map_err(Fault::Apply)?;
+    let baseline = baseline_of(case)?;
+    let outcome = apply::apply(&plan, baseline.as_ref(), NOW_SECS).map_err(Fault::Apply)?;
     Ok(format!(
         "OK backup={} wrote={}",
         outcome.backup_id.as_str(),
@@ -280,29 +312,86 @@ fn require_container() -> Result<(), Fault> {
 
 /// Build this case's plan from the apt configuration on disk. No network, no parameters.
 fn plan_for(case: Case) -> Result<Plan, Fault> {
-    let target = replace_target()?;
-    let original = original_of(&target)?;
-    let new_bytes = rewritten(&original.bytes);
-    let digest = sha256(&new_bytes);
     let proof = proof_date()?;
-    let probed = Probed {
+    let probed = probed_from(proof.seconds(), Some(proof));
+    Plan::for_apply(&probed, case.platform(), writes_for(case)?).map_err(Fault::Plan)
+}
+
+/// The mirror every case plans against. Its URL is unresolvable, so no case can depend on it
+/// answering, and `signed` is the date the proof was taken from, or `None` when the only date the
+/// mirror showed was outside the signed region.
+fn probed_from(updates_date: i64, signed: Option<SignedDate>) -> Probed {
+    Probed {
         url: MIRROR_URL.to_string(),
-        updates_date: proof.seconds(),
-        signed_updates_date: Some(proof),
+        updates_date,
+        signed_updates_date: signed,
         lag_secs: 0,
         throughput_bps: 1,
         latency_ms: 1,
         same_as: false,
         signature: SignatureStatus::Verified,
+    }
+}
+
+/// Every write this case's plan carries, in the order `apply` reaches them.
+fn writes_for(case: Case) -> Result<Vec<PlannedWrite>, Fault> {
+    let target = replace_target()?;
+    let original = original_of(&target)?;
+    let new_bytes = rewritten(&original.bytes);
+    // `digest-mismatch` records the digest of the bytes being *replaced*: a real digest of the
+    // wrong content, which is the confusion the digest rule exists to refuse. No other case can
+    // reach it, because the rewrite always changes the bytes it describes.
+    let digest = match case {
+        Case::DigestMismatch => sha256(&original.bytes),
+        _ => sha256(&new_bytes),
     };
-    let writes = vec![PlannedWrite {
+    let replace = PlannedWrite {
         target,
         new_bytes,
         digest,
         original: Some(original),
         create_new: false,
-    }];
-    Plan::for_apply(&probed, case.platform(), writes).map_err(Fault::Plan)
+    };
+    match case {
+        // Creations run first, so the security source is the plan's first write.
+        Case::ApplyPop => Ok(vec![security_sources()?, replace]),
+        _ => Ok(vec![replace]),
+    }
+}
+
+/// The write that repairs a Pop!_OS install: `system-security.sources`, absent and unused.
+///
+/// `original: None` is a claim about the disk, not a bug: `capture` is what finds a file where the
+/// plan says there is none, so a pre-existing or symlinked create target is refused by the writer
+/// with its own variant instead of being pre-empted here.
+fn security_sources() -> Result<PlannedWrite, Fault> {
+    let name = SourceName::parse(EXCLUDED_NAME).map_err(Fault::Plan)?;
+    let new_bytes = SECURITY_SOURCES.to_vec();
+    Ok(PlannedWrite {
+        target: Target::SourcesListD(name),
+        digest: sha256(&new_bytes),
+        new_bytes,
+        original: None,
+        create_new: true,
+    })
+}
+
+/// The one case that aims `plan::validate`'s digest rule at a plan that breaks it.
+///
+/// `Plan::for_apply` is the only constructor and the fields are private, so no writer code can hold
+/// a plan whose digest is not its bytes: such a plan is refused where it is built, before `apply`
+/// is called and before any disk operation.
+fn digest_mismatch() -> Result<String, Fault> {
+    require_container()?;
+    match plan_for(Case::DigestMismatch) {
+        Err(fault) => Err(fault),
+        // Unreachable unless the construction stops checking the bytes against the digest.
+        Ok(_) => Err(Fault::Harness(
+            "a plan whose recorded digest is not the digest of its bytes was accepted, so nothing \
+             refuses a write of one content behind a proof issued for another"
+                .to_string(),
+        )),
+    }
 }
 
 /// The file this case replaces, by the one selection rule every case shares.
@@ -424,16 +513,78 @@ fn stale_date() -> Result<SignedDate, Fault> {
     fixture_date(&stale_inrelease()?)
 }
 
+/// The fixture with a `Date:` line the signature does not cover placed before the armour.
+///
+/// The line is the same one `stale` rewrites the body with, so the forgery claims to be a day and a
+/// second newer than the body it is glued to: a reader that took it would call the mirror fresher
+/// than the mirror's own signature says it is.
+fn prefixed_body() -> Result<String, Fault> {
+    Ok(format!("{STALE_DATE_LINE}\n{}", fixture_text()?))
+}
+
 /// The run's verified baseline: a `Verified` status and the strict-parsed proof date.
 fn baseline() -> Result<VerifiedDate, Fault> {
-    let Some(baseline) = SignatureStatus::Verified.verified_date(proof_date()?) else {
+    verified(proof_date()?)
+}
+
+/// The baseline this case runs with, if it has one.
+fn baseline_of(case: Case) -> Result<Option<VerifiedDate>, Fault> {
+    match case {
+        // The writer's own refusal: a run that cannot say how old its mirror is may not write.
+        Case::NoBaseline => Ok(None),
+        // `MAX_LAG_SECS + 1` ahead of the mirror's proof, so `check_freshness` must refuse it.
+        Case::Stale => Ok(Some(verified(stale_date()?)?)),
+        _ => Ok(Some(baseline()?)),
+    }
+}
+
+/// A verified date for one strict-parsed date, or a harness fault when the status cannot give one.
+fn verified(date: SignedDate) -> Result<VerifiedDate, Fault> {
+    let Some(verified) = SignatureStatus::Verified.verified_date(date) else {
         return Err(Fault::Harness(
             "harness baseline is unusable: a verified status and a strict-parsed date always yield \
              a verified date"
                 .to_string(),
         ));
     };
-    Ok(baseline)
+    Ok(verified)
+}
+
+/// The one case that proves the strict in-region parse is what authorizes a write.
+///
+/// The same body is refused by the strict read and accepted by the tolerant one (the read-only
+/// ranking's), and a mirror whose only date came from the tolerant read has no proof to write with.
+fn prefixed() -> Result<String, Fault> {
+    require_container()?;
+    let body = prefixed_body()?;
+    let Err(refusal) = fresh::release_date(&body) else {
+        return Err(Fault::Harness(
+            "the strict parse accepted a body with a Date: line before the armour, so a date the \
+             signature does not cover could authorize a write"
+                .to_string(),
+        ));
+    };
+    println!("STRICT refused: {refusal}");
+    let tolerated = fresh::release_date_tolerant(&body).map_err(|e| {
+        Fault::Harness(format!(
+            "harness fixture is unusable: the tolerant parse refused the prefixed body: {e}"
+        ))
+    })?;
+    println!("TOLERANT {tolerated}");
+    let writes = writes_for(Case::Apply)?;
+    match Plan::for_apply(
+        &probed_from(tolerated, None),
+        Case::Apply.platform(),
+        writes,
+    ) {
+        Err(err) => Err(Fault::Plan(err)),
+        // Unreachable unless the proof rule names the wrong half of the pair.
+        Ok(_) => Err(Fault::Harness(
+            "a mirror whose only date sits outside the signed region was given a proof, so the \
+             tolerant read can authorize a write"
+                .to_string(),
+        )),
+    }
 }
 
 /// The hook `apply::run` calls between its last validation and its first sweep.

@@ -502,6 +502,93 @@ else
   fail "W15 hostile names -> exit $rc refused=$refused under=$under unrefused='$unrefused': $(echo "$got" | head -14)"
 fi
 
+# W16 (S15) Offline: the run holds no baseline, so the writer refuses at its freshness check, which
+#   precedes the capture of any target and the backup root: /etc/apt is untouched and no backup
+#   directory is created. This is the refusal S15 hangs on, not the harness's own earlier failure.
+rc=0; got=$(wcase ubuntu:24.04 "$FIX_DEB822" "/apt-scout __write-harness no-baseline" 2>&1) || rc=$?
+if [ "$rc" -eq 0 ] && [[ "$got" == *"rc=1"* ]] \
+  && [[ "$got" == *"ERR NoBaseline: this run has no verified freshness baseline for the mirror it selected"* ]] \
+  && [[ "$got" == *"same=yes"* ]] && [[ "$got" == *"backups=no"* ]]; then
+  pass "W16 no baseline -> ERR NoBaseline, exit 1, /etc/apt identical, no backup"
+else
+  fail "W16 no baseline -> exit $rc: $(echo "$got" | head -8)"
+fi
+
+# W17 (S15) Offline: the baseline is MAX_LAG_SECS + 1 ahead of the mirror's proof, so the freshness
+#   check's stale branch refuses the run. The lag and the limit are both named, so the case cannot
+#   pass on the no-baseline refusal or on a stale check that drifted from the constant.
+rc=0; got=$(wcase ubuntu:24.04 "$FIX_DEB822" "/apt-scout __write-harness stale" 2>&1) || rc=$?
+if [ "$rc" -eq 0 ] && [[ "$got" == *"rc=1"* ]] \
+  && [[ "$got" == *"ERR Stale: the mirror this run selected, http://mirror.example.invalid/ubuntu, is 86401 seconds behind"* ]] \
+  && [[ "$got" == *"past the 86400 second limit"* ]] \
+  && [[ "$got" == *"same=yes"* ]] && [[ "$got" == *"backups=no"* ]]; then
+  pass "W17 stale mirror -> ERR Stale, 86401 behind, exit 1, /etc/apt identical"
+else
+  fail "W17 stale mirror -> exit $rc: $(echo "$got" | head -8)"
+fi
+
+# W18 (S15) Offline: a plan whose digest is not the digest of its bytes cannot be built, so the
+#   digest rule refuses it before `apply` is reached and nothing on disk is opened for writing.
+#   The target is named, so the line is the digest rule's and not another rule's.
+rc=0; got=$(wcase ubuntu:24.04 "$FIX_DEB822" "/apt-scout __write-harness digest-mismatch" 2>&1) || rc=$?
+if [ "$rc" -eq 0 ] && [[ "$got" == *"rc=1"* ]] \
+  && [[ "$got" == *"ERR Plan: digest rule: the bytes of sources.list.d/ubuntu.sources do not match the recorded digest"* ]] \
+  && [[ "$got" == *"same=yes"* ]] && [[ "$got" == *"backups=no"* ]]; then
+  pass "W18 digest does not describe the bytes -> ERR Plan digest rule, exit 1, /etc/apt identical"
+else
+  fail "W18 digest mismatch -> exit $rc: $(echo "$got" | head -8)"
+fi
+
+# W19 (S15) Offline: one body carries a `Date:` line before the armour. The strict read refuses it,
+#   the tolerant read returns that date (1794558543, the same forgery the stale case uses), and a
+#   mirror whose only date came from outside the signed region has no proof, so its plan is refused.
+rc=0; got=$(wcase ubuntu:24.04 "$FIX_DEB822" "/apt-scout __write-harness prefixed" 2>&1) || rc=$?
+if [ "$rc" -eq 0 ] && [[ "$got" == *"rc=1"* ]] \
+  && [[ "$got" == *"STRICT refused: InRelease is empty or does not start with '-----BEGIN PGP SIGNED MESSAGE-----'"* ]] \
+  && [[ "$got" == *"TOLERANT 1794558543"* ]] \
+  && [[ "$got" == *"ERR Plan: proof rule: the mirror is not verified"* ]] \
+  && [[ "$got" == *"same=yes"* ]] && [[ "$got" == *"backups=no"* ]]; then
+  pass "W19 Date: before the armour -> strict refusal, tolerant 1794558543, ERR Plan proof rule"
+else
+  fail "W19 prefixed body -> exit $rc: $(echo "$got" | head -8)"
+fi
+
+# W20 and W21 are S17's pair: `apply-pop` plans the creation of sources.list.d/system-security.sources
+# and the replacement of the pinned ubuntu.sources. Both cases make the create target un-creatable,
+# and each must be refused by the writer's own variant for that state, with the file's bytes, mode
+# and owner unchanged and no backup directory started.
+
+# W20 (S17) Offline: a regular file already sits where the plan creates one, so the capture's
+#   `None`-original against a present file is a Changed, not an Exists (only the post-capture
+#   O_EXCL race reaches Exists). The harness's replace target is ubuntu.sources, never this file:
+#   a plan that selected it as well would be refused as a duplicate before the writer ran.
+rc=0; got=$(WCASE_DIGESTS=/etc/apt/sources.list.d/system-security.sources wcase ubuntu:24.04 \
+  "$FIX_DEB822; printf 'orig\n' > /etc/apt/sources.list.d/system-security.sources; chmod 0644 /etc/apt/sources.list.d/system-security.sources" \
+  "/apt-scout __write-harness apply-pop" 2>&1) || rc=$?
+if [ "$rc" -eq 0 ] && [[ "$got" == *"rc=1"* ]] \
+  && [[ "$got" == *"ERR Changed: /etc/apt/sources.list.d/system-security.sources changed since the plan was built: the file on disk is not the file the plan was built from"* ]] \
+  && [[ "$got" == *"same=yes"* ]] && [[ "$got" == *"digests=unchanged"* ]] \
+  && [[ "$got" == *"backups=no"* ]]; then
+  pass "W20 create target already exists -> ERR Changed, exit 1, file and /etc/apt identical"
+else
+  fail "W20 create target already exists -> exit $rc: $(echo "$got" | head -8)"
+fi
+
+# W21 (S17) Offline: the create target is a symlink with real bytes behind it, so `read_state`'s
+#   lstat sees the link and the refusal names the target. The canary's digest is compared, so a
+#   writer that followed the link and truncated it would show as digests=changed.
+rc=0; got=$(WCASE_DIGESTS=/tmp/canary wcase ubuntu:24.04 \
+  "$FIX_DEB822; printf 'canary-v1\n' > /tmp/canary; ln -s /tmp/canary /etc/apt/sources.list.d/system-security.sources" \
+  "/apt-scout __write-harness apply-pop" 2>&1) || rc=$?
+if [ "$rc" -eq 0 ] && [[ "$got" == *"rc=1"* ]] \
+  && [[ "$got" == *"ERR Target: refusing /etc/apt/sources.list.d/system-security.sources: it is a symlink"* ]] \
+  && [[ "$got" == *"same=yes"* ]] && [[ "$got" == *"digests=unchanged"* ]] \
+  && [[ "$got" == *"$canary  /tmp/canary"* ]] && [[ "$got" == *"backups=no"* ]]; then
+  pass "W21 symlinked create target -> ERR Target, exit 1, canary and /etc/apt identical"
+else
+  fail "W21 symlinked create target -> exit $rc: $(echo "$got" | head -8)"
+fi
+
 # W22 Offline: the positive path. Without it every refusal above could pass on a harness broken
 #   enough to refuse everything. The target it names is the one $FIX_DEB822 guarantees, the backup
 #   holds the pre-run copy and its manifest, and the snapshot diff is exactly two changed lines,
