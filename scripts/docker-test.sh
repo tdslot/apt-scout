@@ -151,9 +151,8 @@ if [ -e /var/backups/apt-scout ]; then echo backups=yes; else echo backups=no; f
 cat /tmp/out"
 }
 
-# --write-only skips the thirteen read-only cases below, which stay byte-for-byte as they were:
-# the write cases run in both modes, so a write case's result never depends on which mode started
-# it.
+# --write-only skips the thirteen read-only cases below, which read and never write: the write
+# cases run in both modes, so a write case's result never depends on which mode started it.
 if [ "$mode" != write ]; then
 # 1. Offline: the release codename is detected on every supported Ubuntu, and geolocation fails
 #    gracefully before the program asks for an explicit country (exit 2).
@@ -213,13 +212,18 @@ if [ "$rc" = 1 ] && [[ "$got" == *"no mirror list is available"* ]] && [[ "$got"
 #     `--list` is the read-only mode whatever the uid (SPEC.md CLI table), so this case stays about
 #     the inventory and never asks to write.
 rc=0; got=$(run bridge ubuntu:24.04 sh -c 'rm -f /etc/apt/sources.list; rm -rf /etc/apt/sources.list.d; mkdir -p /etc/apt/sources.list.d; printf "deb https://packages.example.org/ubuntu noble main\\n" > /etc/apt/sources.list.d/third-party.list; /apt-scout --list --no-geo --country LT' 2>&1) || rc=$?
-if [ "$rc" = 0 ] && [[ "$got" == *"APT source inventory (read-only)"* ]] && [[ "$got" == *"not an official Ubuntu archive"* ]] && [[ "$got" == *"No official Ubuntu apt source URI can be changed"* ]] && [[ "$got" != *"baseline"* ]] && [[ "$got" != *"ranked"* ]]; then pass "third-party-only apt sources -> stop before probes"; else fail "third-party-only sources -> exit $rc: $(echo "$got" | head -8)"; fi
+#    The inventory line the case reads is now the `Sources` heading plus the skip line naming the
+#    host and the reason. `Ranked` and `reference:` are what a run that went on to probe would print,
+#    so their absence is still what proves the early stop.
+if [ "$rc" = 0 ] && printf '%s\n' "$got" | grep -q '^Sources ' && [[ "$got" == *"packages.example.org"* ]] && [[ "$got" == *"is not an official Ubuntu archive mirror"* ]] && [[ "$got" == *"No official Ubuntu apt source URI can be changed"* ]] && [[ "$got" != *"reference:"* ]] && [[ "$got" != *"Ranked"* ]]; then pass "third-party-only apt sources -> stop before probes"; else fail "third-party-only sources -> exit $rc: $(echo "$got" | head -8)"; fi
 
 # 11. Live: missing gpgv keeps ranking read-only usable but marks signatures unavailable.
 #     The case is about the ranking, and a root run without `--list` would try to write, so `--list`
 #     keeps it on the read-only path it was written for.
 rc=0; got=$(run bridge ubuntu:24.04 sh -c 'mv /usr/bin/gpgv /usr/bin/gpgv.disabled 2>/dev/null || true; /apt-scout --list --no-geo --country LT --top 2' 2>&1) || rc=$?
-if [ "$rc" = 0 ] && [[ "$got" == *"unavailable ("* ]] && [[ "$got" == *" 1  http"* ]]; then pass "missing gpgv -> unavailable signatures, ranking still works"; else fail "missing gpgv -> exit $rc: $(echo "$got" | head -8)"; fi
+#    The `sig` cell reads `unavailable` for every row, and `--no-geo` is the run that has no AS data,
+#    so the one note under the table is the run's own reason rather than a column of `unknown`.
+if [ "$rc" = 0 ] && printf '%s\n' "$got" | grep -qE '^ +[0-9]+ +https?://.*  unavailable$' && [[ "$got" == *"note: AS data unavailable (--no-geo skips every AS lookup)"* ]]; then pass "missing gpgv -> unavailable signatures, AS note says why, ranking still works"; else fail "missing gpgv -> exit $rc: $(echo "$got" | head -8)"; fi
 
 # 12. Live (needs internet): real Launchpad + real mirrors, every supported Ubuntu release.
 #    Checks shape, not specific mirrors: a ranked table with at least one fresh mirror. `--list` is
@@ -227,7 +231,9 @@ if [ "$rc" = 0 ] && [[ "$got" == *"unavailable ("* ]] && [[ "$got" == *" 1  http
 for v in 20.04 22.04 24.04 26.04; do
   if [ $# -gt 0 ]; then case " $* " in *" $v "*) ;; *) continue ;; esac; fi
   rc=0; got=$(run bridge "ubuntu:$v" /apt-scout --list --country LT --top 3 2>&1) || rc=$?
-  if [ "$rc" = 0 ] && [[ "$got" == *"country Lithuania"* ]] && [[ "$got" == *"APT source inventory (read-only)"* ]] && [[ "$got" == *"source file: /etc/apt/"* ]] && [[ "$got" == *" 1  http"* ]]; then pass "ubuntu:$v live LT -> source inventory and ranked table"; else fail "ubuntu:$v live LT -> exit $rc: $(echo "$got" | head -6)"; fi
+  # The Sources heading names the apt root the relative paths below it hang from, and the rewrite
+  # line is the inventory proving it read a real file; ` 1  http` is the first ranked row.
+  if [ "$rc" = 0 ] && [[ "$got" == *"country: Lithuania (--country)"* ]] && printf '%s\n' "$got" | grep -q '^Sources .*/etc/apt$' && [[ "$got" == *"rewrite  line "* ]] && [[ "$got" == *" 1  http"* ]]; then pass "ubuntu:$v live LT -> source inventory and ranked table"; else fail "ubuntu:$v live LT -> exit $rc: $(echo "$got" | head -6)"; fi
 done
 
 # 13. Live: a real verified row. The base images have no ubuntu-keyring, so install the two
@@ -260,10 +266,12 @@ else
 fi
 
 # W2 (S16) Offline, plain binary: the harness option is an ordinary unknown argument, so the
-# shipped binary cannot be driven into a write case by name.
+# shipped binary cannot be driven into a write case by name. The help's own shape is asserted here
+# too: the sections a user reads, the `--verbose` flag, and the rule that only `ok` authorizes a
+# write (it used to repeat under every ranked table).
 rc=0; got=$(run none ubuntu:24.04 sh -c '/apt-scout --help; echo HELP_END; /apt-scout __write-harness apply; echo rc=$?' 2>&1) || rc=$?
 help_out=${got%%HELP_END*}; plain_out=${got#*HELP_END}
-if [ "$rc" -eq 0 ] && [[ "$help_out" != *"write-harness"* ]] && [[ "$plain_out" == *"unknown option '__write-harness'"* ]] && [[ "$plain_out" == *"rc=2"* ]]; then
+if [ "$rc" -eq 0 ] && [[ "$help_out" != *"write-harness"* ]] && [[ "$help_out" == *"USAGE"* ]] && [[ "$help_out" == *"EXIT CODES"* ]] && [[ "$help_out" == *"--verbose"* ]] && [[ "$help_out" == *"only ok may authorize a write"* ]] && [[ "$plain_out" == *"unknown option '__write-harness'"* ]] && [[ "$plain_out" == *"rc=2"* ]]; then
   pass "W2 plain binary -> no harness in --help, __write-harness is an unknown option (exit 2)"
 else
   fail "W2 plain binary -> exit $rc: help='$(echo "$help_out" | head -3)' run='$(echo "$plain_out" | head -3)'"

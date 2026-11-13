@@ -88,9 +88,7 @@ fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args, Strin
                     .ok_or(format!("--top '{n}' is not a positive number"))?;
             }
             "-h" | "--help" => {
-                println!(
-                    "apt-scout [--country <CC>] [--no-geo] [--top N] [--https-only] [--list] [--yes]\nShows the freshest, fastest Ubuntu mirrors for your country (detected, or given with --country). --no-geo skips every geolocation lookup and needs --country.\nAs root it writes the best mirror to the apt sources after one confirmation; --yes skips that confirmation. As any other user it writes nothing, prints the one line to run under sudo, and exits 3. --list shows the ranked table and the change a write would make, and never writes whatever the user."
-                );
+                println!("{HELP}");
                 std::process::exit(0);
             }
             other => return Err(format!("unknown option '{other}'; try --help")),
@@ -98,6 +96,39 @@ fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args, Strin
     }
     Ok(a)
 }
+
+/// `--help`, once: the flags, what a run does with them, the exit codes and one example each. The
+/// rule that used to repeat under every table lives here instead.
+const HELP: &str = "\
+apt-scout — pick the fastest Ubuntu mirror and use it
+
+USAGE
+  apt-scout [OPTIONS]
+
+DISCOVERY
+  --country <CC>   two-letter country; overrides detection
+  --no-geo         no geolocation; requires --country
+  --https-only     only https mirrors
+  --top <N>        rows to show (default 5)
+  --verbose        per-mirror detail and full rejection reasons
+
+MODE
+  (no flag)        non-root: recommend and print the sudo line, exit 3
+                   root:      back up, confirm, rewrite the apt sources
+  --list           ranked table and planned change only; never writes
+  --yes            skip the one confirmation
+
+TABLE
+  sig reads ok only for a verified -updates InRelease; only ok may authorize a write.
+
+EXIT CODES
+  0 success    1 refusal or failure    2 usage    3 not root
+  4 unsupported distribution or architecture
+
+EXAMPLES
+  apt-scout --list --country LT       preview only
+  sudo apt-scout                      detect country, write the best mirror
+  sudo apt-scout --country DE --yes   no prompt";
 
 /// What this run does about writing, from its flags and its uid (SPEC.md CLI: the uid decides
 /// whether the run writes). Every flag is an override, never a step in the workflow.
