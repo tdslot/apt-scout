@@ -236,8 +236,8 @@ enum Mode {
     Recommend,
     /// A root run that writes; `confirm` is false when `--yes` was given.
     Write { confirm: bool },
-    /// `--restore`: the newest backup instead of a mirror, re-derived and written by the one
-    /// writer; `confirm` is false in a non-root run and when `--yes` was given.
+    /// `--restore`: the plan built from the newest backup instead of one built from a mirror, and
+    /// written by the one writer; `confirm` is false in a non-root run and when `--yes` was given.
     Restore { confirm: bool },
 }
 

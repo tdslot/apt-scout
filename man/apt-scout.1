@@ -206,9 +206,10 @@ As a non-root user: no write. The run prints only the line
 because the manifest is root's to read.
 .TP
 .B sudo apt\-scout \-\-restore
-As root: restore. It re-derives the newest backup and its plan, prints the
-backup it reads, the files it writes and the backup it creates, then asks
-once; \fB\-\-yes\fR skips that prompt. It writes through the same
+As root: restore. It prints the plan built from the newest backup and
+written by the one writer, naming the backup it reads, the files it writes
+and the backup it creates, then asks once; \fB\-\-yes\fR skips that prompt.
+It writes through the same
 validated path an apply uses and prints the backup it put back, what it
 wrote and removed, and where it copied what it replaced.
 .PP

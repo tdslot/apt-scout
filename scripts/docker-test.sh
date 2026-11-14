@@ -965,7 +965,7 @@ if [ "$rc" -eq 0 ] \
   && printf '%s\n' "$got" | grep -qxF '  removed /etc/apt/sources.list.d/system-security.sources' \
   && [[ "$got" == *"same=yes"* ]] && [[ "$got" == *"digests=unchanged"* ]] \
   && [[ "$got" == *"backups=yes"* ]]; then
-  pass "W32 restore prompt -> a yes writes the plan it printed and prints the same block"
+  pass "W32 restore prompt -> a yes writes the printed plan's bytes, not the newer backup landed after the prompt"
 else
   fail "W32 restore prompt -> exit $rc: $(echo "$got" | head -16)"
 fi
