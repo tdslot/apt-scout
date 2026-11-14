@@ -15,7 +15,7 @@ lto = true
 strip = true
 
 [package.metadata.deb]
-maintainer = "tdslot <tdslot@gmail.com>"
+maintainer = "Tadas Lotužas <tdslot@gmail.com>"
 depends = "gpgv, ubuntu-keyring"
 section = "admin"
 priority = "optional"
