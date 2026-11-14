@@ -72,6 +72,26 @@ chmod 0755 "$stage"
 install -d "$stage/DEBIAN" "$stage/usr/bin" "$stage/usr/share/doc/apt-scout"
 install -m 0755 "$binary" "$stage/usr/bin/apt-scout"
 install -m 0644 README.md "$stage/usr/share/doc/apt-scout/README.md"
+# Debian Policy 12.5 makes /usr/share/doc/<pkg>/copyright mandatory. The licence texts stay in the
+# source tree, so this file names the licence and where those texts are instead of copying them.
+copyright=$stage/usr/share/doc/apt-scout/copyright
+cat > "$copyright" <<'EOF'
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: apt-scout
+Source: https://github.com/tdslot/apt-scout
+
+Files: *
+Copyright: 2025 tdslot
+License: MIT or Apache-2.0
+ apt-scout is licensed under either of MIT or Apache-2.0, at your option. The full
+ licence texts are the files LICENSE-MIT and LICENSE-APACHE in the source tree at the
+ Source above; this package does not carry copies of them. The copyright notice is the
+ one at the top of LICENSE-MIT, and the crate manifest declares no separate holder.
+
+Comment: /usr/bin/apt-scout is a static binary built by the Rust toolchain against musl, so it
+ has no libc6 dependency; when it runs it uses gpgv and ubuntu-keyring from the system.
+EOF
+chmod 0644 "$copyright"
 # The man page lands in a parallel change; package it when it is there and never fail without it.
 if [ -f man/apt-scout.1 ]; then
   install -d "$stage/usr/share/man/man1"
