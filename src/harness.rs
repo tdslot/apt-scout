@@ -228,6 +228,9 @@ fn token(err: &ApplyError) -> &'static str {
         ApplyError::Exists { .. } => "Exists",
         ApplyError::Backup { .. } => "Backup",
         ApplyError::Write { .. } => "Write",
+        // No container case reaches the restore reader until D11b, but the token must name it: a
+        // refusal the matrix cannot produce would otherwise print no token at all.
+        ApplyError::Restore { .. } => "Restore",
         ApplyError::Time { .. } => "Time",
     }
 }

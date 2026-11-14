@@ -96,6 +96,11 @@ pub enum ApplyError {
     Write { path: PathBuf, reason: String },
     /// The run's timestamp cannot name a backup directory.
     Time { secs: u64 },
+    /// The newest backup cannot be trusted as it is, so the restore reads none of it.
+    ///
+    /// One variant for the whole reader: the backup root, the directory, the `MANIFEST`, the copies
+    /// and the records all fail the same way, and the message names the path and the fact.
+    Restore { path: PathBuf, reason: String },
 }
 
 impl ApplyError {
@@ -114,6 +119,7 @@ impl ApplyError {
             | Self::Exists { .. }
             | Self::Backup { .. }
             | Self::Write { .. }
+            | Self::Restore { .. }
             | Self::Time { .. } => 1,
         }
     }
@@ -281,6 +287,14 @@ impl fmt::Display for ApplyError {
                 "cannot name a backup from {secs} seconds after the epoch: that is past year 9999. \
                  Nothing was written. Check the system clock and re-run"
             ),
+            Self::Restore { path, reason } => write!(
+                f,
+                "refusing to restore {}: {reason}. Nothing was written to /etc/apt. apt-scout \
+                 restores nothing rather than guessing, because the manifest is the only source of \
+                 truth for a restore: check that backup directory and re-run, or put the file back \
+                 by hand from another copy",
+                path.display()
+            ),
         }
     }
 }
@@ -296,9 +310,11 @@ pub struct Outcome {
 
 /// Write the plan, as root, to the real `/etc/apt` and `/var/backups/apt-scout`.
 ///
-/// Refuses before its first byte on a non-root run, on a plan that does not validate, on a run
-/// whose verified baseline is missing or does not cover the selected mirror, on a file it cannot
-/// describe in a restorable manifest, and on any difference between the plan and the disk.
+/// Refuses before its first byte on a non-root run, on a plan that does not validate, on a mirror
+/// plan whose verified baseline is missing or does not cover the selected mirror, on a target it
+/// cannot describe in a restorable manifest, and on any difference between the plan and the disk.
+/// One entry point for both forms: what authorizes the write is the plan's own `Authority`, so a
+/// restore plan needs no baseline and gets no second code path.
 pub fn apply(
     plan: &Plan,
     baseline: Option<&VerifiedDate>,
@@ -418,14 +434,14 @@ struct Captured {
 }
 
 /// What the disk currently holds at one path.
-enum Entry {
+pub(crate) enum Entry {
     Missing,
     Regular(FileState),
     NotRegular(String),
 }
 
 /// Resolve one planned target against the apt root it is relative to.
-fn resolve(apt_root: &Path, target: &Target) -> PathBuf {
+pub(crate) fn resolve(apt_root: &Path, target: &Target) -> PathBuf {
     target.from_under(apt_root)
 }
 
@@ -472,7 +488,7 @@ fn capture(apt_root: &Path, plan: &Plan) -> Result<Vec<Captured>, ApplyError> {
 ///
 /// `lstat` of a path does not follow its last component, so a symlinked `sources.list.d` would
 /// otherwise be resolved by the kernel when the target is opened or renamed into.
-fn check_parent(path: &Path) -> Result<(), ApplyError> {
+pub(crate) fn check_parent(path: &Path) -> Result<(), ApplyError> {
     let parent = parent_dir(path)?;
     match fs::symlink_metadata(parent) {
         Ok(meta) if meta.file_type().is_symlink() => Err(ApplyError::Target {
@@ -987,11 +1003,37 @@ fn fill_replacement(file: &File, original: &FileState, c: &Captured) -> Result<(
     file.sync_all().map_err(|e| write_failed(&c.path, e))
 }
 
+/// Run the one write path with fixture roots and the calling user's identity. Test-only.
+///
+/// Production has exactly one caller of `run`, `apply`, which proves the process is root first;
+/// a unit test is not root and never will be, so the restore round trip reaches the same writer
+/// through here rather than through a second entry point in shipped code.
+#[cfg(test)]
+pub(crate) fn run_for_test(
+    apt_root: &Path,
+    backup_root: &Path,
+    plan: &Plan,
+    baseline: Option<&VerifiedDate>,
+    now_secs: u64,
+    owner_uid: u32,
+    owner_gid: u32,
+) -> Result<Outcome, ApplyError> {
+    run(
+        apt_root,
+        backup_root,
+        plan,
+        baseline,
+        now_secs,
+        owner_uid,
+        owner_gid,
+    )
+}
+
 /// Inspect one path without following a symlink and without reading it twice.
 ///
 /// The state comes from the open handle, not from the `lstat`, so a swap between the
 /// two cannot smuggle a different file into the write.
-fn read_state(path: &Path) -> Result<Entry, ApplyError> {
+pub(crate) fn read_state(path: &Path) -> Result<Entry, ApplyError> {
     let link = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Entry::Missing),

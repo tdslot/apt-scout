@@ -12,6 +12,7 @@ mod manifest;
 mod mirrors;
 mod plan;
 mod probe;
+mod restore;
 pub mod sources;
 mod verify;
 

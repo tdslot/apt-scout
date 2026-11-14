@@ -18,7 +18,7 @@ use crate::plan::Target;
 const HEADER: &str = "apt-scout-backup 1";
 const MAX_LINE_BYTES: usize = 192;
 /// The whole body, so a hostile manifest is refused before its lines are read one by one.
-const MAX_TOTAL_BYTES: usize = 65_536;
+pub(crate) const MAX_TOTAL_BYTES: usize = 65_536;
 const MAX_ENTRIES: usize = 32;
 /// The lines that are not entries: the header, `id`, `files` and `end`.
 const FRAME_LINES: usize = 4;
