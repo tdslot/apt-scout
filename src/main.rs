@@ -4375,7 +4375,19 @@ mod tests {
                 ink,
             ),
         ]);
-        report.block(plan_changes(&apt.0, inventory, plan, ink));
+        let mut planned = vec![titled(
+            "Planned change",
+            "written only after the confirmation",
+            ink,
+        )];
+        planned.extend(planned_change_lines(
+            &apt.0,
+            inventory,
+            plan,
+            Some(&manifest::BackupId::from_secs(1_700_000_000).expect("a valid backup id")),
+            ink,
+        ));
+        report.block(planned);
         report.block(rejected_lines(&rejected, false, ink));
         report.0
     }
@@ -4495,6 +4507,7 @@ mod tests {
         assert!(any("\u{1b}[1mDetail\u{1b}[0m"));
         assert!(any("\u{1b}[1mRecommendation\u{1b}[0m"));
         assert!(any("\u{1b}[1mRejected — 1\u{1b}[0m"));
+        assert!(any("\u{1b}[1mPlanned change "));
         assert!(any("\u{1b}[1mhttps://mirror.example/ubuntu/\u{1b}[0m"));
         assert!(any("\u{1b}[2m  lag\u{1b}[0m"));
         assert!(any("\u{1b}[2m     speed\u{1b}[0m"));
