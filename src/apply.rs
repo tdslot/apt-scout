@@ -201,7 +201,11 @@ impl ApplyError {
 }
 
 impl fmt::Display for ApplyError {
-    /// What failed, which path, why (the OS error verbatim), and what to do next.
+    /// What failed, which path, why (the OS error verbatim), and what to do next — where "next"
+    /// names the command the reader can run. Every one of these is raised by a write, so the run
+    /// that prints it was a root run started as `sudo apt-scout …` and has exited, leaving the
+    /// reader in their own unprivileged shell: a re-run that says a bare `apt-scout` names a
+    /// command that cannot write there, which is the same rule `next_step_hint` follows.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotRoot => write!(
@@ -211,15 +215,15 @@ impl fmt::Display for ApplyError {
             Self::Plan(e) => write!(
                 f,
                 "the write plan does not validate: {e}. Nothing was written; this is a fault in the \
-                 plan this run built, not in the files on disk, so re-run apt-scout and report it \
-                 if the same refusal comes back"
+                 plan this run built, not in the files on disk, so re-run 'sudo apt-scout' and \
+                 report it if the same refusal comes back"
             ),
             Self::NoBaseline => write!(
                 f,
                 "this run has no verified freshness baseline for the mirror it selected, so it \
                  cannot tell how old that mirror is. Nothing was written: a write needs a verified \
-                 -updates InRelease to hold the mirror against. Re-run apt-scout once a verified \
-                 -updates InRelease is reachable; read-only ranking still works meanwhile"
+                 -updates InRelease to hold the mirror against. Re-run 'sudo apt-scout' once a \
+                 verified -updates InRelease is reachable; read-only ranking still works meanwhile"
             ),
             Self::Stale { uri, lag_secs } => write!(
                 f,
@@ -261,7 +265,7 @@ impl fmt::Display for ApplyError {
             Self::Changed { path, reason } => write!(
                 f,
                 "{} changed since the plan was built: {reason}. Nothing was written to /etc/apt. \
-                 Re-run apt-scout so its plan is built from what is on disk now",
+                 Re-run 'sudo apt-scout' so its plan is built from what is on disk now",
                 path.display()
             ),
             // The reason carries this site's own case and its own fix: a file that appeared where
@@ -2110,6 +2114,30 @@ mod tests {
             extra.len() - TEMP_TRIES as usize,
             "the sweep is bounded to {TEMP_TRIES} entries per directory"
         );
+    }
+
+    /// A re-run a write error asks for carries the privilege it needs. The reader is back in the
+    /// shell `sudo` left them in, so a bare `apt-scout` cannot write there; the messages were the
+    /// same class of defect as the after-apply hint, and this fails while any of them has it.
+    #[test]
+    fn a_write_error_names_the_rerun_with_its_own_sudo() {
+        for err in [
+            ApplyError::Plan(PlanError::NoProof),
+            ApplyError::NoBaseline,
+            ApplyError::Changed {
+                path: PathBuf::from(APT_DIR).join(LIST),
+                reason: "the bytes changed".into(),
+            },
+        ] {
+            let text = err.to_string();
+            // Every mention of the program is the one the reader can run, so the counts match.
+            assert_eq!(
+                text.matches("apt-scout").count(),
+                text.matches("'sudo apt-scout'").count(),
+                "{text}"
+            );
+            assert!(text.contains("'sudo apt-scout'"), "{text}");
+        }
     }
 
     /// Criterion 17: a write-phase failure says what the run had already changed, never that the
