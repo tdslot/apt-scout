@@ -3398,6 +3398,16 @@ mod tests {
         .expect_err("an empty plan must be refused, not written");
         assert_eq!(code, 1);
         assert!(msg.contains("no apt source file would change"), "{msg}");
+        // Both halves of the refusal: the reason each inspected entry was left alone, and the fact
+        // that the run wrote nothing. The skips reach the user only through this message.
+        assert!(
+            msg.contains("https://security.ubuntu.com/ubuntu was not changed"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("https://ppa.example/ubuntu was not changed"),
+            "{msg}"
+        );
         assert!(msg.contains("Nothing was written"), "{msg}");
     }
 
