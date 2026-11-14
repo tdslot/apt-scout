@@ -156,8 +156,8 @@ TABLE
   --verbose adds the proof behind these words: each row's AS number and its same/diff/unknown
   match with the server (and the chosen mirror's in the recommendation), the server's AS on the
   context line, each row's country and resolved address, both pocket dates in full, the
-  -security lag, the exact signature status, a redirect host uncut, the alternatives when the
-  run has any, and the full text of every rejection reason.
+  -security lag, the exact signature status, a redirect host uncut, and the full text of every
+  rejection reason.
 
 DISPLAY
   --no-color          no colour in the report, even on a terminal
@@ -5391,6 +5391,20 @@ mod tests {
             !HELP.contains("only ok"),
             "`ok` is not a cell value: {HELP}"
         );
+    }
+
+    /// `--help` promises only what the binary prints. It promised "the alternatives when the run has
+    /// any" and no code path printed one: an alternative mirror is another **checked** mirror, written
+    /// as a `# alternative:` comment, and a non-interactive run checks exactly one, so it has none to
+    /// print — the promise belongs to the TUI and to no line of this report (GLOSSARY: Alternative
+    /// mirror; SPEC.md Output). The confirmation's own test is what proves the report prints none.
+    #[test]
+    fn the_help_promises_no_alternatives_the_report_never_prints() {
+        assert!(
+            HELP.contains("--verbose adds the proof behind these words"),
+            "{HELP}"
+        );
+        assert!(!HELP.contains("alternative"), "{HELP}");
     }
 
     /// "N of M usable" counts what is shown against what survived, and the legend underneath states
