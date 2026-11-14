@@ -767,8 +767,9 @@ impl<S: Sink> Progress<S> {
         }
     }
 
-    /// End the progress: called immediately before the report is printed, so no transient line
-    /// survives into it.
+    /// End the progress at the end of ranking: the line becomes the one summary that stays, so no
+    /// transient line survives into the report and an error that follows starts on a line of its own
+    /// (SPEC.md Output).
     fn finish(&mut self, usable: usize, rejected: usize) {
         if self.enabled {
             let line = done_line(usable, rejected, self.started.elapsed());
@@ -1632,12 +1633,15 @@ fn run() -> Result<u8, (u8, String)> {
     // `unknown` that implies the lookup happened (SPEC step 9).
     ranked_lines.extend(as_note(&rows, as_error.as_deref()));
     report.block(ranked_lines);
+    // SPEC.md Output: the status line ends with the ranking it was counting, and becomes the one line
+    // that stays. Everything below only assembles what the report will say, so a failure there cannot
+    // glue its message onto a live line.
+    progress.finish(ranked.len(), rejected.len());
     if args.verbose && !rows.is_empty() {
         report.block(detail_section(&rows, &details, &mirror_asn, ink));
     }
     let Some(best) = ranked.first() else {
         report.block(rejected_lines(&rejected, args.verbose, ink));
-        progress.finish(0, rejected.len());
         report.print();
         return Err(no_fresh_mirror());
     };
@@ -1713,7 +1717,6 @@ fn run() -> Result<u8, (u8, String)> {
         report.block(planned);
     }
     report.block(rejected_lines(&rejected, args.verbose, ink));
-    progress.finish(ranked.len(), rejected.len());
     report.print();
 
     match mode {
