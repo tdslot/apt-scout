@@ -129,7 +129,7 @@ The uid decides whether a run writes; no flag makes it write and no answer to th
 
 | Status | Meaning |
 | --- | --- |
-| 0 | Success, including `--list`, and a root run that found the sources already pointing at the best mirror. |
+| 0 | Success, including `--list`, a restore the confirmation cancelled (nothing was written), and a root run that found the sources already pointing at the best mirror. |
 | 1 | Refusal or failure: no mirror passed the freshness and reachability checks, no source URI can be rewritten, a backup or a write failed. Nothing was written. |
 | 2 | Usage error: an unknown option, a country code that is not two letters or that Launchpad does not list, `--no-geo` without `--country` or `--any`, a `--top` that is not positive, `--restore` combined with a mirror flag. Nothing was probed and no backup was opened. |
 | 3 | This run would write and this uid may not. The `sudo` line is on stdout. |
