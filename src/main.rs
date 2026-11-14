@@ -1435,7 +1435,9 @@ fn table_rows<'a>(
 /// signature status (SPEC.md CLI), in one line so nothing repeats the table, and in the table's own
 /// words for the two numbers. The chosen mirror's AS and its match are proof that the tie-break was
 /// auditable, not facts a reader acts on when choosing a mirror, so only a `--verbose` run names them
-/// (SPEC.md Output).
+/// (SPEC.md Output). The signature is the same split: the default line names the column and its cell
+/// — `verified yes`, `verified no`, `verified ?` — and the exact status the cell stands for is
+/// `--verbose`'s, because it is the proof and not the decision (SPEC.md Output).
 fn recommendation(
     best: &fresh::Probed,
     country: &str,
@@ -1448,16 +1450,19 @@ fn recommendation(
     } else {
         String::new()
     };
+    let freshness = if best.lag_secs == 0 {
+        "freshest"
+    } else {
+        "closest"
+    };
+    let signature = if verbose {
+        format!("{freshness} {}", signature_words(&best.signature))
+    } else {
+        format!("{freshness}, verified {}", signature_cell(&best.signature))
+    };
     format!(
-        "  {} — {} {}, {}{as_fact}, {}m behind, {:.1} MB/s, {} ms latency",
+        "  {} — {signature}, {country}{as_fact}, {}m behind, {:.1} MB/s, {} ms latency",
         ink.bold(&best.url),
-        if best.lag_secs == 0 {
-            "freshest"
-        } else {
-            "closest"
-        },
-        signature_words(&best.signature),
-        country,
         best.lag_secs / 60,
         best.throughput_bps as f64 / 1e6,
         best.latency_ms
@@ -2294,7 +2299,9 @@ fn signature_cell_painted(status: &verify::SignatureStatus, ink: Painter) -> Str
     }
 }
 
-/// The same status in words, for the recommendation and `--verbose`.
+/// The same status in words, for `--verbose` alone: the exact status is the proof behind the table's
+/// `yes`/`no`/`?`, and proof is what `-v` adds (SPEC.md Output). A default run asks
+/// `signature_cell` for the column's word instead.
 fn signature_words(status: &verify::SignatureStatus) -> &'static str {
     match status {
         verify::SignatureStatus::Verified(_) => "verified",
@@ -4434,7 +4441,7 @@ mod tests {
         assert_eq!(country, "Germany");
         assert_eq!(
             recommendation(&best, country, None, false, Painter::plain()),
-            "  https://mirror.example/ubuntu/ — freshest verified, Germany, 0m behind, 1.0 MB/s, 10 ms latency"
+            "  https://mirror.example/ubuntu/ — freshest, verified yes, Germany, 0m behind, 1.0 MB/s, 10 ms latency"
         );
         // A mirror whose probe recorded no country still gets a word, never a blank.
         assert_eq!(
@@ -5443,12 +5450,15 @@ mod tests {
     }
 
     /// The recommendation's reason carries every fact SPEC.md CLI asks for in it, in the table's own
-    /// words for the two numbers, and never a second spelling of the same fact.
+    /// words for the two numbers, and never a second spelling of the same fact — the signature
+    /// included: the default line names the column and its cell, and the exact status is `--verbose`'s
+    /// (SPEC.md Output).
     #[test]
     fn the_recommendation_carries_country_behind_latency_and_signature() {
         let best = probed(MIRROR, verify::SignatureStatus::verified_for_test());
         // The default line: no AS, because the AS the tie-break used is proof of how the ranking was
-        // audited, not a fact a person choosing a mirror acts on (SPEC.md Output).
+        // audited, not a fact a person choosing a mirror acts on, and the signature in the table's
+        // own words (SPEC.md Output).
         assert_eq!(
             recommendation(
                 &best,
@@ -5457,7 +5467,7 @@ mod tests {
                 false,
                 Painter::plain()
             ),
-            "  https://mirror.example/ubuntu/ — freshest verified, Lithuania, 0m behind, 1.0 MB/s, 10 ms latency"
+            "  https://mirror.example/ubuntu/ — freshest, verified yes, Lithuania, 0m behind, 1.0 MB/s, 10 ms latency"
         );
         // The same mirror under --verbose names the AS the tie-break used: the bare match word
         // cannot be checked against the table.
@@ -5476,12 +5486,59 @@ mod tests {
         lagging.lag_secs = 6 * 3600;
         assert_eq!(
             recommendation(&lagging, "Lithuania", None, false, Painter::plain()),
-            "  https://mirror.example/ubuntu/ — closest verified, Lithuania, 360m behind, 1.0 MB/s, 10 ms latency"
+            "  https://mirror.example/ubuntu/ — closest, verified yes, Lithuania, 360m behind, 1.0 MB/s, 10 ms latency"
         );
         assert_eq!(
             recommendation(&lagging, "Lithuania", None, true, Painter::plain()),
             "  https://mirror.example/ubuntu/ — closest verified, Lithuania, AS unknown, 360m behind, 1.0 MB/s, 10 ms latency"
         );
+    }
+
+    /// The default recommendation speaks the table's word for the signature and never the exact
+    /// status: a mirror whose check could not run reads `verified ?` and one whose signature was
+    /// invalid reads `verified no`, while the phrases that say *why* stay `--verbose`'s (SPEC.md
+    /// Output). Without this the default line printed the same `unverified (…)` text `Detail` does.
+    #[test]
+    fn the_default_recommendation_says_the_tables_word_never_the_proof() {
+        let unchecked = &verify::SignatureStatus::Unavailable("no gpgv in this image".into());
+        let invalid = &verify::SignatureStatus::Invalid("altered".into());
+        let line = |status: &verify::SignatureStatus, verbose: bool| {
+            recommendation(
+                &probed(MIRROR, status.clone()),
+                "Lithuania",
+                None,
+                verbose,
+                Painter::plain(),
+            )
+        };
+        assert_eq!(
+            line(unchecked, false),
+            "  https://mirror.example/ubuntu/ — freshest, verified ?, Lithuania, 0m behind, 1.0 MB/s, 10 ms latency"
+        );
+        assert_eq!(
+            line(invalid, false),
+            "  https://mirror.example/ubuntu/ — freshest, verified no, Lithuania, 0m behind, 1.0 MB/s, 10 ms latency"
+        );
+        // The cell word is the table's: the same three words, in the same order as the column.
+        assert_eq!(
+            [
+                unchecked,
+                invalid,
+                &verify::SignatureStatus::verified_for_test()
+            ]
+            .map(signature_cell),
+            ["?", "no", "yes"]
+        );
+        // Not one exact status in either default line, and both in the `--verbose` ones.
+        for (status, phrase) in [
+            (unchecked, "unverified (signature unavailable)"),
+            (invalid, "unverified (invalid signature)"),
+        ] {
+            let plain = line(status, false);
+            assert!(!plain.contains(phrase), "the proof leaked: {plain}");
+            assert!(!plain.contains("unverified"), "the proof leaked: {plain}");
+            assert!(line(status, true).contains(phrase), "{status:?}");
+        }
     }
 
     /// The rejected section is grouped: a count in the header, one line per reason, the numbers a
@@ -5824,6 +5881,17 @@ mod tests {
     /// where `run()` threads it: one run, two reports. `the_list_report_reads_as_one_block` pins the
     /// default one line by line; the two tests after it read the pair for what moved.
     fn sample_report(verbose: bool, tag: &str) -> (Vec<String>, TempApt) {
+        sample_report_with(verify::SignatureStatus::verified_for_test(), verbose, tag)
+    }
+
+    /// The same block with the **recommended** mirror's signature status chosen by the caller, so a
+    /// test can make the run whose recommendation is unverified — the run a leak of the exact status
+    /// would show up in.
+    fn sample_report_with(
+        best_signature: verify::SignatureStatus,
+        verbose: bool,
+        tag: &str,
+    ) -> (Vec<String>, TempApt) {
         let apt = TempApt::new(tag);
         apt.write(
             "sources.list.d/ubuntu.sources",
@@ -5851,10 +5919,7 @@ mod tests {
             verify::SignatureStatus::Unavailable("no gpgv in this image".into()),
         );
         second.lag_secs = 6 * 3600;
-        let ranked = vec![
-            probed(selected, verify::SignatureStatus::verified_for_test()),
-            second,
-        ];
+        let ranked = vec![probed(selected, best_signature), second];
         // The chosen mirror redirects to a long host and has a `-security` lag worth printing; the
         // other mirror did neither, so its row must end at its own cell.
         let details = std::collections::HashMap::from([
@@ -5980,7 +6045,7 @@ mod tests {
                 .to_string(),
             String::new(),
             "Recommendation".to_string(),
-            "  https://mirror.example/ubuntu — freshest verified, United States, 0m behind, 1.0 MB/s, 10 ms latency"
+            "  https://mirror.example/ubuntu — freshest, verified yes, United States, 0m behind, 1.0 MB/s, 10 ms latency"
                 .to_string(),
             String::new(),
             "Planned change                                 nothing is written with --list"
@@ -5999,9 +6064,16 @@ mod tests {
     /// The default report is the decision, and this is the test that keeps it so: one assertion per
     /// fact `SPEC.md` Output moved to `--verbose`, so a leak names itself instead of hiding in a
     /// diff of the whole block. Each of these would fail on the report the previous release printed.
+    /// The recommended mirror's own signature is **invalid** here on purpose: it is the run in which
+    /// the default recommendation printed the exact status, so the assertion below has something to
+    /// catch instead of passing on a mirror whose status happened to read `verified`.
     #[test]
     fn a_default_report_carries_no_verbose_fact() {
-        let (report, _) = sample_report(false, "default-facts");
+        let (report, _) = sample_report_with(
+            verify::SignatureStatus::Invalid("altered".into()),
+            false,
+            "default-facts",
+        );
         let text = report.join("\n");
 
         // Each row's AS number and its same/diff/unknown match with the server.
@@ -6061,6 +6133,17 @@ mod tests {
         assert!(
             !text.contains("     signature:"),
             "the detail signature line is in it:\n{text}"
+        );
+        // And nowhere else either: the recommendation the default run prints names the column and
+        // its cell, never the phrase `Detail` and a `--verbose` run use, and this run's chosen
+        // mirror is the invalid one.
+        assert!(
+            !text.contains("unverified"),
+            "the exact signature status is in the recommendation:\n{text}"
+        );
+        assert!(
+            text.contains(" — freshest, verified no, United States,"),
+            "the recommendation does not speak the table's word:\n{text}"
         );
         // And the row itself carries the short form: `?` for a check that could not run, which is
         // what the unreachable-keyring row is.

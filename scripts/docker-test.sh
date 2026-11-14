@@ -756,7 +756,7 @@ host=\$(grep -oE 'URIs: [a-z]+://[^ /]+' /etc/apt/sources.list.d/ubuntu.sources 
 echo written-host=\$host
 # The recommendation names the mirror's country, not the run's: this run asked for LT and selected
 # a foreign mirror, so a line that still says Lithuania is the bug SPEC.md CLI forbids.
-echo rec=\$(grep -E '— (freshest|closest) ' /tmp/run1 | head -n 1)
+echo rec=\$(grep -E '— (freshest|closest)' /tmp/run1 | head -n 1)
 echo BLOCKED-BEGIN; cat /tmp/lt-hosts; echo BLOCKED-END
 echo RUN1; cat /tmp/run1" 2>&1) || rc=$?
 written=$(printf '%s\n' "$got" | sed -n 's/^written-host=//p')
