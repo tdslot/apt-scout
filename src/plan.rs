@@ -221,6 +221,12 @@ impl Plan {
                     return Err(PlanError::CreateNewName(target()));
                 }
                 (Effect::Create, Target::SourcesListD(_), None) => {}
+                // A removal is the one effect a restore can prove from the manifest and a mirror
+                // plan never can, so the authority bound to it is checked here, where every write
+                // passes, rather than left to the constructors a caller chooses between.
+                (Effect::Remove, _, _) if !matches!(self.authority, Authority::Restore { .. }) => {
+                    return Err(PlanError::RemoveOutsideRestore(target()));
+                }
                 (Effect::Replace | Effect::Remove, _, None) => {
                     return Err(PlanError::ReplaceMissingOriginal(target()));
                 }
@@ -266,6 +272,7 @@ pub enum PlanError {
     CreateNewName(String),
     CreateNewWrongPlatform(String),
     CreateNewWithOriginal(String),
+    RemoveOutsideRestore(String),
     ReplaceMissingOriginal(String),
     FileTooLarge(String),
     SelectedUri(String),
@@ -295,6 +302,12 @@ impl fmt::Display for PlanError {
                 write!(f, "create_new rule: {t} may only be created on Pop!_OS")
             }
             PlanError::CreateNewWithOriginal(t) => write!(f, "create_new rule: {t} exists"),
+            PlanError::RemoveOutsideRestore(t) => {
+                write!(
+                    f,
+                    "authority rule: {t} may be removed only by a restore plan"
+                )
+            }
             PlanError::ReplaceMissingOriginal(t) => write!(f, "replace rule: {t} has no original"),
             PlanError::FileTooLarge(t) => write!(f, "size rule: {t} over {MAX_FILE_BYTES} bytes"),
             PlanError::SelectedUri(u) => write!(f, "uri rule: {u:?} is not http(s)"),
@@ -409,6 +422,30 @@ mod tests {
         let ok = Plan { authority: Authority::Mirror { uri: "https://m.example/ubuntu".to_string(), proof: proof() }, platform: Some(Platform::PopOs), writes: vec![w(LIST, Effect::Replace, old())] };
         assert!(ok.validate().is_ok());
         assert!(!ok.is_empty());
+    }
+
+    /// A removal is the one effect a restore proves from the manifest and a mirror plan never can,
+    /// so `validate` binds it to that authority. Deleting the `RemoveOutsideRestore` arm makes this
+    /// test fail rather than pass differently: the write below has its original present and its
+    /// digest matches the empty bytes a removal carries, so no other rule would refuse it.
+    #[test]
+    fn a_mirror_plan_may_not_remove() {
+        let at = SECURITY.to_string();
+        let removal = removable();
+        assert_eq!(bad(vec![removal.clone()]), Some(PlanError::RemoveOutsideRestore(at.clone())));
+        // The same write through the constructor a caller would reach: `for_apply` builds the
+        // mirror authority itself, so a caller cannot route around the rule by choosing one.
+        let apply = probe("https://m.example/ubuntu", RFC_A);
+        assert_eq!(Plan::for_apply(&apply, Platform::PopOs, vec![removal.clone()]),
+            Err(PlanError::RemoveOutsideRestore(at.clone())));
+        assert_eq!(PlanError::RemoveOutsideRestore(at.clone()).to_string(),
+            format!("authority rule: {at} may be removed only by a restore plan"));
+        // The positive half: the very same removal validates under a restore authority, so the
+        // refusal is this rule and not a plan that refuses removals altogether.
+        let rebuilt = restore(vec![removal]).unwrap();
+        assert_eq!(rebuilt.writes().len(), 1);
+        assert_eq!(rebuilt.writes()[0].effect, Effect::Remove);
+        assert!(rebuilt.writes()[0].original.is_some());
     }
 
     #[test]
