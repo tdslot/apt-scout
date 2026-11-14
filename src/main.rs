@@ -1037,6 +1037,22 @@ impl<S: Sink + Send + 'static> Progress<S> {
         }
     }
 
+    /// End the progress where no summary belongs: the line is erased and the animation stopped and
+    /// joined, so the report that prints next cannot have a frame written over it (SPEC.md Output). A
+    /// run that stops before ranking prints no `done` line, because there is no count to give.
+    fn stop(&mut self) {
+        self.clear();
+        self.halt();
+    }
+
+    /// Stop and join the animation and leave the line as it is, for a caller that replaces it itself —
+    /// the summary does — or has erased it already.
+    fn halt(&mut self) {
+        if let Some(ticker) = &mut self.ticker {
+            ticker.stop();
+        }
+    }
+
     /// End the progress at the end of ranking: the animation is stopped first, so no frame may follow
     /// the summary or the report's first line, and the line becomes the one summary that stays
     /// (SPEC.md Output).
@@ -1044,9 +1060,7 @@ impl<S: Sink + Send + 'static> Progress<S> {
         if !self.enabled() {
             return;
         }
-        if let Some(ticker) = &mut self.ticker {
-            ticker.stop();
-        }
+        self.halt();
         let line = done_line(usable, rejected, self.started.elapsed());
         lock(&self.sink).settle(&line);
     }
@@ -1914,8 +1928,9 @@ fn run() -> Result<u8, (u8, String)> {
         );
         report.line(no_eligible_hint(list_source));
         // No phase after the list load ran, so there is no summary to print: the line is erased and the
-        // report starts on its own (SPEC.md Output).
-        progress.clear();
+        // animation joined, so the report that follows starts on its own line and nothing can draw
+        // over it (SPEC.md Output).
+        progress.stop();
         report.print();
         return no_eligible_uri(mode, &args, list_source);
     }
@@ -6966,6 +6981,49 @@ mod tests {
         // A message after the join has nobody to draw it: the thread has ended.
         ticker.text("probing 3 mirrors… 3/3".to_string());
         assert_eq!(lock(&sink).events.len(), drawn_before);
+    }
+
+    /// An early exit stops and joins the animation **before** it prints: the line is erased, no
+    /// `done` line follows a run with no count, and nothing can draw a frame over the report that
+    /// prints next (SPEC.md Output). Hiding the line and printing while the thread still lived was the
+    /// earlier shape, and it left the report's first line at the mercy of a frame.
+    #[test]
+    fn an_early_stop_joins_the_animation_before_the_report() {
+        let mut progress = Progress::new(RecordingSink::default(), true);
+        progress.load();
+        progress.stop();
+        let stopped = lock(&progress.sink).events.clone();
+        assert_eq!(
+            stopped.last().map(String::as_str),
+            Some("clear"),
+            "the live line was not the last thing drawn: {stopped:?}"
+        );
+        assert_eq!(
+            stopped.iter().filter(|e| *e == "clear").count(),
+            1,
+            "the one erase came from the stop: {stopped:?}"
+        );
+        assert!(
+            progress.ticker.as_ref().is_some_and(|t| t.handle.is_none()),
+            "the animation outlived the stop"
+        );
+        assert!(
+            lock(&progress.sink).settled.is_empty(),
+            "an early stop has no count, so it prints no summary"
+        );
+        // A phase named after the join draws nothing: there is no thread left to draw it.
+        progress.load();
+        progress.stop();
+        assert_eq!(lock(&progress.sink).events, stopped);
+    }
+
+    /// A piped run has no animation to stop, and stopping one is neither an error nor a line.
+    #[test]
+    fn stopping_a_piped_run_writes_nothing() {
+        let mut progress = Progress::new(RecordingSink::default(), false);
+        progress.stop();
+        let sink = lock(&progress.sink);
+        assert!(sink.events.is_empty(), "{:?}", sink.events);
     }
 
     /// The one line that survives, with one decimal place, as SPEC.md Output spells it.
