@@ -54,6 +54,7 @@ sudo apt-scout                            # back up, ask once, then rewrite the 
 sudo apt-scout --yes                      # unattended: no prompt
 sudo apt-scout --country DE               # choose the country instead of detecting it
 sudo apt-scout --any                      # rank every country's mirrors together
+sudo apt-scout --restore                  # put the newest backup back
 ```
 
 A non-root run never writes. It prints the recommendation and one line, `sudo apt-scout` with the flags of that run, and exits 3, so the preview and the write are the same command with `sudo` in front. `--list` is the exception: it writes nothing for any uid and exits 0.
@@ -123,12 +124,14 @@ The uid decides whether a run writes; no flag makes it write and no answer to th
 | `apt-scout` | non-root | No: the table, the recommendation and the `sudo apt-scout …` line. | 3 |
 | `sudo apt-scout` | root | Yes: the same run, one confirmation (`--yes` skips it), then the write. | 0 |
 | `apt-scout --list` | any | No, whatever the uid: the table and the planned change. | 0 |
+| `apt-scout --restore` | non-root | No: the one line `sudo apt-scout --restore`. | 3 |
+| `sudo apt-scout --restore` | root | Yes: the newest backup, after one confirmation (`--yes` skips it). | 0 |
 
 | Status | Meaning |
 | --- | --- |
-| 0 | Success, including `--list`, and a root run that found the sources already pointing at the best mirror. |
+| 0 | Success, including `--list`, a restore the confirmation cancelled (nothing was written), and a root run that found the sources already pointing at the best mirror. |
 | 1 | Refusal or failure: no mirror passed the freshness and reachability checks, no source URI can be rewritten, a backup or a write failed. Nothing was written. |
-| 2 | Usage error: an unknown option, a country code that is not two letters or that Launchpad does not list, `--no-geo` without `--country` or `--any`, a `--top` that is not positive. Nothing was probed. |
+| 2 | Usage error: an unknown option, a country code that is not two letters or that Launchpad does not list, `--no-geo` without `--country` or `--any`, a `--top` that is not positive, `--restore` combined with a mirror flag. Nothing was probed and no backup was opened. |
 | 3 | This run would write and this uid may not. The `sudo` line is on stdout. |
 | 4 | Unsupported distribution or architecture, or a release that has left `archive.ubuntu.com`. Nothing was written. |
 
@@ -148,6 +151,8 @@ end 1
 
 One line per file: its path under `/etc/apt/`, `replace` or `create`, the SHA-256 of the bytes, the mode in decimal (`420` is 0644), the uid and the gid. Both the uid and the gid are 0: a backup is only ever written by root, for files root owns.
 
+`sudo apt-scout --restore` puts the newest backup back. It reads the manifest, checks every copy and every target against the record, asks once (the prompt names the backup it reads, the files it writes and the backup it creates; `--yes` skips it), and writes through the same validated path an apply uses. A non-root run prints only `sudo apt-scout --restore` and exits 3, before it opens the backup. It names no mirror and takes no discovery flag, so `--country`, `--any`, `--top`, `--https-only`, `--list` and `--no-geo` with it are usage errors. The file a write created is removed by the restore, and a second restore is refused rather than guessed, because the newest backup names a file that is no longer there.
+
 To restore by hand, copy the file back from the backup directory, as root, so the owner and the mode survive:
 
 ```sh
@@ -155,7 +160,7 @@ sudo cp -p /var/backups/apt-scout/<id>/sources.list /etc/apt/sources.list
 sudo apt update
 ```
 
-Repeat for each file the manifest lists. `--restore` is not implemented yet — the flag is rejected as an unknown option, so the copy above is the whole restore path today.
+Repeat for each file the manifest lists. That copy path is still the fallback for a backup `--restore` refuses — a copy or a target that changed since the backup was written — and for a file the manifest records as created, which can only be deleted.
 
 ## Network and privacy
 
