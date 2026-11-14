@@ -1,4 +1,7 @@
 /target
 
+# Built packages — `scripts/build-deb.sh` output.
+/dist/
+
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
