@@ -1425,8 +1425,7 @@ fn run() -> Result<u8, (u8, String)> {
     // spans the four phases it names.
     let mut progress = Progress::new(StderrSink::new(), io::stderr().is_terminal());
     let (mut cands, list_source, list_roots) =
-        load_candidates(&net, &country, country_name, args.https_only)?;
-    progress.load();
+        load_with_progress(&net, &country, country_name, args.https_only, &mut progress)?;
     // Different list sources can name the same mirror twice (with and without a trailing slash).
     let mut seen = std::collections::HashSet::new();
     cands.retain(|m| seen.insert(m.url.trim_end_matches('/').to_ascii_lowercase()));
@@ -2116,23 +2115,54 @@ fn mirror_roots<'a>(
     (roots, rejected)
 }
 
-/// Report the entries a list named that never entered the rewrite set. An entry that fails candidate
-/// validation is left out **and said so**, on the same channel as the fallback warning, rather than
-/// silently trusted (SPEC: Apply).
-fn report_rejected(list: &str, rejected: &[String]) {
+/// The warning for the entries a list named that never entered the rewrite set, or `None` when every
+/// entry entered it. An entry that fails candidate validation is left out **and said so**, on the same
+/// channel as the fallback warning, rather than silently trusted (SPEC: Apply). Returned as text, so
+/// the caller decides when the line lands: it may have a live progress line to erase first
+/// (SPEC.md Output).
+fn rejected_note(list: &str, rejected: &[String]) -> Option<String> {
     if rejected.is_empty() {
-        return;
+        return None;
     }
-    eprintln!(
+    Some(format!(
         "warning: {list} names {} mirror URL(s) that cannot make an apt source rewritable, so they are left out of that set: {}",
         rejected.len(),
         rejected.join(", ")
-    );
+    ))
+}
+
+/// The run's list phase: name it, do the load, and let what the load has to say land on lines of its
+/// own. Extracted from `run()` so the order is pinned by a test rather than by reading it: the line
+/// goes up **before** the work (the load is the longest silent stretch of a run — Launchpad up to
+/// 10 s, then `mirrors.ubuntu.com` up to another 10 s) and is erased after it, so a warning or an
+/// error that follows never lands on top of a live line (SPEC.md Output).
+fn load_with_progress<S: Sink>(
+    net: &dyn Fetch,
+    cc: &str,
+    country_name: &str,
+    https_only: bool,
+    progress: &mut Progress<S>,
+) -> Result<LoadedCandidates, (u8, String)> {
+    progress.load();
+    let mut notes = Vec::new();
+    let loaded = load_candidates(net, cc, country_name, https_only, &mut notes);
+    // The load is over whether it worked or not, so its notes get lines of their own and the error
+    // that may follow starts where the live line was.
+    progress.clear();
+    for note in &notes {
+        eprintln!("{note}");
+    }
+    loaded
 }
 
 /// SPEC step 3: Launchpad first, then `mirrors.ubuntu.com/<CC>.txt`. Returns the candidates, the
 /// name of the source that supplied them, and the run's mirror roots; every failed source is
 /// reported with its reason.
+///
+/// The lines this load has to tell the user are pushed onto `notes` instead of written here, because
+/// the caller owns a live progress line that has to be erased before the first of them lands
+/// (SPEC.md Output). A note is produced whether the load succeeds or not, so the caller prints them
+/// before it handles the result.
 ///
 /// Contract for the third element: every mirror in the returned `Vec<Mirror>` has its `(host, path)`
 /// in it. From Launchpad that set is every host and path the page names, in every country, collected
@@ -2145,6 +2175,7 @@ fn load_candidates(
     cc: &str,
     country_name: &str,
     https_only: bool,
+    notes: &mut Vec<String>,
 ) -> Result<LoadedCandidates, (u8, String)> {
     let keep =
         |m: &mirrors::Mirror| mirrors::validate_url(&m.url).is_ok() && (!https_only || m.https);
@@ -2156,7 +2187,7 @@ fn load_candidates(
                 // Every country's entry, not only this run's, and before `keep`: eligibility answers
                 // recognizability, never use. Both list sources pass the same validation here.
                 let (roots, rejected) = mirror_roots(all.iter().map(|m| m.url.as_str()));
-                report_rejected("Launchpad", &rejected);
+                notes.extend(rejected_note("Launchpad", &rejected));
                 let found: Vec<_> = all
                     .into_iter()
                     .filter(|m| m.country == country_name && keep(m))
@@ -2192,13 +2223,13 @@ fn load_candidates(
             // still does not narrow it — it picks what may be selected, never what may be recognized,
             // so a mirror written over `http` stays rewritable in a later run.
             let (roots, rejected) = mirror_roots(all.iter().map(|m| m.url.as_str()));
-            report_rejected("mirrors.ubuntu.com", &rejected);
+            notes.extend(rejected_note("mirrors.ubuntu.com", &rejected));
             let found: Vec<_> = all.into_iter().filter(keep).collect();
             if !found.is_empty() {
-                eprintln!(
+                notes.push(format!(
                     "warning: {}. Using {url} instead (its URLs come over plain HTTP, so they are unverified).",
                     failures.join("; ")
-                );
+                ));
                 return Ok((found, "mirrors.ubuntu.com (unverified)", roots));
             }
             failures.push(format!("{url} has no usable mirrors"));
@@ -2578,7 +2609,7 @@ mod tests {
             (LAUNCHPAD, Ok(LAUNCHPAD_OK)),
             ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
         ]);
-        let (c, src, _) = load_candidates(&net, "LT", "Lithuania", false).unwrap();
+        let (c, src, _) = load_candidates(&net, "LT", "Lithuania", false, &mut Vec::new()).unwrap();
         assert_eq!(src, "Launchpad");
         assert!(c.iter().all(|m| m.country == "Lithuania"));
         assert!(c.len() >= 4);
@@ -2590,7 +2621,7 @@ mod tests {
             (LAUNCHPAD, Err(503)),
             ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
         ]);
-        let (c, src, _) = load_candidates(&net, "LT", "Lithuania", false).unwrap();
+        let (c, src, _) = load_candidates(&net, "LT", "Lithuania", false, &mut Vec::new()).unwrap();
         assert_eq!(src, "mirrors.ubuntu.com (unverified)");
         assert_eq!(c.len(), 2); // the ftp:// line is dropped
         assert!(c.iter().any(|m| m.https));
@@ -2605,7 +2636,7 @@ mod tests {
                 Ok(b"http://ftp.is.example/ubuntu/\n"),
             ),
         ]);
-        let (c, src, _) = load_candidates(&net, "IS", "Iceland", false).unwrap();
+        let (c, src, _) = load_candidates(&net, "IS", "Iceland", false, &mut Vec::new()).unwrap();
         assert_eq!(src, "mirrors.ubuntu.com (unverified)");
         assert_eq!(c.len(), 1);
     }
@@ -2616,7 +2647,7 @@ mod tests {
             (LAUNCHPAD, Err(503)),
             ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
         ]);
-        let (c, _, _) = load_candidates(&net, "LT", "Lithuania", true).unwrap();
+        let (c, _, _) = load_candidates(&net, "LT", "Lithuania", true, &mut Vec::new()).unwrap();
         assert_eq!(c.len(), 1);
         assert!(c[0].https);
     }
@@ -2628,7 +2659,8 @@ mod tests {
             (LAUNCHPAD, Err(503)),
             ("http://mirrors.ubuntu.com/LT.txt", Ok(txt)),
         ]);
-        let (c, _, roots) = load_candidates(&net, "LT", "Lithuania", false).unwrap();
+        let (c, _, roots) =
+            load_candidates(&net, "LT", "Lithuania", false, &mut Vec::new()).unwrap();
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].url, "http://ok.example/ubuntu/");
         // The fallback list arrives over plain HTTP, so only its validated entries join the set: a
@@ -2691,7 +2723,8 @@ mod tests {
         // The same rule on the Launchpad side: its valid entries are still in the set, the invalid
         // one is in neither the set nor silence.
         let net = Canned(vec![(LAUNCHPAD, Ok(launchpad_one_bad()))]);
-        let (_, src, roots) = load_candidates(&net, "DE", "Germany", false).unwrap();
+        let (_, src, roots) =
+            load_candidates(&net, "DE", "Germany", false, &mut Vec::new()).unwrap();
         assert_eq!(src, "Launchpad");
         assert!(
             roots.iter().all(|r| r.host != "127.0.0.1"),
@@ -2709,11 +2742,117 @@ mod tests {
             (LAUNCHPAD, Err(503)),
             ("http://mirrors.ubuntu.com/LT.txt", Err(404)),
         ]);
-        let (code, msg) = load_candidates(&net, "LT", "Lithuania", false).unwrap_err();
+        let (code, msg) =
+            load_candidates(&net, "LT", "Lithuania", false, &mut Vec::new()).unwrap_err();
         assert_eq!(code, 1);
         assert!(msg.contains("Launchpad"), "{msg}");
         assert!(msg.contains("LT.txt"), "{msg}");
         assert!(msg.contains("--country"), "{msg}");
+    }
+
+    /// One ordered log of what a run showed and what it asked the network for, so a test can pin which
+    /// came first.
+    #[derive(Clone, Default)]
+    struct Trace(std::rc::Rc<std::cell::RefCell<Vec<String>>>);
+
+    impl Trace {
+        fn note(&self, what: impl Into<String>) {
+            self.0.borrow_mut().push(what.into());
+        }
+
+        fn lines(&self) -> Vec<String> {
+            self.0.borrow().clone()
+        }
+    }
+
+    /// The real sink's contract, recorded into the shared log.
+    struct TracingSink(Trace);
+
+    impl Sink for TracingSink {
+        fn rewrite(&mut self, line: &str) {
+            self.0.note(format!("show: {line}"));
+        }
+
+        fn clear(&mut self) {
+            self.0.note("clear");
+        }
+
+        fn settle(&mut self, line: &str) {
+            self.0.note(format!("settle: {line}"));
+        }
+    }
+
+    /// A `Canned` net that enters every request into the same log.
+    struct TracedNet {
+        canned: Canned,
+        trace: Trace,
+    }
+
+    impl Fetch for TracedNet {
+        fn get(
+            &self,
+            url: &str,
+            max_bytes: u64,
+            range: Option<(u64, u64)>,
+        ) -> Result<http::Fetched, http::HttpError> {
+            self.trace.note(format!("fetch: {url}"));
+            self.canned.get(url, max_bytes, range)
+        }
+    }
+
+    /// The phase goes up **before** the work it names. The list load is up to 20 s of silence — 10 s of
+    /// Launchpad, then 10 s of `mirrors.ubuntu.com` — so a line printed after it returns is the one
+    /// phase a person never sees happen, which is the complaint the progress line exists to answer
+    /// (SPEC.md Output).
+    #[test]
+    fn the_list_phase_is_shown_before_the_list_is_loaded() {
+        let trace = Trace::default();
+        let net = TracedNet {
+            canned: Canned(vec![
+                (LAUNCHPAD, Err(503)),
+                ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
+            ]),
+            trace: trace.clone(),
+        };
+        let mut progress = Progress::new(TracingSink(trace.clone()), true);
+        let (cands, src, _) =
+            load_with_progress(&net, "LT", "Lithuania", false, &mut progress).unwrap();
+        assert!(!cands.is_empty(), "{src}");
+        assert_eq!(
+            trace.lines(),
+            [
+                "show: loading the mirror list",
+                "fetch: https://launchpad.net/ubuntu/+archivemirrors",
+                "fetch: http://mirrors.ubuntu.com/LT.txt",
+                // The line is erased once the load is over, before the warning it produced prints.
+                "clear",
+            ]
+        );
+    }
+
+    /// The load's own lines are data now, not a side effect: the caller decides when they land, and a
+    /// test can check what the run would say.
+    #[test]
+    fn a_fallback_load_reports_its_reasons_as_notes() {
+        let net = Canned(vec![
+            (LAUNCHPAD, Err(503)),
+            ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
+        ]);
+        let mut notes = Vec::new();
+        let (cands, src, _) = load_candidates(&net, "LT", "Lithuania", false, &mut notes).unwrap();
+        assert_eq!(src, "mirrors.ubuntu.com (unverified)");
+        assert!(!cands.is_empty());
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(
+            notes[0].contains("cannot load the Launchpad mirror list"),
+            "{}",
+            notes[0]
+        );
+        assert!(
+            notes[0].contains("Using http://mirrors.ubuntu.com/LT.txt instead"),
+            "{}",
+            notes[0]
+        );
     }
 
     /// The rewrite-eligibility set is every host and path the Launchpad page names, in every country,
@@ -2721,7 +2860,8 @@ mod tests {
     #[test]
     fn the_host_list_names_every_country_not_only_the_run_s_country() {
         let net = Canned(vec![(LAUNCHPAD, Ok(LAUNCHPAD_OK))]);
-        let (cands, src, roots) = load_candidates(&net, "DE", "Germany", false).unwrap();
+        let (cands, src, roots) =
+            load_candidates(&net, "DE", "Germany", false, &mut Vec::new()).unwrap();
         assert_eq!(src, "Launchpad");
         assert!(cands.iter().all(|m| m.country == "Germany"));
         assert!(
@@ -2750,7 +2890,8 @@ mod tests {
     #[test]
     fn https_only_does_not_narrow_the_host_list() {
         let net = Canned(vec![(LAUNCHPAD, Ok(LAUNCHPAD_OK))]);
-        let (cands, _, roots) = load_candidates(&net, "DE", "Germany", true).unwrap();
+        let (cands, _, roots) =
+            load_candidates(&net, "DE", "Germany", true, &mut Vec::new()).unwrap();
         assert!(cands.iter().all(|m| m.https));
         // ftp.litnet.lt's only HTTP link in the fixture is `http`, so no candidate may carry it,
         // while its host must still be in the set.
@@ -2774,7 +2915,8 @@ mod tests {
             (LAUNCHPAD, Err(503)),
             ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
         ]);
-        let (cands, _, roots) = load_candidates(&net, "LT", "Lithuania", true).unwrap();
+        let (cands, _, roots) =
+            load_candidates(&net, "LT", "Lithuania", true, &mut Vec::new()).unwrap();
         assert_eq!(cands.len(), 1);
         assert!(cands.iter().all(|m| m.https));
         assert!(
@@ -2801,7 +2943,8 @@ mod tests {
             ),
         ];
         for (net, cc, name) in cases {
-            let (cands, src, roots) = load_candidates(&net, cc, name, false).unwrap();
+            let (cands, src, roots) =
+                load_candidates(&net, cc, name, false, &mut Vec::new()).unwrap();
             assert!(!cands.is_empty(), "{src}");
             for m in &cands {
                 let mine = sources::mirror_root(&m.url).expect("a validated candidate has a host");
@@ -2820,7 +2963,8 @@ mod tests {
                 (LAUNCHPAD, launchpad),
                 ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
             ]);
-            let (cands, src, roots) = load_candidates(&net, "LT", "Lithuania", false).unwrap();
+            let (cands, src, roots) =
+                load_candidates(&net, "LT", "Lithuania", false, &mut Vec::new()).unwrap();
             assert_eq!(src, "mirrors.ubuntu.com (unverified)");
             let mut expected: Vec<sources::MirrorRoot> = cands
                 .iter()
@@ -2845,7 +2989,8 @@ mod tests {
     #[test]
     fn a_mirror_a_run_wrote_stays_rewritable_under_a_country_change() {
         let net = Canned(vec![(LAUNCHPAD, Ok(LAUNCHPAD_OK))]);
-        let (_, src, roots) = load_candidates(&net, "DE", "Germany", false).unwrap();
+        let (_, src, roots) =
+            load_candidates(&net, "DE", "Germany", false, &mut Vec::new()).unwrap();
         assert_eq!(src, "Launchpad");
         assert!(
             roots
