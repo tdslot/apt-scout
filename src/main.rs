@@ -682,8 +682,18 @@ struct StderrSink<W: Write> {
     err: W,
 }
 
+impl StderrSink<io::Stderr> {
+    /// The only constructor a run has, so the progress line cannot be pointed at standard output,
+    /// where it would land in the report a pipe or a log captures (SPEC.md Output).
+    fn new() -> Self {
+        StderrSink { err: io::stderr() }
+    }
+}
+
+#[cfg(test)]
 impl<W: Write> StderrSink<W> {
-    fn new(err: W) -> Self {
+    /// A test's own buffer, so the sink's exact bytes are asserted without a terminal anywhere.
+    fn with_writer(err: W) -> Self {
         StderrSink { err }
     }
 }
@@ -1413,7 +1423,7 @@ fn run() -> Result<u8, (u8, String)> {
     // SPEC.md Output: progress is for a person watching the run work, so the sink is inert unless
     // standard error is a terminal. The clock starts here, before the list loads, so the summary
     // spans the four phases it names.
-    let mut progress = Progress::new(StderrSink::new(io::stderr()), io::stderr().is_terminal());
+    let mut progress = Progress::new(StderrSink::new(), io::stderr().is_terminal());
     let (mut cands, list_source, list_roots) =
         load_candidates(&net, &country, country_name, args.https_only)?;
     progress.load();
@@ -4580,7 +4590,7 @@ mod tests {
     /// leaves the tail of a longer one behind and the summary stops being transient.
     #[test]
     fn the_stderr_sink_rewrites_in_place_and_erases_what_it_leaves() {
-        let mut sink = StderrSink::new(Vec::new());
+        let mut sink = StderrSink::with_writer(Vec::new());
         sink.rewrite("ranking");
         sink.clear();
         sink.settle("done — 1 usable, 0 rejected in 0.2 s");
