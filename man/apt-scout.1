@@ -77,6 +77,10 @@ shows a warning.
 .IP 10. 4
 The uid decides what happens next; see \fBMODES\fR below.
 .PP
+\fB\-\-restore\fR is not that pipeline: it reads the newest backup and puts
+it back, so steps 1 to 9 above do not run and there is no mirror, table or
+recommendation to print. \fBMODES\fR states what it does by uid.
+.PP
 A run narrowed to its own country that finds nothing usable there adds the
 mirrors the same list names for every other country, probes them in one extra
 pass, ranks them together with its own results and says why in one \fBnote:\fR
@@ -151,6 +155,19 @@ and nothing else: every validation still runs before the first byte, so no
 answer to the prompt could have bypassed it anyway. It has no effect in a
 non-root run or with \fB\-\-list\fR.
 .TP
+.B \-r, \-\-restore
+Put the newest backup back instead of applying a mirror. Root is needed for
+the read of the backup as well as for the write. It replaces the source of
+the rewrite, so it is never combined with a flag of the mirror pipeline:
+\fB\-\-country\fR, \fB\-\-any\fR, \fB\-\-top\fR,
+\fB\-\-https\-only\fR, \fB\-\-list\fR and \fB\-\-no\-geo\fR with it
+are usage errors (exit 2) that name the offending flag, refused before the
+backup is opened. \fB\-\-yes\fR skips the one confirmation, and
+\fB\-\-verbose\fR and \fB\-\-no\-color\fR are display only. A finished
+restore prints its own block under a \fBRestore\fR heading rather than the
+mirror report: the backup it put back, each file it wrote, each file it
+removed, and the backup it created for what it replaced.
+.TP
 .B \-\-no\-color
 Print no colour whatever the terminal is. It is the one implemented flag
 without a short form. It is display only: the plain report carries the same
@@ -159,13 +176,13 @@ words, the same columns and the same headings, minus the escape sequences.
 .B \-h, \-\-help
 Print the help text and exit 0 before any run starts.
 .PP
-\fB\-r\fR and \fB\-R\fR are reserved for \fB\-\-restore\fR and
-\fB\-\-refresh\fR and are not accepted yet, and neither are \fB\-\-restore\fR,
-\fB\-\-refresh\fR and \fB\-\-tui\fR themselves. A run given any of them fails
-as an unknown option with exit 2; see \fBLIMITATIONS\fR.
+\fB\-R\fR is reserved for \fB\-\-refresh\fR and is not accepted yet, and
+neither are \fB\-\-refresh\fR and \fB\-\-tui\fR themselves. A run given
+any of them fails as an unknown option with exit 2; see \fBLIMITATIONS\fR.
 .SH MODES
-Discovery, ranking and the recommendation are the same in every mode; the uid,
-not a flag, decides whether the run writes.
+Discovery, ranking and the recommendation are the same in every mode except
+\fB\-\-restore\fR, which reads a backup instead; the uid, not a flag,
+decides whether the run writes.
 .TP
 .B apt\-scout
 As a non-root user: no write. The run prints the report and then one line,
@@ -182,6 +199,18 @@ are backed up first, then each target is replaced atomically.
 .B apt\-scout \-\-list
 Any uid: no write, exit 0. The ranked table and the planned change are printed;
 nothing under \fI/etc/apt\fR is opened for writing and no backup is created.
+.TP
+.B apt\-scout \-\-restore
+As a non-root user: no write. The run prints only the line
+\fBsudo apt\-scout \-\-restore\fR and exits 3 before it opens the backup,
+because the manifest is root's to read.
+.TP
+.B sudo apt\-scout \-\-restore
+As root: restore. It re-derives the newest backup and its plan, prints the
+backup it reads, the files it writes and the backup it creates, then asks
+once; \fB\-\-yes\fR skips that prompt. It writes through the same
+validated path an apply uses and prints the backup it put back, what it
+wrote and removed, and where it copied what it replaced.
 .PP
 A candidate set that is not narrowed to one country is capped at 30 mirrors,
 chosen by the link speed Launchpad declares: the page names about 560 mirrors,
@@ -312,11 +341,18 @@ green, and the numeric column headings are dim. Nothing else is styled, and the
 A write prints a second block after the confirmation: \fBbackup: <path>\fR, one
 \fBwrote <path>\fR per file, and a closing line naming the files and suggesting
 \fBapt update\fR.
+.PP
+A restore has no ranked table and no recommendation, because it reads a backup
+instead of choosing a mirror. It prints one block instead: the backup it put
+back, one line per file it wrote or removed, and the backup it created.
+\fB\-\-verbose\fR adds each file's SHA-256, mode and owner, the facts the
+writer already holds for every target.
 .SH EXIT STATUS
 .TP
 .B 0
-Success, including a \fB\-\-list\fR run that would write, and a root run whose
-sources already point at the chosen mirror.
+Success, including a \fB\-\-list\fR run that would write, a restore the
+confirmation cancelled (nothing was written), and a root run whose sources
+already point at the chosen mirror.
 .TP
 .B 1
 A refusal or a failure after the run started: no usable or no fresh mirror; no
@@ -325,10 +361,10 @@ refused by validation. A root run that found nothing to write exits 1.
 .TP
 .B 2
 Usage error, reported before any network request: an unknown option, including
-\fB\-r\fR, \fB\-R\fR, \fB\-\-tui\fR, \fB\-\-restore\fR and \fB\-\-refresh\fR;
-\fB\-\-no\-geo\fR without \fB\-\-country\fR or \fB\-\-any\fR; an unknown
-country code; a value the flag cannot use; or a country that could not be
-detected and was not given.
+\fB\-R\fR, \fB\-\-tui\fR and \fB\-\-refresh\fR; \fB\-\-restore\fR combined
+with a flag of the mirror pipeline; \fB\-\-no\-geo\fR without
+\fB\-\-country\fR or \fB\-\-any\fR; an unknown country code; a value the flag
+cannot use; or a country that could not be detected and was not given.
 .TP
 .B 3
 The run would have written and this uid may not: every non-root run other than
@@ -419,15 +455,16 @@ sudo apt\-scout \-y         # root: write without the prompt
 sudo apt\-scout \-c DE      # switch to a mirror in Germany instead
 apt\-scout \-a \-n          # every country, no geolocation lookups
 sudo apt\-scout \-v \-t 10  # the proof behind the report, 10 rows
+sudo apt\-scout \-r      # put the newest backup back
 .RE
 .fi
 .SH LIMITATIONS
-\fB\-\-restore\fR, \fB\-\-tui\fR and \fB\-\-refresh\fR are not implemented yet:
-a run given one of them, or given the reserved \fB\-r\fR or \fB\-R\fR, fails as
-an unknown option with exit 2. This page documents only what ships, which is
-why they are absent from \fBOPTIONS\fR and from \fBMODES\fR. Localized pages
-are planned for the locales that ship a message catalog; this English page is
-the source of truth until then.
+\fB\-\-tui\fR and \fB\-\-refresh\fR are not implemented yet: a run given one
+of them, or given the reserved \fB\-R\fR, fails as an unknown option with exit
+2. This page documents only what ships, which is why they are absent from
+\fBOPTIONS\fR and from \fBMODES\fR. Localized pages are planned for the locales
+that ship a message catalog; this English page is the source of truth until
+then.
 .SH SEE ALSO
 .BR apt\-get (8),
 .BR sources.list (5),
