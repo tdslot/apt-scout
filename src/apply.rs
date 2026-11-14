@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use crate::digest::sha256;
 use crate::fresh;
 use crate::manifest::{self, Action, BackupId, ManifestEntry};
-use crate::plan::{FileState, Plan, PlanError, Target};
+use crate::plan::{Authority, Effect, FileState, Plan, PlanError, Target};
 use crate::verify::VerifiedDate;
 
 /// The apt configuration root every planned path is relative to.
@@ -96,6 +96,11 @@ pub enum ApplyError {
     Write { path: PathBuf, reason: String },
     /// The run's timestamp cannot name a backup directory.
     Time { secs: u64 },
+    /// The newest backup cannot be trusted as it is, so the restore reads none of it.
+    ///
+    /// One variant for the whole reader: the backup root, the directory, the `MANIFEST`, the copies
+    /// and the records all fail the same way, and the message names the path and the fact.
+    Restore { path: PathBuf, reason: String },
 }
 
 impl ApplyError {
@@ -114,11 +119,12 @@ impl ApplyError {
             | Self::Exists { .. }
             | Self::Backup { .. }
             | Self::Write { .. }
+            | Self::Restore { .. }
             | Self::Time { .. } => 1,
         }
     }
 
-    /// Add what this run had already changed, for a failure that comes after the first creation.
+    /// Add what this run had already changed, for a failure that comes after the first change.
     ///
     /// The write phase can reach three groups of variants. `Write` and `Exists` are its own, and
     /// they never claim a clean system: the creations run first, so a failed replacement can
@@ -126,17 +132,16 @@ impl ApplyError {
     /// `Target`, `Read` or `TooLarge`, whose own messages say nothing was written *to `/etc/apt`*;
     /// that is true while no target has landed, and false afterwards, so past that point the
     /// finding moves into a `Write` refusal. Everything else is unreachable here.
-    fn after_writing(self, written: &[Target]) -> Self {
-        let landed = if written.is_empty() {
-            "No file under /etc/apt had been written before this failure".to_string()
+    fn after_writing(self, touched: &[Touched]) -> Self {
+        let landed = if touched.is_empty() {
+            "No file under /etc/apt had been changed before this failure".to_string()
         } else {
-            let names: Vec<String> = written
+            let names: Vec<String> = touched
                 .iter()
-                .map(|t| t.relative().display().to_string())
+                .map(|t| t.target.relative().display().to_string())
                 .collect();
             format!(
-                "This run had already written {} before this failure, and what it wrote stays in \
-                 place",
+                "This run had already changed {} before this failure, and those changes stand",
                 names.join(", ")
             )
         };
@@ -149,7 +154,7 @@ impl ApplyError {
                 path,
                 reason: format!("{reason}. {landed}"),
             },
-            _ if written.is_empty() => self,
+            _ if touched.is_empty() => self,
             Self::Changed { path, reason } => Self::Write {
                 path,
                 reason: format!("it changed while this run was writing: {reason}. {landed}"),
@@ -281,24 +286,46 @@ impl fmt::Display for ApplyError {
                 "cannot name a backup from {secs} seconds after the epoch: that is past year 9999. \
                  Nothing was written. Check the system clock and re-run"
             ),
+            Self::Restore { path, reason } => write!(
+                f,
+                "refusing to restore {}: {reason}. Nothing was written to /etc/apt. apt-scout \
+                 restores nothing rather than guessing, because the manifest is the only source of \
+                 truth for a restore: check that backup directory and re-run, or put the file back \
+                 by hand from another copy",
+                path.display()
+            ),
         }
     }
 }
 
-/// What one successful run did: the backup it made and the files it wrote.
+/// What one successful run did: the backup it made and the files it changed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Outcome {
-    /// The backup every replaced file was copied into, before the first write.
+    /// The backup every file this run replaced or removed was copied into, before the first
+    /// write. A created file has nothing to copy, so it is not in there.
     pub backup_id: BackupId,
-    /// The targets this run wrote, in the order it wrote them.
-    pub written: Vec<Target>,
+    /// Every target this run changed, in the order it changed them. A restore undoes a creation by
+    /// removing the file, so the name says what the run did and not just what it wrote.
+    pub touched: Vec<Touched>,
+}
+
+/// One target a run changed, and which of the three effects it applied to it.
+///
+/// The effect travels beside the target so a caller can say `wrote` for a creation or a replacement
+/// and `removed` for a removal, instead of describing an unlink as a write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Touched {
+    pub target: Target,
+    pub effect: Effect,
 }
 
 /// Write the plan, as root, to the real `/etc/apt` and `/var/backups/apt-scout`.
 ///
-/// Refuses before its first byte on a non-root run, on a plan that does not validate, on a run
-/// whose verified baseline is missing or does not cover the selected mirror, on a file it cannot
-/// describe in a restorable manifest, and on any difference between the plan and the disk.
+/// Refuses before its first byte on a non-root run, on a plan that does not validate, on a mirror
+/// plan whose verified baseline is missing or does not cover the selected mirror, on a target it
+/// cannot describe in a restorable manifest, and on any difference between the plan and the disk.
+/// One entry point for both forms: what authorizes the write is the plan's own `Authority`, so a
+/// restore plan needs no baseline and gets no second code path.
 pub fn apply(
     plan: &Plan,
     baseline: Option<&VerifiedDate>,
@@ -343,10 +370,10 @@ fn run(
     #[cfg(apt_scout_write_harness)]
     crate::harness::pause_after_validation();
     sweep_targets(&captured, owner_uid)?;
-    let written = write_targets(&captured, owner_uid, owner_gid)?;
+    let touched = write_targets(&captured, owner_uid, owner_gid)?;
     Ok(Outcome {
         backup_id: id,
-        written,
+        touched,
     })
 }
 
@@ -357,13 +384,20 @@ fn run(
 /// through the same predicate the pipeline uses to call a mirror stale. A mirror *ahead* of the
 /// baseline is accepted: clock skew on a mirror cannot be told apart from a fresher mirror.
 fn check_freshness(plan: &Plan, baseline: Option<&VerifiedDate>) -> Result<(), ApplyError> {
+    // Only a mirror plan is held against a baseline. A restore plan has no mirror, so it has no
+    // freshness dimension: what holds its bytes is the manifest re-derivation in `restore::build`,
+    // under the backup the plan names.
+    let (uri, proof) = match plan.authority() {
+        Authority::Mirror { uri, proof } => (uri, *proof),
+        Authority::Restore { .. } => return Ok(()),
+    };
     let Some(baseline) = baseline else {
         return Err(ApplyError::NoBaseline);
     };
-    let lag_secs = fresh::lag(baseline.seconds(), plan.proof().seconds());
+    let lag_secs = fresh::lag(baseline.seconds(), proof.seconds());
     if fresh::is_stale(lag_secs) {
         return Err(ApplyError::Stale {
-            uri: plan.selected_uri().to_string(),
+            uri: uri.clone(),
             lag_secs,
         });
     }
@@ -407,18 +441,18 @@ struct Captured {
     /// `None` means the plan creates this file.
     original: Option<FileState>,
     new_bytes: Vec<u8>,
-    create_new: bool,
+    effect: Effect,
 }
 
 /// What the disk currently holds at one path.
-enum Entry {
+pub(crate) enum Entry {
     Missing,
     Regular(FileState),
     NotRegular(String),
 }
 
 /// Resolve one planned target against the apt root it is relative to.
-fn resolve(apt_root: &Path, target: &Target) -> PathBuf {
+pub(crate) fn resolve(apt_root: &Path, target: &Target) -> PathBuf {
     target.from_under(apt_root)
 }
 
@@ -455,7 +489,7 @@ fn capture(apt_root: &Path, plan: &Plan) -> Result<Vec<Captured>, ApplyError> {
             path,
             original: w.original.clone(),
             new_bytes: w.new_bytes.clone(),
-            create_new: w.create_new,
+            effect: w.effect,
         });
     }
     Ok(captured)
@@ -465,7 +499,7 @@ fn capture(apt_root: &Path, plan: &Plan) -> Result<Vec<Captured>, ApplyError> {
 ///
 /// `lstat` of a path does not follow its last component, so a symlinked `sources.list.d` would
 /// otherwise be resolved by the kernel when the target is opened or renamed into.
-fn check_parent(path: &Path) -> Result<(), ApplyError> {
+pub(crate) fn check_parent(path: &Path) -> Result<(), ApplyError> {
     let parent = parent_dir(path)?;
     match fs::symlink_metadata(parent) {
         Ok(meta) if meta.file_type().is_symlink() => Err(ApplyError::Target {
@@ -791,41 +825,69 @@ fn sweep_temp(dir: &Path, owner_uid: u32) -> Result<(), ApplyError> {
     Ok(())
 }
 
-/// Write every captured target: the creations first, then the replacements.
+/// Write every captured target: the creations first, the replacements next, the removals last.
 ///
-/// The order is the security property: a creation that finds the path taken aborts the whole run
-/// while every other target is still untouched. Every failure here is reported through
-/// `after_writing`, because from the first landed creation on, "nothing was written" is false.
+/// The order is the security property. A creation that finds the path taken aborts the whole run
+/// while every other target is still untouched, so creations run first. Removals run last because a
+/// removal is the only operation that destroys a path: every replaceable byte has landed by then,
+/// so a later failure can never leave a file destroyed while the content that was to replace it did
+/// not arrive. Every failure here is reported through `after_writing`, because from the first
+/// landed creation on, "nothing was written" is false.
 ///
-/// Each target's directory is flushed here and not inside `create_one`/`replace_one`, because the
-/// flush comes *after* the file has landed: the push onto `written` is between the two, so a flush
-/// that fails is reported as a failure after a landed write, and never as a clean system.
+/// Each target's directory is flushed here and not inside `create_one`/`replace_one`/`remove_one`,
+/// because the flush comes *after* the change has landed: the push onto `touched` is between the
+/// two, so a flush that fails is reported as a failure after a landed change, and never as a clean
+/// system.
 fn write_targets(
     captured: &[Captured],
     owner_uid: u32,
     owner_gid: u32,
-) -> Result<Vec<Target>, ApplyError> {
-    let mut written = Vec::with_capacity(captured.len());
-    for c in captured.iter().filter(|c| c.create_new) {
-        create_one(c, owner_uid, owner_gid).map_err(|e| e.after_writing(&written))?;
-        written.push(c.target.clone());
-        sync_written_dir(c, &written)?;
+) -> Result<Vec<Touched>, ApplyError> {
+    let mut touched = Vec::with_capacity(captured.len());
+    for c in captured.iter().filter(|c| c.effect == Effect::Create) {
+        create_one(c, owner_uid, owner_gid).map_err(|e| e.after_writing(&touched))?;
+        touched.push(landed(c));
+        sync_touched_dir(c, &touched)?;
     }
-    for c in captured.iter().filter(|c| !c.create_new) {
-        replace_one(c).map_err(|e| e.after_writing(&written))?;
-        written.push(c.target.clone());
-        sync_written_dir(c, &written)?;
+    for c in captured.iter().filter(|c| c.effect == Effect::Replace) {
+        replace_one(c).map_err(|e| e.after_writing(&touched))?;
+        touched.push(landed(c));
+        sync_touched_dir(c, &touched)?;
     }
-    Ok(written)
+    for c in captured.iter().filter(|c| c.effect == Effect::Remove) {
+        remove_one(c).map_err(|e| e.after_writing(&touched))?;
+        touched.push(landed(c));
+        sync_touched_dir(c, &touched)?;
+    }
+    Ok(touched)
+}
+
+/// One landed target, as the record of what this run changed.
+fn landed(c: &Captured) -> Touched {
+    Touched {
+        target: c.target.clone(),
+        effect: c.effect,
+    }
+}
+
+/// Remove one file, after proving it is still the file the plan was built from.
+///
+/// The re-check is the same last check `replace_one` runs before its rename, and it is not
+/// decoration: `unlink` by path cannot compare dev and ino itself, so the only way to refuse a swap
+/// between validation and the unlink is to look immediately before it. The gap that leaves is the
+/// same one `rename` already accepts, and it needs write access to a root-owned directory.
+fn remove_one(c: &Captured) -> Result<(), ApplyError> {
+    check_one(c)?;
+    fs::remove_file(&c.path).map_err(|e| write_failed(&c.path, e))
 }
 
 /// Flush the directory a landed target was written into, so its new name survives a crash.
 ///
-/// Called only after the target is on `written`: the bytes are on disk by the time this runs, so
-/// every failure here is a failure *after* a write and carries what the run had already changed.
-fn sync_written_dir(c: &Captured, written: &[Target]) -> Result<(), ApplyError> {
-    let dir = parent_dir(&c.path).map_err(|e| e.after_writing(written))?;
-    sync_dir(dir, write_failed).map_err(|e| e.after_writing(written))
+/// Called only after the target is on `touched`: the bytes are on disk by the time this runs, so
+/// every failure here is a failure *after* a change and carries what the run had already touched.
+fn sync_touched_dir(c: &Captured, touched: &[Touched]) -> Result<(), ApplyError> {
+    let dir = parent_dir(&c.path).map_err(|e| e.after_writing(touched))?;
+    sync_dir(dir, write_failed).map_err(|e| e.after_writing(touched))
 }
 
 /// Create a planned file with an exclusive create, and never overwrite what is there.
@@ -960,11 +1022,37 @@ fn fill_replacement(file: &File, original: &FileState, c: &Captured) -> Result<(
     file.sync_all().map_err(|e| write_failed(&c.path, e))
 }
 
+/// Run the one write path with fixture roots and the calling user's identity. Test-only.
+///
+/// Production has exactly one caller of `run`, `apply`, which proves the process is root first;
+/// a unit test is not root and never will be, so the restore round trip reaches the same writer
+/// through here rather than through a second entry point in shipped code.
+#[cfg(test)]
+pub(crate) fn run_for_test(
+    apt_root: &Path,
+    backup_root: &Path,
+    plan: &Plan,
+    baseline: Option<&VerifiedDate>,
+    now_secs: u64,
+    owner_uid: u32,
+    owner_gid: u32,
+) -> Result<Outcome, ApplyError> {
+    run(
+        apt_root,
+        backup_root,
+        plan,
+        baseline,
+        now_secs,
+        owner_uid,
+        owner_gid,
+    )
+}
+
 /// Inspect one path without following a symlink and without reading it twice.
 ///
 /// The state comes from the open handle, not from the `lstat`, so a swap between the
 /// two cannot smuggle a different file into the write.
-fn read_state(path: &Path) -> Result<Entry, ApplyError> {
+pub(crate) fn read_state(path: &Path) -> Result<Entry, ApplyError> {
     let link = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Entry::Missing),
@@ -1183,7 +1271,7 @@ mod tests {
             new_bytes,
             digest,
             original,
-            create_new: false,
+            effect: Effect::Replace,
         }
     }
 
@@ -1196,8 +1284,26 @@ mod tests {
             new_bytes,
             digest,
             original: None,
-            create_new: true,
+            effect: Effect::Create,
         }
+    }
+
+    /// A removal: the file a `create` record describes, on disk and due to go.
+    fn remove(target: &str, original: Option<FileState>) -> PlannedWrite {
+        PlannedWrite {
+            target: Target::parse(target).expect("target"),
+            new_bytes: Vec::new(),
+            digest: sha256(&[]),
+            original,
+            effect: Effect::Remove,
+        }
+    }
+
+    /// A plan re-derived from a backup: authorized by that backup, not by a mirror.
+    fn restore_plan(writes: Vec<PlannedWrite>) -> Plan {
+        let id = BackupId::from_secs(NOW).expect("backup id");
+        let backup = crate::restore::validated_backup_for_test(id);
+        Plan::for_restore(&backup, writes).expect("a restore plan")
     }
 
     fn fixture(root: &Path, name: &str, bytes: &[u8], mode: u32) -> PathBuf {
@@ -1624,7 +1730,13 @@ mod tests {
 
         let outcome = run(&apt, &backup, &planned, Some(&baseline()), NOW, uid, gid)
             .expect("the replacement succeeds");
-        assert_eq!(outcome.written, vec![Target::parse(LIST).expect("target")]);
+        assert_eq!(
+            outcome.touched,
+            vec![Touched {
+                target: Target::parse(LIST).expect("target"),
+                effect: Effect::Replace,
+            }]
+        );
         assert_eq!(outcome.backup_id.as_str(), ID);
 
         let after = state(&target);
@@ -1656,8 +1768,11 @@ mod tests {
         let meta = fs::symlink_metadata(&created).expect("meta");
         assert_eq!(meta.mode() & MODE_MASK, FILE_MODE);
         assert_eq!(
-            outcome.written,
-            vec![Target::parse(SECURITY).expect("target")]
+            outcome.touched,
+            vec![Touched {
+                target: Target::parse(SECURITY).expect("target"),
+                effect: Effect::Create,
+            }]
         );
 
         // The record describes what this run created. A `<id>` directory can carry a gid the file
@@ -1861,14 +1976,14 @@ mod tests {
                 path: PathBuf::from(APT_DIR).join(LIST),
                 original: Some(root_owned),
                 new_bytes: new_bytes.clone(),
-                create_new: false,
+                effect: Effect::Replace,
             },
             Captured {
                 target: Target::parse(SECURITY).expect("target"),
                 path: PathBuf::from(APT_DIR).join(SECURITY),
                 original: None,
                 new_bytes: new_bytes.clone(),
-                create_new: true,
+                effect: Effect::Create,
             },
         ];
         let id = BackupId::from_secs(NOW).expect("backup id");
@@ -1909,7 +2024,7 @@ mod tests {
                     ..s.clone()
                 }),
                 new_bytes: c.new_bytes.clone(),
-                create_new: c.create_new,
+                effect: c.effect,
             })
             .collect();
         assert!(matches!(
@@ -1948,7 +2063,13 @@ mod tests {
             gid,
         )
         .expect("the sweep never blocks a write");
-        assert_eq!(outcome.written, vec![Target::parse(LIST).expect("target")]);
+        assert_eq!(
+            outcome.touched,
+            vec![Touched {
+                target: Target::parse(LIST).expect("target"),
+                effect: Effect::Replace,
+            }]
+        );
         assert!(!leftover.exists(), "the leftover is swept");
         assert!(symlink_name.exists(), "a symlink is never swept");
         assert!(dir_name.exists(), "a directory is never swept");
@@ -2078,7 +2199,7 @@ mod tests {
             let text = err.to_string();
             assert!(text.contains(SECURITY), "{text}");
             assert!(
-                text.contains("already written sources.list.d/system-security.sources"),
+                text.contains("already changed sources.list.d/system-security.sources"),
                 "{text}"
             );
             assert!(!text.contains("Nothing was written"), "{text}");
@@ -2214,10 +2335,10 @@ mod tests {
         assert!(text.contains("cannot write"), "{text}");
         assert!(text.contains(&apt.display().to_string()), "{text}");
         assert!(text.contains("injected directory sync failure"), "{text}");
-        assert!(text.contains("already written sources.list"), "{text}");
+        assert!(text.contains("already changed sources.list"), "{text}");
         // The clean-system sentence this defect was about may not appear at all.
         assert!(
-            !text.contains("had been written before this failure"),
+            !text.contains("had been changed before this failure"),
             "{text}"
         );
         assert!(!text.contains("Nothing was written"), "{text}");
@@ -2335,6 +2456,173 @@ mod tests {
                 .to_string()
                 .contains("Nothing was written to /etc/apt"),
             "{backup}"
+        );
+    }
+
+    /// The security source a mirror run creates, as `create()` plans it.
+    const CREATED: &[u8] = b"Types: deb\nURIs: https://m.example/ubuntu\nSuites: noble-security\n";
+
+    /// Criterion 23: a restore replaces before it removes, whatever order its plan lists.
+    #[test]
+    fn a_restore_replaces_before_it_removes() {
+        let root = TempRoot::new("restore-order");
+        let apt = root.apt();
+        let backup = root.path().join("backup");
+        let (uid, gid) = root.owner();
+        let list = fixture(&apt, LIST, OLD, 0o644);
+        let security = fixture(&apt, SECURITY, CREATED, FILE_MODE);
+        // The plan lists the removal first, so only the writer's phase order can produce
+        // replace-then-remove.
+        let planned = restore_plan(vec![
+            remove(SECURITY, Some(state(&security))),
+            replace(LIST, Some(state(&list))),
+        ]);
+        assert_eq!(planned.writes()[0].effect, Effect::Remove);
+
+        let outcome =
+            run(&apt, &backup, &planned, None, NOW, uid, gid).expect("the restore writes");
+        let touched: Vec<String> = outcome
+            .touched
+            .iter()
+            .map(|t| {
+                let path = t.target.relative().display().to_string();
+                match t.effect {
+                    Effect::Remove => format!("removed {path}"),
+                    Effect::Create | Effect::Replace => format!("wrote {path}"),
+                }
+            })
+            .collect();
+        assert_eq!(
+            touched,
+            [format!("wrote {LIST}"), format!("removed {SECURITY}")],
+            "every replaceable byte lands before the only destroying operation"
+        );
+        assert_eq!(
+            fs::read(&list).expect("bytes"),
+            planned.writes()[1].new_bytes
+        );
+        assert!(!security.exists(), "the removal landed");
+
+        // A restore is itself a write: it backed up what it replaced under its own id, and its
+        // manifest describes that content, so the restore is undoable by the same rules. The
+        // manifest is not parsed here because a non-root fixture cannot hold the root ownership
+        // `manifest::parse` requires; the digests it carries are what this asserts.
+        let path = backup.join(BackupId::from_secs(NOW).expect("id").as_str());
+        let text = fs::read_to_string(path.join(MANIFEST)).expect("the restore's own manifest");
+        assert!(text.contains(&hex(&sha256(CREATED))), "{text}");
+        assert!(text.contains(&hex(&sha256(OLD))), "{text}");
+        assert_eq!(
+            fs::read(path.join(SECURITY)).expect("the copy of the removed file"),
+            CREATED
+        );
+    }
+
+    /// Criterion 24: a removal is refused when the file changed between validation and the unlink,
+    /// which is the S6 rule this phase must not weaken by unlink's hindsight.
+    #[test]
+    fn a_removal_is_refused_when_the_disk_changed_after_validation() {
+        let root = TempRoot::new("restore-swap");
+        let apt = root.apt();
+        let (uid, gid) = root.owner();
+        let security = fixture(&apt, SECURITY, CREATED, FILE_MODE);
+        let planned = restore_plan(vec![remove(SECURITY, Some(state(&security)))]);
+        let captured = capture(&apt, &planned).expect("capture binds the plan to the disk");
+        validate_targets(&captured).expect("the disk is the plan's disk");
+
+        // The content is rewritten in place after validation: same inode, other bytes.
+        let swapped = b"Types: deb\nURIs: http://elsewhere.example/ubuntu\n";
+        fs::write(&security, swapped).expect("swap the content in place");
+
+        let err = write_targets(&captured, uid, gid).expect_err("the removal is refused");
+        println!("removal refused: {err}");
+        assert!(matches!(err, ApplyError::Changed { .. }), "{err}");
+        let text = err.to_string();
+        assert!(text.contains("the bytes changed"), "{text}");
+        // Refused, not unlinked: the file is still there, with what was written to it.
+        assert_eq!(fs::read(&security).expect("bytes"), swapped);
+    }
+
+    /// Criterion 25: a removal leaves no temp file behind, and its directory is flushed after it
+    /// lands rather than before it.
+    #[test]
+    fn a_removal_leaves_no_temp_file_and_flushes_the_directory() {
+        // (a) the happy path: the unlink leaves nothing of ours in either directory.
+        let root = TempRoot::new("restore-remove");
+        let apt = root.apt();
+        let (uid, gid) = root.owner();
+        let security = fixture(&apt, SECURITY, CREATED, FILE_MODE);
+        let planned = restore_plan(vec![remove(SECURITY, Some(state(&security)))]);
+        let captured = capture(&apt, &planned).expect("capture binds the plan to the disk");
+        let touched = write_targets(&captured, uid, gid).expect("the removal lands");
+        assert_eq!(
+            touched,
+            [Touched {
+                target: Target::parse(SECURITY).expect("target"),
+                effect: Effect::Remove,
+            }]
+        );
+        assert!(!security.exists());
+        for dir in [apt.clone(), apt.join("sources.list.d")] {
+            let left = entries(&dir);
+            assert!(
+                !left.iter().any(|n| n.starts_with(TEMP_PREFIX)),
+                "a temp file survived: {left:?}"
+            );
+        }
+
+        // (b) the flush that follows: armed immediately before the removal, it is reported as a
+        // failure *after* a landed write and never as a clean system.
+        let root = TempRoot::new("restore-flush");
+        let apt = root.apt();
+        let (uid, gid) = root.owner();
+        let security = fixture(&apt, SECURITY, CREATED, FILE_MODE);
+        let planned = restore_plan(vec![remove(SECURITY, Some(state(&security)))]);
+        let captured = capture(&apt, &planned).expect("capture binds the plan to the disk");
+        fail_next_sync_dir();
+        let err = write_targets(&captured, uid, gid).expect_err("the flush fails");
+        println!("removal flush failure: {err}");
+        assert!(matches!(err, ApplyError::Write { .. }), "{err}");
+        let text = err.to_string();
+        assert!(text.contains("injected directory sync failure"), "{text}");
+        assert!(
+            text.contains("already changed sources.list.d/system-security.sources"),
+            "{text}"
+        );
+        assert!(!text.contains("Nothing was written"), "{text}");
+        assert!(!security.exists(), "the removal landed before the flush");
+    }
+
+    /// The authority split, without weakening D25: a mirror plan still carries its proof and is
+    /// still held against a verified baseline, while a restore plan is authorized by its backup.
+    #[test]
+    fn a_mirror_plan_still_needs_its_baseline_and_a_restore_plan_does_not() {
+        let root = TempRoot::new("authority");
+        let apt = root.apt();
+        let backup = root.path().join("backup");
+        let (uid, gid) = root.owner();
+        let list = fixture(&apt, LIST, OLD, 0o644);
+
+        // A mirror plan asked to write without a baseline is refused before anything is read.
+        let mirror = plan(vec![replace(LIST, Some(state(&list)))]);
+        let err = run(&apt, &backup, &mirror, None, NOW, uid, gid).expect_err("no baseline");
+        assert!(matches!(err, ApplyError::NoBaseline), "{err}");
+        // A mirror staler than the baseline is still refused, through the same predicate.
+        let late = verified(LATE);
+        let err = run(&apt, &backup, &mirror, Some(&late), NOW, uid, gid).expect_err("stale");
+        assert!(matches!(err, ApplyError::Stale { .. }), "{err}");
+        assert!(
+            !backup.exists(),
+            "nothing was backed up and nothing was written"
+        );
+
+        // The same bytes through a restore plan need no baseline at all.
+        let restore = restore_plan(vec![replace(LIST, Some(state(&list)))]);
+        let outcome = run(&apt, &backup, &restore, None, NOW, uid, gid)
+            .expect("a restore is authorized by its backup, not by a mirror");
+        assert_eq!(outcome.touched.len(), 1);
+        assert_eq!(
+            fs::read(&list).expect("bytes"),
+            restore.writes()[0].new_bytes
         );
     }
 }

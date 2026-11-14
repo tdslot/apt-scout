@@ -12,6 +12,7 @@ mod manifest;
 mod mirrors;
 mod plan;
 mod probe;
+mod restore;
 pub mod sources;
 mod verify;
 
@@ -349,7 +350,11 @@ fn build_plan(
                 digest: digest::sha256(&new_bytes),
                 new_bytes,
                 original,
-                create_new: planned.create_new,
+                effect: if planned.create_new {
+                    plan::Effect::Create
+                } else {
+                    plan::Effect::Replace
+                },
             });
         }
     }
@@ -1729,7 +1734,7 @@ fn plan_changes(
     let mut out = Vec::new();
     for write in plan.writes() {
         let relative = write.target.relative().display().to_string();
-        if write.create_new {
+        if write.effect == plan::Effect::Create {
             out.push(format!("  {relative}  (new file, mode 0600)"));
             for line in String::from_utf8_lossy(&write.new_bytes).lines() {
                 out.push(ink.green(&format!("    + {line}")));
@@ -1744,7 +1749,13 @@ fn plan_changes(
                     if *rewritable {
                         out.push(format!("  {relative}:{}", entry.line));
                         out.push(ink.red(&format!("    - {uri}")));
-                        out.push(ink.green(&format!("    + {}", plan.selected_uri())));
+                        match plan.authority() {
+                            plan::Authority::Mirror { uri, .. } => {
+                                out.push(ink.green(&format!("    + {uri}")));
+                            }
+                            // a restore plan has no mirror URI; D11b prints its own block
+                            plan::Authority::Restore { .. } => {}
+                        }
                         shown = true;
                     }
                 }
@@ -2232,20 +2243,29 @@ fn run() -> Result<u8, (u8, String)> {
                 apply::BACKUP_ROOT,
                 outcome.backup_id.as_str()
             );
-            let written: Vec<String> = outcome
-                .written
+            let touched: Vec<String> = outcome
+                .touched
                 .iter()
-                .map(|target| format!("{}/{}", apply::APT_DIR, target.relative().display()))
+                .map(|t| {
+                    let path = format!("{}/{}", apply::APT_DIR, t.target.relative().display());
+                    match t.effect {
+                        plan::Effect::Remove => format!("removed {path}"),
+                        plan::Effect::Create | plan::Effect::Replace => format!("wrote {path}"),
+                    }
+                })
                 .collect();
-            for path in &written {
-                println!("wrote {path}");
+            for line in &touched {
+                println!("{line}");
             }
-            println!(
-                "\nchanged {}: every eligible official archive URI in those files now points at {}.\n\
-                 Next: run 'apt update' to refresh the package lists.",
-                written.join(", "),
-                plan.selected_uri()
-            );
+            match plan.authority() {
+                plan::Authority::Mirror { uri, .. } => println!(
+                    "\nchanged {}: every eligible official archive URI in those files now points at \
+                     {uri}.\nNext: run 'apt update' to refresh the package lists.",
+                    touched.join(", ")
+                ),
+                // a restore plan has no mirror URI; D11b prints its own block
+                plan::Authority::Restore { .. } => {}
+            }
             Ok(0)
         }
     }
@@ -4873,8 +4893,11 @@ mod tests {
         )
         .expect("both inspected files have a rewritable URI")
         .expect("both inspected files are written");
-        assert_eq!(plan.selected_uri(), MIRROR);
-        assert_eq!(plan.proof().seconds(), 1000);
+        let plan::Authority::Mirror { uri, proof } = plan.authority() else {
+            panic!("an apply plan is authorized by its mirror");
+        };
+        assert_eq!(uri, MIRROR);
+        assert_eq!(proof.seconds(), 1000);
         let targets: Vec<String> = plan
             .writes()
             .iter()
@@ -4885,7 +4908,7 @@ mod tests {
             // The bytes the writer re-checks are the bytes this plan was computed from, read from
             // the real file rather than from the inventory's parse.
             let original = write.original.as_ref().expect("both files exist");
-            assert!(!write.create_new);
+            assert_eq!(write.effect, plan::Effect::Replace);
             let new = String::from_utf8_lossy(&write.new_bytes).into_owned();
             assert!(new.contains(MIRROR), "{new}");
             assert!(!new.contains("archive.ubuntu.com"), "{new}");
@@ -4943,7 +4966,7 @@ mod tests {
         let created = plan
             .writes()
             .iter()
-            .find(|w| w.create_new)
+            .find(|w| w.effect == plan::Effect::Create)
             .expect("the security source is a planned creation");
         assert_eq!(
             created.target.relative().display().to_string(),

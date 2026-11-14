@@ -18,10 +18,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::apply::{self, APT_DIR, ApplyError};
+use crate::apply::{self, APT_DIR, ApplyError, Touched};
 use crate::digest::sha256;
 use crate::fresh::{self, Probed};
-use crate::plan::{FileState, Plan, PlanError, PlannedWrite, Platform, SourceName, Target};
+use crate::plan::{Effect, FileState, Plan, PlanError, PlannedWrite, Platform, SourceName, Target};
 use crate::verify::{self, SignatureStatus, VerifiedDate};
 
 /// The `now_secs` every case hands `apply::apply`: 2026-11-12T00:00:00Z.
@@ -228,6 +228,9 @@ fn token(err: &ApplyError) -> &'static str {
         ApplyError::Exists { .. } => "Exists",
         ApplyError::Backup { .. } => "Backup",
         ApplyError::Write { .. } => "Write",
+        // No container case reaches the restore reader until D11b, but the token must name it: a
+        // refusal the matrix cannot produce would otherwise print no token at all.
+        ApplyError::Restore { .. } => "Restore",
         ApplyError::Time { .. } => "Time",
     }
 }
@@ -245,15 +248,15 @@ fn write_case(case: Case) -> Result<String, Fault> {
     Ok(format!(
         "OK backup={} wrote={}",
         outcome.backup_id.as_str(),
-        written_of(&outcome.written)
+        written_of(&outcome.touched)
     ))
 }
 
-/// The targets one run wrote, relative to `/etc/apt`, comma-separated and in write order.
-fn written_of(targets: &[Target]) -> String {
-    targets
+/// The targets one run changed, relative to `/etc/apt`, comma-separated and in change order.
+fn written_of(touched: &[Touched]) -> String {
+    touched
         .iter()
-        .map(|t| t.relative().display().to_string())
+        .map(|t| t.target.relative().display().to_string())
         .collect::<Vec<String>>()
         .join(",")
 }
@@ -350,7 +353,7 @@ fn writes_for(case: Case) -> Result<Vec<PlannedWrite>, Fault> {
         new_bytes,
         digest,
         original: Some(original),
-        create_new: false,
+        effect: Effect::Replace,
     };
     match case {
         // Creations run first, so the security source is the plan's first write.
@@ -372,7 +375,7 @@ fn security_sources() -> Result<PlannedWrite, Fault> {
         digest: sha256(&new_bytes),
         new_bytes,
         original: None,
-        create_new: true,
+        effect: Effect::Create,
     })
 }
 

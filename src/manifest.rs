@@ -18,7 +18,7 @@ use crate::plan::Target;
 const HEADER: &str = "apt-scout-backup 1";
 const MAX_LINE_BYTES: usize = 192;
 /// The whole body, so a hostile manifest is refused before its lines are read one by one.
-const MAX_TOTAL_BYTES: usize = 65_536;
+pub(crate) const MAX_TOTAL_BYTES: usize = 65_536;
 const MAX_ENTRIES: usize = 32;
 /// The lines that are not entries: the header, `id`, `files` and `end`.
 const FRAME_LINES: usize = 4;
@@ -74,7 +74,11 @@ impl BackupId {
     }
 
     /// Exactly 16 bytes, `T` and `Z` where they belong, digits elsewhere, plausible ranges.
-    pub fn parse(s: &str) -> Result<BackupId, ManifestError> {
+    ///
+    /// Crate-visible on purpose: an id is not a capability. What authorizes a restore is the
+    /// validated backup `restore::build` mints ([`crate::restore::ValidatedBackup`]), so no caller
+    /// outside this crate is given the raw spelling to build one from.
+    pub(crate) fn parse(s: &str) -> Result<BackupId, ManifestError> {
         let bad = || ManifestError::BadId(s.to_string());
         let b = s.as_bytes();
         if b.len() != 16 || b[8] != b'T' || b[15] != b'Z' {

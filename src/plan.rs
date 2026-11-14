@@ -6,6 +6,10 @@ use std::path::{Path, PathBuf};
 
 use crate::digest::sha256;
 use crate::fresh::Probed;
+// `manifest` names `plan::Target`, this module names `manifest::BackupId` and `restore` names
+// `Plan`: module cycles, so no type is copied into another module to break one.
+use crate::manifest::BackupId;
+use crate::restore::ValidatedBackup;
 use crate::verify::VerifiedDate;
 
 const MAX_NAME_BYTES: usize = 64;
@@ -21,6 +25,33 @@ const SECURITY_SOURCES: &str = "system-security.sources";
 pub enum Platform {
     Ubuntu,
     PopOs,
+}
+
+/// What a write does to its target.
+///
+/// Three effects that exclude each other: an `Effect::Remove`-by-empty-bytes rule inside the writer
+/// would be a magic value, and two booleans would have a fourth combination that means nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Effect {
+    /// Create a target that is not on disk.
+    Create,
+    /// Overwrite the target that is on disk.
+    Replace,
+    /// Remove the target that is on disk: undoing the creation a backup recorded.
+    Remove,
+}
+
+/// What authorizes this plan to be written.
+///
+/// Two forms and never both: a mirror plan is authorized by the probe that verified its URI, a
+/// restore plan by a backup `restore::build` read and re-derived. Each arm's token exists in one
+/// module only — [`VerifiedDate`] in the verifier, [`ValidatedBackup`] in the restore reader — so a
+/// caller cannot mint an authority out of a URI, a date or a [`BackupId`], and a restore cannot be
+/// authorized by a backup nothing has read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Authority {
+    Mirror { uri: String, proof: VerifiedDate },
+    Restore { backup: BackupId },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,14 +133,16 @@ pub struct PlannedWrite {
     /// whose proof was issued for one content and whose bytes are another.
     pub digest: [u8; 32],
     pub original: Option<FileState>,
-    pub create_new: bool,
+    /// What this write does to the target. A [`Effect::Remove`] carries `new_bytes: Vec::new()` and
+    /// `digest: sha256(&[])`, so the digest rule below is one rule for every effect.
+    pub effect: Effect,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plan {
-    selected_uri: String,
-    proof: VerifiedDate,
-    platform: Platform,
+    authority: Authority,
+    /// The family the plan was built for. `None` on a restore plan, which creates nothing.
+    platform: Option<Platform>,
     writes: Vec<PlannedWrite>,
 }
 
@@ -125,9 +158,34 @@ impl Plan {
     ) -> Result<Plan, PlanError> {
         let proof = probed.verified_updates.ok_or(PlanError::NoProof)?;
         let plan = Plan {
-            selected_uri: probed.url.clone(),
-            proof,
-            platform,
+            authority: Authority::Mirror {
+                uri: probed.url.clone(),
+                proof,
+            },
+            platform: Some(platform),
+            writes,
+        };
+        plan.validate()?;
+        Ok(plan)
+    }
+
+    /// A plan re-derived from a backup: authorized by that backup, carrying no mirror.
+    ///
+    /// The parameter is the validated backup, not its id: [`ValidatedBackup`] is constructible in
+    /// `restore` alone, so a restore authority cannot be minted by a caller that never read the
+    /// manifest, the copies and the disk. It is the same gate `for_apply` puts on its proof.
+    ///
+    /// `platform: None` is what keeps a restore from creating anything: the create rules below
+    /// need `Some(PopOs)`, so a restore writes only what the backup already describes.
+    pub fn for_restore(
+        backup: &ValidatedBackup,
+        writes: Vec<PlannedWrite>,
+    ) -> Result<Plan, PlanError> {
+        let plan = Plan {
+            authority: Authority::Restore {
+                backup: backup.id().clone(),
+            },
+            platform: None,
             writes,
         };
         plan.validate()?;
@@ -147,28 +205,36 @@ impl Plan {
             if sha256(&w.new_bytes) != w.digest {
                 return Err(PlanError::BytesMismatch(target()));
             }
-            match (w.create_new, &w.target, &w.original) {
-                (true, Target::SourcesList, _) => return Err(PlanError::CreateNewOnList),
-                (true, Target::SourcesListD(_), Some(_)) => {
+            match (w.effect, &w.target, &w.original) {
+                (Effect::Create, Target::SourcesList, _) => {
+                    return Err(PlanError::CreateNewOnList);
+                }
+                (Effect::Create, Target::SourcesListD(_), Some(_)) => {
                     return Err(PlanError::CreateNewWithOriginal(target()));
                 }
-                (true, Target::SourcesListD(_), None) if self.platform != Platform::PopOs => {
+                (Effect::Create, Target::SourcesListD(_), None)
+                    if self.platform != Some(Platform::PopOs) =>
+                {
                     return Err(PlanError::CreateNewWrongPlatform(target()));
                 }
-                (true, Target::SourcesListD(n), None) if n.0 != SECURITY_SOURCES => {
+                (Effect::Create, Target::SourcesListD(n), None) if n.0 != SECURITY_SOURCES => {
                     return Err(PlanError::CreateNewName(target()));
                 }
-                (true, Target::SourcesListD(_), None) => {}
-                (false, _, None) => return Err(PlanError::ReplaceMissingOriginal(target())),
-                (false, _, Some(_)) => {}
+                (Effect::Create, Target::SourcesListD(_), None) => {}
+                (Effect::Replace | Effect::Remove, _, None) => {
+                    return Err(PlanError::ReplaceMissingOriginal(target()));
+                }
+                (Effect::Replace | Effect::Remove, _, Some(_)) => {}
             }
             let big = |b: &[u8]| b.len() > MAX_FILE_BYTES;
             if big(&w.new_bytes) || w.original.as_ref().is_some_and(|o| big(&o.bytes)) {
                 return Err(PlanError::FileTooLarge(target()));
             }
         }
-        let uri = &self.selected_uri;
-        if !(uri.starts_with("http://") || uri.starts_with("https://")) {
+        // Only a mirror plan names a URI, so only a mirror plan has one to check.
+        if let Authority::Mirror { uri, .. } = &self.authority
+            && !(uri.starts_with("http://") || uri.starts_with("https://"))
+        {
             return Err(PlanError::SelectedUri(uri.clone()));
         }
         Ok(())
@@ -176,9 +242,7 @@ impl Plan {
 
     // One-expression accessors stay on one line so `src/plan.rs` keeps its size budget.
     #[rustfmt::skip]
-    pub fn selected_uri(&self) -> &str { &self.selected_uri }
-    #[rustfmt::skip]
-    pub fn proof(&self) -> VerifiedDate { self.proof }
+    pub fn authority(&self) -> &Authority { &self.authority }
     #[rustfmt::skip]
     pub fn writes(&self) -> &[PlannedWrite] { &self.writes }
     #[rustfmt::skip]
@@ -276,15 +340,28 @@ mod tests {
         Some(FileState { dev: 1, ino: 2, mode: 0o644, uid: 0, gid: 0, bytes })
     }
 
-    fn w(target: &str, create_new: bool, original: Option<FileState>) -> PlannedWrite {
+    fn w(target: &str, effect: Effect, original: Option<FileState>) -> PlannedWrite {
         let new_bytes = b"new\n".to_vec();
         let digest = sha256(&new_bytes);
-        PlannedWrite { target: Target::parse(target).unwrap(), new_bytes, digest, original, create_new }
+        PlannedWrite { target: Target::parse(target).unwrap(), new_bytes, digest, original, effect }
     }
 
     fn plan(platform: Platform, writes: Vec<PlannedWrite>) -> Plan {
-        let selected_uri = "https://m.example/ubuntu".to_string();
-        Plan { selected_uri, proof: proof(), platform, writes }
+        let uri = "https://m.example/ubuntu".to_string();
+        Plan { authority: Authority::Mirror { uri, proof: proof() }, platform: Some(platform), writes }
+    }
+
+    /// A removable target: a `create` a mirror run made, on disk now.
+    fn removable() -> PlannedWrite {
+        let mut write = w(SECURITY, Effect::Remove, old());
+        write.new_bytes = Vec::new();
+        write.digest = sha256(&write.new_bytes);
+        write
+    }
+
+    fn restore(writes: Vec<PlannedWrite>) -> Result<Plan, PlanError> {
+        let id = crate::manifest::BackupId::parse("20261112T203045Z").unwrap();
+        Plan::for_restore(&crate::restore::validated_backup_for_test(id), writes)
     }
 
     fn bad(writes: Vec<PlannedWrite>) -> Option<PlanError> {
@@ -312,24 +389,24 @@ mod tests {
     #[test]
     fn validate_refuses_every_incomplete_plan() {
         assert_eq!(bad(vec![]), Some(PlanError::WriteCount(0)));
-        let many = (0..33).map(|i| w(&format!("sources.list.d/m{i}.list"), false, old())).collect();
+        let many = (0..33).map(|i| w(&format!("sources.list.d/m{i}.list"), Effect::Replace, old())).collect();
         assert_eq!(bad(many), Some(PlanError::WriteCount(33)));
-        let dup = vec![w(LIST, false, old()), w(LIST, false, old())];
+        let dup = vec![w(LIST, Effect::Replace, old()), w(LIST, Effect::Replace, old())];
         assert_eq!(bad(dup), Some(PlanError::DuplicateTarget(LIST.to_string())));
-        assert_eq!(bad(vec![w(LIST, true, None)]), Some(PlanError::CreateNewOnList));
-        let other = vec![w("sources.list.d/backports.sources", true, None)];
-        assert_eq!(bad(other), Some(PlanError::CreateNewName("sources.list.d/backports.sources".into())));        assert_eq!(bad(vec![w(SECURITY, true, old())]), Some(PlanError::CreateNewWithOriginal(SECURITY.into())));
-        assert_eq!(bad(vec![w(LIST, false, None)]), Some(PlanError::ReplaceMissingOriginal(LIST.into())));
-        let mut huge = w(LIST, false, old());
+        assert_eq!(bad(vec![w(LIST, Effect::Create, None)]), Some(PlanError::CreateNewOnList));
+        let other = vec![w("sources.list.d/backports.sources", Effect::Create, None)];
+        assert_eq!(bad(other), Some(PlanError::CreateNewName("sources.list.d/backports.sources".into())));        assert_eq!(bad(vec![w(SECURITY, Effect::Create, old())]), Some(PlanError::CreateNewWithOriginal(SECURITY.into())));
+        assert_eq!(bad(vec![w(LIST, Effect::Replace, None)]), Some(PlanError::ReplaceMissingOriginal(LIST.into())));
+        let mut huge = w(LIST, Effect::Replace, old());
         huge.new_bytes = vec![b'x'; MAX_FILE_BYTES + 1];
         huge.digest = sha256(&huge.new_bytes);
         assert_eq!(bad(vec![huge]), Some(PlanError::FileTooLarge(LIST.to_string())));
         for uri in ["", "ftp://m.example/ubuntu"] {
-            let one = vec![w(LIST, false, old())];
-            let plan = Plan { selected_uri: uri.to_string(), proof: proof(), writes: one, platform: Platform::PopOs };
+            let one = vec![w(LIST, Effect::Replace, old())];
+            let plan = Plan { authority: Authority::Mirror { uri: uri.to_string(), proof: proof() }, platform: Some(Platform::PopOs), writes: one };
             assert_eq!(plan.validate(), Err(PlanError::SelectedUri(uri.to_string())));
         }
-        let ok = Plan { selected_uri: "https://m.example/ubuntu".to_string(), proof: proof(), writes: vec![w(LIST, false, old())], platform: Platform::PopOs };
+        let ok = Plan { authority: Authority::Mirror { uri: "https://m.example/ubuntu".to_string(), proof: proof() }, platform: Some(Platform::PopOs), writes: vec![w(LIST, Effect::Replace, old())] };
         assert!(ok.validate().is_ok());
         assert!(!ok.is_empty());
     }
@@ -338,24 +415,61 @@ mod tests {
     fn validate_refuses_bytes_that_do_not_match_their_digest() {
         let at = LIST.to_string();
         // (a) a digest that belongs to some other bytes.
-        let mut other = w(LIST, false, old());
+        let mut other = w(LIST, Effect::Replace, old());
         other.digest = sha256(b"some other content\n");
         assert_eq!(bad(vec![other]), Some(PlanError::BytesMismatch(at.clone())));
         // (b) no digest at all.
-        let mut zeroed = w(LIST, false, old());
+        let mut zeroed = w(LIST, Effect::Replace, old());
         zeroed.digest = [0; 32];
         assert_eq!(bad(vec![zeroed]), Some(PlanError::BytesMismatch(at.clone())));
         // (c) the abuse path: a write whose proof and digest are good for A's bytes, then the
         // bytes swapped for B's while A's digest is kept.
-        let mut swapped = w(LIST, false, old());
+        let mut swapped = w(LIST, Effect::Replace, old());
         assert_eq!(bad(vec![swapped.clone()]), None);
         swapped.new_bytes = b"tampered\n".to_vec();
         assert_eq!(bad(vec![swapped]), Some(PlanError::BytesMismatch(at)));
     }
 
     #[test]
+    fn a_restore_plan_is_authorized_by_its_backup_not_a_mirror() {
+        let id = crate::manifest::BackupId::parse("20261112T203045Z").unwrap();
+        let writes = vec![w(LIST, Effect::Replace, old()), removable()];
+        let rebuilt = Plan::for_restore(&crate::restore::validated_backup_for_test(id.clone()), writes)
+            .unwrap();
+        assert_eq!(rebuilt.authority(), &Authority::Restore { backup: id });
+        assert!(!matches!(rebuilt.authority(), Authority::Mirror { .. }));
+        // A bare `BackupId` is not a restore authority: `for_restore` takes the token only
+        // `restore::build` can mint, so no module can skip the manifest and the disk, and the
+        // parameter type is what makes that unrepresentable rather than merely discouraged.
+        //
+        // A mirror plan is authorized the other way round, and it is the only form carrying a URI.
+        let proof_needed = Plan::for_apply(&probe("https://a.example/ubuntu", RFC_A), Platform::PopOs, vec![]);
+        assert_eq!(proof_needed, Err(PlanError::WriteCount(0)));
+        let mirror = plan(Platform::PopOs, vec![w(LIST, Effect::Replace, old())]);
+        let Authority::Mirror { uri, proof } = mirror.authority() else {
+            panic!("an apply plan must be authorized by its mirror");
+        };
+        assert_eq!(uri, "https://m.example/ubuntu");
+        assert_eq!(proof.seconds(), fresh::parse_date(RFC_A).unwrap());
+    }
+
+    #[test]
+    fn a_restore_plan_cannot_create() {
+        // `for_restore` leaves the platform unset, so the create rules refuse by construction.
+        let created = vec![w(SECURITY, Effect::Create, None)];
+        assert_eq!(restore(created), Err(PlanError::CreateNewWrongPlatform(SECURITY.to_string())));
+        let list = vec![w(LIST, Effect::Create, None)];
+        assert_eq!(restore(list), Err(PlanError::CreateNewOnList));
+        // The two effects a restore does use are accepted, and a removal carries no bytes.
+        let plan = restore(vec![w(LIST, Effect::Replace, old()), removable()]).unwrap();
+        assert_eq!(plan.writes().len(), 2);
+        assert_eq!(plan.writes()[1].new_bytes, Vec::new());
+        assert_eq!(plan.writes()[1].digest, sha256(&[]));
+    }
+
+    #[test]
     fn create_is_refused_off_pop_os() {
-        let writes = || vec![w(SECURITY, true, None)];
+        let writes = || vec![w(SECURITY, Effect::Create, None)];
         let probe = probe("https://m.example/ubuntu", RFC_A);
         let ubuntu = Plan::for_apply(&probe, Platform::Ubuntu, writes());
         assert_eq!(ubuntu, Err(PlanError::CreateNewWrongPlatform(SECURITY.to_string())));
@@ -367,11 +481,14 @@ mod tests {
     fn for_apply_binds_the_uri_to_its_own_proof() {
         let first = probe("https://a.example/ubuntu", RFC_A);
         let second = probe("https://b.example/ubuntu", RFC_B);
-        let plan = Plan::for_apply(&first, Platform::PopOs, vec![w(LIST, false, old())]).unwrap();
-        assert_eq!(plan.selected_uri(), "https://a.example/ubuntu");
-        assert_ne!(plan.selected_uri(), second.url);
-        assert_eq!(plan.proof().seconds(), fresh::parse_date(RFC_A).unwrap());
-        assert_ne!(plan.proof().seconds(), fresh::parse_date(RFC_B).unwrap());
+        let plan = Plan::for_apply(&first, Platform::PopOs, vec![w(LIST, Effect::Replace, old())]).unwrap();
+        let Authority::Mirror { uri, proof } = plan.authority() else {
+            panic!("an apply plan must be authorized by its mirror");
+        };
+        assert_eq!(uri, "https://a.example/ubuntu");
+        assert_ne!(uri, &second.url);
+        assert_eq!(proof.seconds(), fresh::parse_date(RFC_A).unwrap());
+        assert_ne!(proof.seconds(), fresh::parse_date(RFC_B).unwrap());
         assert_eq!(plan.writes().len(), 1);
         let unavailable = SignatureStatus::Unavailable("no gpgv".to_string());
         let unverified = Probed { signature: unavailable, verified_updates: None,
