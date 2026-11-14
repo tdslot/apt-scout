@@ -221,6 +221,7 @@ Principle: the program solves its own problems when safe, and otherwise says exa
 
 ## Testing
 
+- An assertion compares a value with an expectation that does not derive from the same expression as the value. A test whose two sides are computed one from the other, or whose expected side cannot differ from the produced one in the environment it runs in, passes whatever the code does: it is a defect in the test, not a passing gate. A test written or changed is therefore shown to fail when the code it covers is broken — mutate that code, watch the test report the failure, restore it — or the PR states why no such mutation can exist.
 - Unit tests (`#[cfg(test)]`) cover pure logic on fixtures: `os-release`, Launchpad HTML, `mirrors.txt`, `InRelease` dates, freshness, ranking, read-only apt source inventory/parsers, and D8 source rewrite output/round trips. Saved fixtures come from real responses (the Launchpad page is ~316 KB; keep a trimmed copy with at least two countries and every status value seen).
 - Docker integration tests run inside disposable real Ubuntu images; offline cases and live-network smoke cases are both included. Live cases require internet and are manual, never part of CI. The matrix covers every supported release; format measured on 2026-11-11:
 
