@@ -10,7 +10,7 @@ apt-scout --country LT --no-geo --top 5 --https-only
 apt-scout --any --no-geo
 ```
 
-Without `--country`, apt-scout attempts optional country detection. If every source fails, it asks for `--country`, or for `--any`, which needs no country at all. `--no-geo` disables country and AS lookups and requires one of those two answers. `--any` (`-a`) ranks the mirrors the list names for every country together, so the country is shown but constrains nothing.
+Without `--country`, apt-scout attempts optional country detection. If every source fails, it asks for `--country`, or for `--any`, which needs no country at all. `--no-geo` disables country and AS lookups and requires one of those two answers. `--any` (`-a`) ranks the mirrors the list names for every country together, so the country is shown but constrains nothing; with no country the `<CC>.txt` fallback has no file to read, so only Launchpad can supply that list.
 
 A run stays in its own country and widens once only when that country has nothing usable: it then adds every other country's mirrors from the list it has already loaded, prints one `note:` line saying why, and ranks them together. Widening needs Launchpad's list, so a run whose only list is the one-country `mirrors.ubuntu.com` fallback says it cannot widen and fails as before. A set that is not narrowed to one country is capped at the 30 fastest-declared mirrors, so an `--any` run probes 30 of about 560 and a widened run at most 60.
 
