@@ -301,7 +301,8 @@ impl fmt::Display for ApplyError {
 /// What one successful run did: the backup it made and the files it changed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Outcome {
-    /// The backup every changed file was copied into, before the first write.
+    /// The backup every file this run replaced or removed was copied into, before the first
+    /// write. A created file has nothing to copy, so it is not in there.
     pub backup_id: BackupId,
     /// Every target this run changed, in the order it changed them. A restore undoes a creation by
     /// removing the file, so the name says what the run did and not just what it wrote.

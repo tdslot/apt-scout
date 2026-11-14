@@ -440,7 +440,7 @@ mod tests {
         assert!(!matches!(rebuilt.authority(), Authority::Mirror { .. }));
         // A bare `BackupId` is not a restore authority: `for_restore` takes the token only
         // `restore::build` can mint, so no module can skip the manifest and the disk, and the
-        // signature below is what makes that unrepresentable rather than discouraged.
+        // parameter type is what makes that unrepresentable rather than merely discouraged.
         //
         // A mirror plan is authorized the other way round, and it is the only form carrying a URI.
         let proof_needed = Plan::for_apply(&probe("https://a.example/ubuntu", RFC_A), Platform::PopOs, vec![]);
