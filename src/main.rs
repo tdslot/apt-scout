@@ -775,7 +775,11 @@ fn spinner_line(elapsed: Duration, text: &str) -> String {
 /// What the run tells the animation. Both drawing messages carry an acknowledgement, so the caller
 /// learns that the line it asked for is on the screen — a phase is visible the moment the run names
 /// it, not on the next frame — and that a line is gone before a warning takes one of its own.
+/// `Phase` is the run naming a phase and `Text` is the same phase's line changing under it: the frame
+/// is a pure function of the time **this** phase has been active (SPEC.md Output), so a phase starts
+/// the clock and a count does not.
 enum Tick {
+    Phase(String, mpsc::SyncSender<()>),
     Text(String, mpsc::SyncSender<()>),
     Hide(mpsc::SyncSender<()>),
     Stop,
@@ -790,11 +794,13 @@ enum Wake {
 }
 
 /// The animation's whole loop, and the only place a frame is drawn: draw the line the phase handed it,
-/// then wait up to `SPIN_INTERVAL`. A `Text` replaces the line and is drawn at once, a `Hide` erases the
-/// line and acknowledges, `Stop` or a closed channel ends the loop, and a timeout is what advances the
-/// frame. So the frame moves with time and not with a change of count — the whole point of the ticker:
-/// a phase that runs for five seconds visibly moves (SPEC.md Output). A frame does nothing but draw,
-/// so no probe's timeout, measurement, rejection or join order changes because one was drawn.
+/// then wait up to `SPIN_INTERVAL`. A `Phase` replaces the line, starts the frame's clock over and is
+/// drawn at once; a `Text` replaces the line without touching that clock, because a count changed and
+/// the phase did not; a `Hide` erases the line and acknowledges, `Stop` or a closed channel ends the
+/// loop, and a timeout is what advances the frame. So the frame moves with time and not with a change
+/// of count — the whole point of the ticker: a phase that runs for five seconds visibly moves — and a
+/// long run still opens every phase on the first cell (SPEC.md Output). A frame does nothing but
+/// draw, so no probe's timeout, measurement, rejection or join order changes because one was drawn.
 fn run_ticker<S: Sink>(sink: &mut S, mut wait: impl FnMut(Duration) -> Wake) {
     let mut text: Option<String> = None;
     // The draw a message asked for, whose sender is released once the line is on the screen.
@@ -808,6 +814,11 @@ fn run_ticker<S: Sink>(sink: &mut S, mut wait: impl FnMut(Duration) -> Wake) {
             let _ = ack.send(());
         }
         match wait(SPIN_INTERVAL) {
+            Wake::Message(Tick::Phase(next, drawn)) => {
+                text = Some(next);
+                elapsed = Duration::ZERO;
+                ack = Some(drawn);
+            }
             Wake::Message(Tick::Text(next, drawn)) => {
                 text = Some(next);
                 ack = Some(drawn);
@@ -882,13 +893,23 @@ impl Ticker {
 
     /// Hand the animation a new line and wait for it to be drawn, so the phase is on screen before the
     /// work it names starts. One writer draws the line, so a phase and a frame can never split it.
-    fn text(&self, line: String) {
+    fn draw(&self, tick: fn(String, mpsc::SyncSender<()>) -> Tick, line: String) {
         let (ack, drawn) = mpsc::sync_channel(0);
-        if self.tx.send(Tick::Text(line, ack)).is_err() {
+        if self.tx.send(tick(line, ack)).is_err() {
             // The animation is already gone; there is no line to put up and nothing to wait for.
             return;
         }
         let _ = drawn.recv();
+    }
+
+    /// A phase starts: the line goes up and the frame's clock starts over.
+    fn phase(&self, line: String) {
+        self.draw(Tick::Phase, line);
+    }
+
+    /// The phase's line changes without the phase changing, so the clock keeps running.
+    fn text(&self, line: String) {
+        self.draw(Tick::Text, line);
     }
 
     /// Erase the line and wait until it is gone, so a warning that follows starts on a line of its own
@@ -943,6 +964,9 @@ struct Progress<S: Sink + Send + 'static> {
     /// into it, because both probe the run's one candidate set: a count that restarted would show a
     /// viewer `30/30` and then `0/30` for the same set.
     probed: usize,
+    /// Whether probing has named itself yet. The first probing line of a run starts that phase, so the
+    /// frame's clock starts with it; the count updates after it are the same phase and are not.
+    probing: bool,
 }
 
 impl<S: Sink + Send + 'static> Progress<S> {
@@ -956,6 +980,7 @@ impl<S: Sink + Send + 'static> Progress<S> {
             ticker,
             started: Instant::now(),
             probed: 0,
+            probing: false,
         }
     }
 
@@ -964,7 +989,15 @@ impl<S: Sink + Send + 'static> Progress<S> {
     }
 
     /// Name the phase now — a person sees it the moment it starts, not on the next frame — and let the
-    /// animation redraw it with each frame from then on.
+    /// animation redraw it with each frame from then on. The frame's clock starts here, because it is
+    /// a function of how long this phase has been active and of nothing earlier in the run.
+    fn phase(&mut self, line: String) {
+        if let Some(ticker) = &self.ticker {
+            ticker.phase(line);
+        }
+    }
+
+    /// The phase's line changes and the phase does not, so the frame keeps the age it has.
     fn show(&mut self, line: String) {
         if let Some(ticker) = &self.ticker {
             ticker.text(line);
@@ -973,20 +1006,27 @@ impl<S: Sink + Send + 'static> Progress<S> {
 
     /// The four phases SPEC.md Output names, in the order a run reaches them.
     fn load(&mut self) {
-        self.show("loading the mirror list".to_string());
+        self.phase("loading the mirror list".to_string());
     }
 
     fn reference(&mut self) {
-        self.show("verifying the reference".to_string());
+        self.phase("verifying the reference".to_string());
     }
 
-    /// The candidates probed **so far** (SPEC.md Output).
+    /// The candidates probed **so far** (SPEC.md Output). The first line of the run starts the probing
+    /// phase; every later one is the same phase counting higher.
     fn probe(&mut self, done: usize, total: usize) {
-        self.show(probing_line(done, total));
+        let line = probing_line(done, total);
+        if self.probing {
+            self.show(line);
+        } else {
+            self.probing = true;
+            self.phase(line);
+        }
     }
 
     fn ranked(&mut self) {
-        self.show("ranking".to_string());
+        self.phase("ranking".to_string());
     }
 
     /// Erase the live line before something that needs a line of its own, such as a warning. It waits
@@ -6775,6 +6815,54 @@ mod tests {
         );
         // The draw was acknowledged only after it happened.
         assert_eq!(acked.try_recv(), Ok(()));
+    }
+
+    /// The frame is a pure function of the time **this** phase has been active (SPEC.md Output), so a
+    /// phase starts on the first cell however long the run has been going, while a count change under
+    /// the same phase leaves the clock where it was. Without the reset each phase's first frame would
+    /// be a function of the whole run's elapsed time instead.
+    #[test]
+    fn a_new_phase_starts_the_frame_over_and_a_count_does_not() {
+        let mut sink = RecordingSink::default();
+        let script = [
+            Wake::Message(Tick::Phase(probing_line(1, 3), {
+                let (ack, _) = mpsc::sync_channel(1);
+                ack
+            })),
+            Wake::Timeout,
+            Wake::Timeout,
+            // The same phase, one more probe finished: the clock keeps running.
+            Wake::Message(Tick::Text(probing_line(2, 3), {
+                let (ack, _) = mpsc::sync_channel(1);
+                ack
+            })),
+            Wake::Timeout,
+            // A new phase: the clock starts over, so its first frame is the first cell.
+            Wake::Message(Tick::Phase("ranking".to_string(), {
+                let (ack, _) = mpsc::sync_channel(1);
+                ack
+            })),
+            Wake::Timeout,
+            Wake::Message(Tick::Stop),
+        ];
+        let mut waits = script.into_iter();
+        run_ticker(&mut sink, move |_| {
+            waits.next().expect("the script ends with Stop")
+        });
+        assert_eq!(
+            sink.lines,
+            [
+                "⠋ probing 3 mirrors… 1/3",
+                "⠙ probing 3 mirrors… 1/3",
+                "⠹ probing 3 mirrors… 1/3",
+                // The count changed and the cell did not: the phase's clock kept running.
+                "⠹ probing 3 mirrors… 2/3",
+                "⠸ probing 3 mirrors… 2/3",
+                // A new phase opens on the first cell, whatever the run had already drawn.
+                "⠋ ranking",
+                "⠙ ranking",
+            ]
+        );
     }
 
     /// A warning keeps its own line: `hide` erases the live line and acknowledges the erase, so nothing
