@@ -134,9 +134,6 @@ The uid decides whether a run writes; no flag makes it write and no answer to th
 
 ## Backups
 
-<<<<<<< HEAD
-`man apt-scout` documents every option and mode, the report, the files it touches and the rules a write follows; the `.deb` installs that page at `/usr/share/man/man1/apt-scout.1`.
-=======
 Every file a write replaces is copied first into `/var/backups/apt-scout/<id>/`, where `<id>` is the UTC timestamp of the run as `YYYYMMDDTHHMMSSZ`. The directory is created mode 0700 and verified to be a real directory, owned by root and not a symlink; each copied file keeps its own mode, its owner and its path relative to `/etc/apt/`, so `/etc/apt/sources.list` is at `<id>/sources.list` and `/etc/apt/sources.list.d/ubuntu.sources` is at `<id>/sources.list.d/ubuntu.sources`. If any copy fails, nothing is written.
 
 `MANIFEST` in the same directory records what the run did. It is created exclusively, mode 0600 and owned by root, so a run neither appends to an older manifest nor overwrites one:
@@ -159,7 +156,6 @@ sudo apt update
 ```
 
 Repeat for each file the manifest lists. `--restore` is not implemented yet — the flag is rejected as an unknown option, so the copy above is the whole restore path today.
->>>>>>> bd7703a (docs: close the README with backups, privacy and troubleshooting)
 
 ## Network and privacy
 
@@ -179,7 +175,16 @@ Country detection contacts Canonical geoip, `ifconfig.co`, `ipinfo.io` and the C
 
 ## Documentation
 
-<<<<<<< HEAD
+| What | Where |
+| --- | --- |
+| Every option and mode, the report, the files it touches and the rules a write follows | `man apt-scout` (`man/apt-scout.1`), installed by the `.deb` at `/usr/share/man/man1/apt-scout.1` |
+| Implemented behaviour, exit codes and the pipeline | [SPEC.md](SPEC.md) |
+| The security record and the rulings a write answers to | [docs/threat-model.md](docs/threat-model.md) |
+| Project vocabulary | [GLOSSARY.md](GLOSSARY.md) |
+| Task states, evidence and what is next | [ROADMAP.md](ROADMAP.md) |
+| Contribution rules and the checks a change must pass | [AGENTS.md](AGENTS.md) |
+| Release history | [CHANGELOG.md](CHANGELOG.md) |
+
 ## License
 
 MIT OR Apache-2.0
