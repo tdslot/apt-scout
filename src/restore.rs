@@ -17,7 +17,6 @@ use std::fs::{self, File, Metadata};
 use std::io::{self, Read};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::apply::{self, ApplyError, Entry, Outcome};
 use crate::digest::sha256;
@@ -112,22 +111,16 @@ fn build_as(
 /// Root-only, like the read and the write it spans, and the read is checked first: the manifest is
 /// root's, so a non-root run is refused before the backup is opened. The writer's second argument is
 /// a mirror's freshness baseline, and a restore has no mirror: what authorizes its write is the
-/// backup `build` just re-derived, so this path passes `None` and never derives anything else to
+/// backup `build_as` just re-derived, so this path passes `None` and never derives anything else to
 /// pass. `now` names the backup this restore makes before it writes, the same way the mirror path
-/// names its own.
+/// names its own. Both roots bind the read only, because `apply::apply` is the one production writer
+/// and it writes to the crate's fixed `/etc/apt` and `/var/backups/apt-scout`: that asymmetry is why
+/// a test reaches this path through `run_as` with `apply::run_for_test`.
 pub fn run(backup_root: &Path, apt_root: &Path) -> Result<Outcome, ApplyError> {
     apply::require_root()?;
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|since| since.as_secs())
-        .map_err(|e| {
-            refusal(
-                backup_root,
-                format!(
-                    "cannot read the system clock: {e}, and a restore names its own backup with it"
-                ),
-            )
-        })?;
+    // The clock is the mirror path's, so the two cannot drift; its refusal is typed for `main`, so
+    // it is mapped into this module's error instead of the idiom being spelled a second time.
+    let now = crate::now_secs().map_err(|(_, reason)| refusal(backup_root, reason))?;
     run_as(backup_root, apt_root, now, 0, 0, apply::apply)
 }
 
@@ -1070,11 +1063,12 @@ mod tests {
         .expect("the newest backup is read and its plan applied");
         assert_eq!(handed, None, "a restore hands the writer no baseline");
 
-        // The bytes, the mode and the owner are the record's again, and the creation is gone.
+        // The bytes and the mode are the record's again, and the creation is gone. Ownership is not
+        // asserted here: a non-root test's files are owned by the test's own uid whichever way the
+        // writer treats them, so that comparison belongs to D11b's container case.
         let restored = state(&list);
         assert_eq!(restored.bytes, OLD, "the replace put the backup's bytes back");
         assert_eq!(restored.mode, list_mode, "the mode is the record's");
-        assert_eq!((restored.uid, restored.gid), (uid, gid), "the owner is the record's");
         assert!(!security.exists(), "the file the manifest records as created is removed");
         assert_eq!(outcome.backup_id, BackupId::from_secs(NOW + 1).expect("id"));
         assert_eq!(outcome.touched, vec![
