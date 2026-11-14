@@ -648,8 +648,8 @@ fn next_step_hint() -> &'static str {
 
 /// The closing block a finished mirror write prints: the `changed …` sentence and the next step, as
 /// the one string the write path hands to `println!`. Separated from that `println!` so a unit test
-/// holds the site that prints the hint and not only the hint on its own: a test of the sentence
-/// alone cannot tell whether the line a write ends with still carries it (SPEC.md Output).
+/// can hold the line a write ends with as a whole and not the hint on its own: a test of the
+/// sentence alone cannot tell whether that line still carries it (SPEC.md Output).
 fn write_closing_block(touched: &[String], uri: &str) -> String {
     format!(
         "\nchanged {}: every eligible official archive URI in those files now points at {uri}.\n{}",
@@ -3475,15 +3475,28 @@ mod tests {
         assert!(!version_requested("--versions"));
         assert!(!version_requested("-vV"));
 
-        let line = VERSION_LINE;
+        // The expectation is the crate version recomposed from Cargo's split parts, not the
+        // `CARGO_PKG_VERSION` string `VERSION_LINE` interpolates: `MAJOR`, `MINOR`, `PATCH` and `PRE`
+        // are separate manifest reads, so a constant that stopped naming the crate version — a
+        // hardcoded one, a changed prefix — fails here instead of matching itself. `PRE` carries no
+        // leading hyphen, so one is added only when the version has a pre-release part.
+        let pre = env!("CARGO_PKG_VERSION_PRE");
+        let version = format!(
+            "{}.{}.{}{}{}",
+            env!("CARGO_PKG_VERSION_MAJOR"),
+            env!("CARGO_PKG_VERSION_MINOR"),
+            env!("CARGO_PKG_VERSION_PATCH"),
+            if pre.is_empty() { "" } else { "-" },
+            pre
+        );
         assert_eq!(
-            line,
-            format!("apt-scout {}", env!("CARGO_PKG_VERSION")),
+            VERSION_LINE,
+            format!("apt-scout {version}"),
             "the line names the crate version"
         );
         // One line, ending in no newline of its own: `println!` adds the one terminator.
-        assert_eq!(line.lines().count(), 1, "{line}");
-        assert!(!line.contains('\n'), "{line}");
+        assert_eq!(VERSION_LINE.lines().count(), 1, "{VERSION_LINE}");
+        assert!(!VERSION_LINE.contains('\n'), "{VERSION_LINE}");
     }
 
     /// One alias and one value per argument, never a bundle: `-lyc NO` stays an unknown option. The
@@ -5310,8 +5323,10 @@ mod tests {
 
     /// The last line a write prints names a command the reader can run from the shell they are back
     /// in. The write was made by a root run started as `sudo apt-scout …`, which has exited, so a
-    /// bare `apt update` fails with permission denied where they stand. The block is the one `run`
-    /// prints, so the hint cannot fall out of the line it belongs to without this failing.
+    /// bare `apt update` fails with permission denied where they stand. What is held here is the
+    /// block the write path builds as one string before it prints it; that the call site keeps
+    /// printing that block is not held, because a write needs root and `tests/cli.rs` cannot reach
+    /// the path.
     #[test]
     fn the_next_step_after_a_write_names_a_command_an_unprivileged_shell_can_run() {
         let touched = ["/etc/apt/sources.list".to_string()];
