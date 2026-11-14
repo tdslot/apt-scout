@@ -15,9 +15,60 @@ A run reads `/etc/apt/sources.list` and the regular `*.list` and `*.sources` fil
 
 ## Install
 
+The `.deb` is the short path:
+
+```sh
+sudo apt install ./apt-scout_<version>_amd64.deb
+```
+
+It installs `/usr/bin/apt-scout` and the manual page at `/usr/share/man/man1/apt-scout.1`, so `man apt-scout` resolves, and it pulls in `gpgv` and `ubuntu-keyring`.
+
+One `.deb` serves every supported release. The binary is linked against musl, so it has no `libc6` dependency and no glibc ABI to match, and `gpgv` and `ubuntu-keyring` keep the same names and paths from 20.04 to 26.04. The split is by architecture (`amd64` today, `arm64` later), never by release: the Docker matrix over `ubuntu:20.04` through `ubuntu:26.04` is the compatibility evidence — one build, one digest, the same cases green in each image.
+
+The release tarball holds the binary, the two licences and this file:
+
+```sh
+tar -xzf apt-scout-v<version>-x86_64-unknown-linux-musl.tar.gz
+sudo install -m 0755 apt-scout-v<version>-x86_64-unknown-linux-musl/apt-scout /usr/local/bin/
+sudo apt install gpgv ubuntu-keyring
+```
+
+Install the two packages yourself with the tarball: nothing declares them for you, and without them no write is allowed.
+
+From source, with a stable Rust toolchain (edition 2024):
+
+```sh
+cargo build --release --locked            # target/release/apt-scout, linked against the host
+scripts/docker-test.sh --build-only       # target/docker/apt-scout-plain, static amd64
+scripts/build-deb.sh                      # dist/apt-scout_<version>_amd64.deb
+```
+
+`scripts/build-deb.sh` stages that static binary, this README and, when `man/apt-scout.1` exists, the manual page, then builds the archive with `dpkg-deb` — on the host, or in an `ubuntu:24.04` container when the host has no `dpkg-deb`. It reads the version, the maintainer and the synopsis from `Cargo.toml` unless you pass a version as its argument, and it needs Docker for the container path a Mac has to use. The published release is packaged instead by `.github/workflows/release.yml` with `cargo deb` from the same `[package.metadata.deb]` metadata: two builders for one layout, kept in step by hand, and `ROADMAP.md` tracks the difference.
+
 ## Quick start
 
+```sh
+apt-scout                                  # preview: the ranked table and a recommendation, nothing written
+apt-scout --list --verbose                 # the same, plus the proof behind every row
+sudo apt-scout                            # back up, ask once, then rewrite the sources
+sudo apt-scout --yes                      # unattended: no prompt
+sudo apt-scout --country DE               # choose the country instead of detecting it
+sudo apt-scout --any                      # rank every country's mirrors together
+```
+
+A non-root run never writes. It prints the recommendation and one line, `sudo apt-scout` with the flags of that run, and exits 3, so the preview and the write are the same command with `sudo` in front. `--list` is the exception: it writes nothing for any uid and exits 0.
+
 ## How a run works
+
+1. Read `/etc/os-release` for the Ubuntu family and the codename, and `/usr/bin/dpkg --print-architecture` for the architecture.
+2. Detect the server's country and AS from optional third-party sources, unless `--no-geo`. If no country can be found, the run asks for `--country`, or for `--any`, which needs no country at all.
+3. Load the mirror list: Launchpad first, then `mirrors.ubuntu.com/<CC>.txt` for the country. The first valid answer wins and the report names the source it used.
+4. Pick candidates: the run's own country, or every country when `--any` is given; drop duplicates and, with `--https-only`, the `http` entries; cap the set at 30 — the first 30 the list names for a country run, the 30 with the fastest declared link speed for `--any`. If every candidate in the run's own country is unusable, widen once to every other country's mirrors from the list already loaded and say so in one `note:` line; a list that names only one country cannot widen.
+5. Read the reference: the `Date` and the signature status of `<codename>-updates/InRelease` on `archive.ubuntu.com`. That is the freshness baseline a mirror is measured against.
+6. Probe each candidate in parallel: its `-updates` `InRelease` in full for the date and the signature, a cheap read of its `-security` `InRelease` for information, and a 1 MiB sample of `Packages.xz` for throughput; time to first byte is the latency.
+7. Reject what cannot be used: unreachable hosts, non-200 answers, a missing or unparsable `Date`, a sample that is not an xz file, and a mirror more than 24 hours behind the baseline.
+8. Rank: smallest lag first, then throughput, then latency, with a same-AS mirror within 20% of its group's fastest taken first.
+9. Write or recommend. A root run builds the plan, confirms once, backs up and writes; any other uid gets the recommendation and the `sudo` line.
 
 ## What the output means
 
