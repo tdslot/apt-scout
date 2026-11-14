@@ -39,7 +39,13 @@ if [ -z "$version" ]; then
   version=$(metadata version)
   [ -n "$version" ] || die "cannot read the version from Cargo.toml; pass it as the first argument"
 fi
-# The version becomes part of the output file name, so only characters Debian allows may reach it.
+# Debian's version syntax, refused here instead of by dpkg-deb: a version starts with a digit (a tag
+# v0.1.0 ships as 0.1.0), and it becomes part of the output file name, so only characters Debian
+# allows may reach dpkg-deb or a container shell.
+case $version in
+  [0-9]*) ;;
+  *) die "invalid version '$version': a Debian version starts with a digit, so a tag v0.1.0 is passed as 0.1.0" ;;
+esac
 case $version in
   *[!A-Za-z0-9.+~:-]*) die "invalid version '$version': use only letters, digits and . + ~ : -" ;;
 esac
@@ -108,9 +114,10 @@ else
     || die "dpkg-deb is not installed and docker is not available; install either one to build a .deb"
   # The staging tree is mounted whole; the container is the only network use and writes only to
   # the temp output directory, which is thrown away after the .deb is moved into dist/.
+  # $name travels as an argument, never inside the shell string, so it cannot split the command.
   docker run --rm --platform linux/amd64 \
     -v "$stage":/pkg:ro -v "$out":/out \
-    ubuntu:24.04 sh -c "dpkg-deb --build --root-owner-group /pkg /out/$name" >/dev/null \
+    ubuntu:24.04 sh -c 'dpkg-deb --build --root-owner-group /pkg "/out/$1"' _ "$name" >/dev/null \
     || die "the ubuntu:24.04 container could not build $name"
 fi
 [ -f "$out/$name" ] || die "dpkg-deb did not write $name"
@@ -120,8 +127,12 @@ if command -v dpkg-deb >/dev/null 2>&1; then
 else
   info=$(docker run --rm --platform linux/amd64 -v "$out":/out:ro ubuntu:24.04 dpkg-deb -I "/out/$name")
 fi
-fields=$(printf '%s\n' "$info" | awk '/^ *(Package|Version|Maintainer|Depends): / { sub(/^ +/, ""); print }')
+fields=$(printf '%s\n' "$info" | awk '/^ *(Package|Version|Architecture|Maintainer|Installed-Size|Depends|Section|Priority): / { sub(/^ +/, ""); print }')
 [ -n "$fields" ] || die "dpkg-deb -I did not report the control fields of $name"
+# Each field is reported, not just some of them: a filter that matches nothing must not pass as a check.
+for field in Package Version Architecture Maintainer Installed-Size Depends Section Priority; do
+  printf '%s\n' "$fields" | grep -q "^$field: " || die "dpkg-deb -I did not report $field for $name"
+done
 
 mkdir -p dist
 deb=dist/$name
