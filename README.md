@@ -16,6 +16,8 @@ A run stays in its own country and widens once only when that country has nothin
 
 Before mirror probing, apt-scout prints a read-only inventory of apt source URIs and stops if none can use an official Ubuntu mirror. `--list` prints ranked mirrors; `--top N` limits results. Each mirror's `-updates` `InRelease` signature is checked with `/usr/bin/gpgv` and `/usr/share/keyrings/ubuntu-archive-keyring.gpg`, and the `verified` column reports it in one word: `yes` when the check passed, `no` when the file was readable but unsigned, altered, or signed by an unknown key, and `?` when the check could not run at all. `--verbose` adds the exact status behind that cell. Ranking still works when verification cannot run, but only a `yes` may authorize a write. The `.deb` package depends on `gpgv` and `ubuntu-keyring`; tarball users should install both packages.
 
+`man apt-scout` documents every option and mode, the report, the files it touches and the rules a write follows; the `.deb` installs that page at `/usr/share/man/man1/apt-scout.1`.
+
 ## Network and privacy
 
 Country detection contacts Canonical geoip, ifconfig.co, ipinfo.io, and Cloudflare trace in order until country, public IP, and AS are found. Team Cymru DNS provides AS lookups for the server and mirror hosts. These services or the configured DNS resolver can observe the server's public IP; DNS queries also include mirror IPs during AS ranking. Use `--no-geo --country CC` (or `--no-geo --any`) to skip geolocation and AS queries.

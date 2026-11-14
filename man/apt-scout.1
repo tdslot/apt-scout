@@ -1,0 +1,434 @@
+\" 78 columns, not the terminal width: the page must read on an 80-column console
+\" whatever terminal it is rendered in. Set before .TH so the header line is held too.
+.nr LL 78n
+.nr LT 78n
+.TH APT\-SCOUT 1 "" "apt-scout 0.1.0" "User Commands"
+.SH NAME
+apt\-scout \- find a fresh, fast Ubuntu archive mirror and point apt at it
+.SH SYNOPSIS
+.B apt\-scout
+.RI [ OPTION ]...
+.SH DESCRIPTION
+.B apt\-scout
+does what
+.B nala fetch
+does, without installing nala: it finds the official Ubuntu archive mirrors a
+mirror list names, probes them, ranks them by freshness and then speed, and
+either recommends one or rewrites the apt sources to use it. It is one static
+binary, and the two packages it uses, \fBgpgv\fR and \fBubuntu\-keyring\fR,
+are the ones the Debian package depends on. A system that lacks them still
+ranks mirrors, but every signature then reads \fB?\fR and no write is
+allowed.
+.PP
+A run does the following, in this order.
+.IP 1. 4
+It reads \fI/etc/os\-release\fR. \fBID\fR or \fBID_LIKE\fR must name Ubuntu or
+a derivative such as Pop!_OS or Linux Mint, and the codename is
+\fBUBUNTU_CODENAME\fR when present, otherwise \fBVERSION_CODENAME\fR. The
+architecture comes from \fI/usr/bin/dpkg \-\-print\-architecture\fR: only
+\fBamd64\fR and \fBi386\fR have a mirror choice, so any other architecture
+stops the run with an explanation and changes nothing.
+.IP 2. 4
+Unless \fB\-\-no\-geo\fR is given, it detects the server's country and its
+autonomous system (AS) from optional third-party sources. Every source is
+optional: a failure is reported and the run continues, and if no country can be
+found the run asks for \fB\-\-country\fR, or for \fB\-\-any\fR, which needs no
+country at all. It never guesses a worldwide list.
+.IP 3. 4
+It loads the mirror list: Launchpad first, then
+\fImirrors.ubuntu.com/<CC>.txt\fR for the country. The first valid answer wins
+and the report names the source it used.
+.IP 4. 4
+Candidates are that one country's mirrors, unless \fB\-\-any\fR removes the
+country from the set. They are deduplicated and, when the set is not narrowed
+to one country, capped at 30 by the link speed Launchpad declares.
+\fB\-\-https\-only\fR drops the plain http entries.
+.IP 5. 4
+Each candidate host is resolved and looked up in Team Cymru's DNS to learn its
+AS. This is informational: a failed lookup leaves the AS unknown and is never a
+reason to fail the run.
+.IP 6. 4
+It fetches the freshness reference once, from archive.ubuntu.com: the
+\fI<codename>\-updates/InRelease\fR file in full with its OpenPGP signature
+checked, and a 4 KiB head of \fI<codename>\-security/InRelease\fR, which is
+never verified because nothing may consume its signature. If the reference host
+is unreachable, the newest sane mirror date becomes the baseline and the run
+warns. The \fI<codename>\fR release pocket is not compared, because its date is
+the release date and never changes.
+.IP 7. 4
+It probes the candidates in parallel. The \fI\-updates\fR pocket's
+\fBInRelease\fR file is downloaded in full so its signature can be checked;
+latency is the time to first byte of that request, never the body download.
+Throughput is measured on a 1 MiB range of a package index, because the
+InRelease file is too small to measure it. At most three redirects are followed
+and every hop is validated.
+.IP 8. 4
+It rejects unreachable mirrors, non-200 answers, and stale mirrors: one whose
+\fI\-updates\fR date trails the reference by more than 24 hours. A missing or
+unparsable date rejects too. The informational \fI\-security\fR lag never
+rejects anything.
+.IP 9. 4
+It ranks what is left. Mirrors carrying the same \fI\-updates\fR date form
+one group; within a group the highest throughput wins, then the lowest
+latency,
+and a mirror in the same AS as the server wins when its throughput is within
+20% of the group's fastest. A lagging but not stale mirror stays selectable and
+shows a warning.
+.IP 10. 4
+The uid decides what happens next; see \fBMODES\fR below.
+.PP
+A run narrowed to its own country that finds nothing usable there adds the
+mirrors the same list names for every other country, probes them in one extra
+pass, ranks them together with its own results and says why in one \fBnote:\fR
+line. It never tops up a set that already has a usable mirror and never probes
+a candidate twice. Widening reuses the list the run already loaded, so it needs
+Launchpad: a run whose only list is the one-country \fImirrors.ubuntu.com\fR
+file says it cannot widen and fails as it would have.
+.PP
+It rewrites only official Ubuntu archive URIs, and on Pop!_OS
+\fIapt.pop-os.org/ubuntu\fR. \fIsecurity.ubuntu.com\fR, \fIports.ubuntu.com\fR,
+PPAs and third-party repositories are never touched, and a line or stanza
+carrying a \fI\-security\fR suite is left alone because \fI\-security\fR
+freshness is not checked. The one exception is Pop!_OS, where the
+\fI\-security\fR suite moves to a new file on the original mirror. After a
+write, run \fBapt update\fR yourself; apt\-scout never runs it.
+.SH OPTIONS
+Every flag is an override, never a step in the workflow, and no flag is
+required. A short form exists for every implemented flag except
+\fB\-\-no\-color\fR. Short flags are never bundled, so \fB\-lyc NO\fR is an
+unknown option.
+.TP
+.B \-c, \-\-country \fICC\fR
+Use this country instead of the detected one. The value is uppercased and must
+be two ASCII letters, and it must be one of the 82 countries Launchpad lists;
+an unknown code is a usage error (exit 2) reported before any network request.
+It changes the country only: the AS lookup still runs unless \fB\-\-no\-geo\fR
+is given.
+.TP
+.B \-a, \-\-any
+Ignore the detected and the given country and rank the mirrors the list names
+for every country together. The country becomes display-only: it is still
+detected or taken from \fB\-\-country\fR and still printed, and the header says
+it constrains nothing. \fB\-\-any\fR with \fB\-\-country\fR is therefore not an
+error, and \fB\-\-any\fR needs no country at all, so on its own it satisfies
+the country requirement. It changes the candidate set only: the ranking and the
+same-AS tie-break are unchanged, and it never widens.
+.TP
+.B \-n, \-\-no\-geo
+Skip every geolocation and AS lookup, so ranking proceeds without AS
+preference. It requires \fB\-\-country\fR or \fB\-\-any\fR, because nothing
+else then says which country the run is in, and a run given neither is a usage
+error (exit 2). It removes the lookups and not the mirror list: with
+\fB\-\-country\fR the run still reads that country's mirrors, and with
+\fB\-\-any\fR there is no \fImirrors.ubuntu.com/<CC>.txt\fR file to read, so
+only Launchpad can supply the list.
+.TP
+.B \-s, \-\-https\-only
+Consider only https mirrors. It narrows the candidate set and nothing else: a
+mirror an earlier run wrote over http stays recognizable, so it can still be
+replaced.
+.TP
+.B \-t, \-\-top \fIN\fR
+Show \fIN\fR rows in the ranked table. The default is 5, and \fIN\fR must be a
+positive integer. It is display only: it changes how many rows are printed, not
+which candidates are probed, ranked, recommended or written, and not the exit
+code.
+.TP
+.B \-v, \-\-verbose
+Add the proof behind the default report; \fBOUTPUT\fR states exactly what is
+added. It is display only: two runs that differ only in this flag probe, rank,
+plan and write identically.
+.TP
+.B \-l, \-\-list
+Print the ranked table and the change a write would make, and write nothing,
+whatever the uid. A run that stops because no apt source may be rewritten, or
+because a write would be refused, reports that and still exits 0. It changes
+the mode and not the discovery: the same candidates are probed and ranked.
+.TP
+.B \-y, \-\-yes
+Skip the one confirmation before a write in a root run. It removes the prompt
+and nothing else: every validation still runs before the first byte, so no
+answer to the prompt could have bypassed it anyway. It has no effect in a
+non-root run or with \fB\-\-list\fR.
+.TP
+.B \-\-no\-color
+Print no colour whatever the terminal is. It is the one implemented flag
+without a short form. It is display only: the plain report carries the same
+words, the same columns and the same headings, minus the escape sequences.
+.TP
+.B \-h, \-\-help
+Print the help text and exit 0 before any run starts.
+.PP
+\fB\-r\fR and \fB\-R\fR are reserved for \fB\-\-restore\fR and
+\fB\-\-refresh\fR and are not accepted yet, and neither are \fB\-\-restore\fR,
+\fB\-\-refresh\fR and \fB\-\-tui\fR themselves. A run given any of them fails
+as an unknown option with exit 2; see \fBLIMITATIONS\fR.
+.SH MODES
+Discovery, ranking and the recommendation are the same in every mode; the uid,
+not a flag, decides whether the run writes.
+.TP
+.B apt\-scout
+As a non-root user: no write. The run prints the report and then one line,
+\fBsudo apt\-scout ...\fR, rebuilt from the flags of that run and spelled in
+long form so a copied command is unambiguous, and exits 3. It opens no apt file
+for writing.
+.TP
+.B sudo apt\-scout
+As root: write. After the report, the planned change names the files it will
+change, the old URI, the new one and the backup path it will create, and one
+confirmation asks to apply it; \fB\-\-yes\fR skips that prompt. The files
+are backed up first, then each target is replaced atomically.
+.TP
+.B apt\-scout \-\-list
+Any uid: no write, exit 0. The ranked table and the planned change are printed;
+nothing under \fI/etc/apt\fR is opened for writing and no backup is created.
+.PP
+A candidate set that is not narrowed to one country is capped at 30 mirrors,
+chosen by the link speed Launchpad declares: the page names about 560 mirrors,
+and probing them all is not a burst any run makes. The cap decides what is
+probed and never what ranks, so a mirror whose declared speed is unknown sorts
+last among the candidates and still ranks wherever its probe puts it. A run
+narrowed to one country keeps the cap in list order.
+.PP
+The one automatic widening of \fBDESCRIPTION\fR happens only when every
+candidate of the run's own country was rejected. It is never a preference and
+never a top-up, and it needs Launchpad, which is the only list that names every
+country. \fB\-\-any\fR never widens: its set is already every country, so an
+empty one means nothing usable anywhere.
+.SH OUTPUT
+The report is one block on stdout, printed once probing and ranking are done,
+so nothing printed while the run works can split it. Its sections, in this
+order:
+.TP
+.B identity line
+.br
+The program version, the detected distribution and the country, with the origin
+of that country.
+.TP
+.B Sources
+.br
+The read-only inventory of \fI/etc/apt\fR, giving each file inspected and each
+entry skipped with its reason.
+.TP
+.B context line
+.br
+\fBmirrors:\fR naming the mirror list the run used, and \fBreference:\fR naming
+the freshness baseline and its signature status.
+.TP
+.B Ranked
+.br
+The table, titled with how many mirrors are usable and how many were rejected,
+above a one-clause legend for each column that needs one.
+.TP
+.B Detail
+.br
+Printed only by \fB\-\-verbose\fR: one block per row with the facts the table
+compresses.
+.TP
+.B Recommendation
+.br
+The chosen mirror, its own country (which differs from the run's once the run
+is not narrowed to one country), how far behind it is, its speed, its latency
+and its signature status, with the reason it was chosen.
+.TP
+.B Planned change
+.br
+The files a write would change, the old and the new URI, and the backup path;
+\fB\-\-list\fR says that nothing is written.
+.TP
+.B Rejected
+.br
+Printed only when something was rejected: the reasons grouped by class, with a
+count each, or the full text of every reason under \fB\-\-verbose\fR.
+.PP
+A section with nothing to say prints nothing at all: no heading and no zero
+count.
+.PP
+Without \fB\-v\fR the report answers which mirror to use and why: the identity
+line, \fBSources\fR, the context line without the server's AS, the table, the
+recommendation, the planned change with the backup path, and the rejection
+counts grouped by class.
+.PP
+With \fB\-v\fR it also answers prove it to me, adding each row's AS number and
+its \fBsame\fR/\fBdiff\fR/\fBunknown\fR match with the server, the server's AS
+on the context line, each row's country and the address the run resolved, both
+pocket dates in full, the \fI\-security\fR lag, the exact signature status, an
+uncut redirect host, and the full text of every rejection reason.
+.PP
+The table has a rank, the mirror URL, and these columns:
+.TP
+.B behind
+.br
+How far the mirror's \fI<codename>\-updates\fR package lists trail the freshest
+date the run knows, in minutes, \fB0m\fR when the mirror is up to date. It is
+freshness, never network latency, and it is the same number the rejection rule
+compares against.
+.TP
+.B speed
+.br
+The measured throughput in MB/s.
+.TP
+.B latency
+The measured round trip of the mirror's \fI\-updates\fR request, in
+milliseconds. It is network time, never freshness.
+.TP
+.B verified
+The signature of the \fI<codename>\-updates\fR \fBInRelease\fR file: \fByes\fR
+when \fBgpgv\fR accepted it with the Ubuntu archive keyring, \fBno\fR when the
+body was readable but unsigned, altered or signed by an unknown key, and
+\fB?\fR when verification could not run at all \(em a missing \fBgpgv\fR or
+keyring, an oversized body, or a timeout. Only \fByes\fR may authorize a write;
+\fBno\fR and \fB?\fR never do, and neither is a reason to reject or reorder a
+row.
+.TP
+.B notes
+.br
+\fBredir:<host>\fR when a mirror redirects to another host; a host that does
+not fit is cut and ends in \fB~\fR. The column is printed only when some shown
+row carries a note, and \fB\-\-verbose\fR prints the host uncut.
+.PP
+A \fB\-\-verbose\fR run adds one more column, the AS number, and one line under
+the table when no AS data could be had at all.
+.PP
+While it works, a run shows one transient status line on stderr, rewritten in
+place: one Braille cell advanced about every 100 ms, naming the phase it is in
+(loading the mirror list, verifying the reference, probing with \fBn/m\fR, or
+ranking), and ending with one summary line:
+.RS 4
+\fBdone \(em <usable> usable, <rejected> rejected in <t> s\fR
+.RE
+.PP
+That line appears only when stderr is a terminal. When stderr is a pipe, a file
+or a CI log, nothing at all is written and nothing is started to draw one. A
+warning keeps its own line, and the animation stops while it is on screen.
+.PP
+Colour appears only when stdout is a terminal, \fBNO_COLOR\fR is not set and
+\fB\-\-no\-color\fR was not given. Headings and the identity line are bold, the
+\fByes\fR cell is green while \fBno\fR and \fB?\fR are yellow, a rejection
+reason and a line removed from a source file are red while an added line is
+green, and the numeric column headings are dim. Nothing else is styled, and the
+\fBsudo apt\-scout\fR line is never styled because a user copies it.
+.PP
+A write prints a second block after the confirmation: \fBbackup: <path>\fR, one
+\fBwrote <path>\fR per file, and a closing line naming the files and suggesting
+\fBapt update\fR.
+.SH EXIT STATUS
+.TP
+.B 0
+Success, including a \fB\-\-list\fR run that would write, and a root run whose
+sources already point at the chosen mirror.
+.TP
+.B 1
+A refusal or a failure after the run started: no usable or no fresh mirror; no
+apt source that may be rewritten; a backup or a write that failed; a plan
+refused by validation. A root run that found nothing to write exits 1.
+.TP
+.B 2
+Usage error, reported before any network request: an unknown option, including
+\fB\-r\fR, \fB\-R\fR, \fB\-\-tui\fR, \fB\-\-restore\fR and \fB\-\-refresh\fR;
+\fB\-\-no\-geo\fR without \fB\-\-country\fR or \fB\-\-any\fR; an unknown
+country code; a value the flag cannot use; or a country that could not be
+detected and was not given.
+.TP
+.B 3
+The run would have written and this uid may not: every non-root run other than
+\fB\-\-list\fR that reaches the write. The line to run instead is printed.
+.TP
+.B 4
+Unsupported distribution or architecture: a system that is not Ubuntu or one of
+its derivatives; an architecture other than \fBamd64\fR or \fBi386\fR, because
+\fIports.ubuntu.com\fR has no mirror choice; or a codename that
+archive.ubuntu.com answers 404 for, because the release moved to
+\fIold\-releases.ubuntu.com\fR, which has no mirrors.
+.SH FILES
+\fI/etc/apt/sources.list\fR, \fI/etc/apt/sources.list.d/*.list\fR and
+\fI/etc/apt/sources.list.d/*.sources\fR are read for the source inventory and
+are the files a rewrite targets. Symlinks are refused, every other field and
+comment is preserved byte for byte, and a stanza that is disabled is left
+alone.
+.TP
+.I /var/backups/apt-scout/<id>/
+Created by a write before its first byte, mode 0700. \fI<id>\fR is the UTC
+instant of the run in the form \fBYYYYMMDDTHHMMSSZ\fR. The directory holds a
+copy of every file the write replaces and the \fBMANIFEST\fR below.
+.TP
+.I /var/backups/apt-scout/<id>/MANIFEST
+Mode 0600. The record of that backup: a header line, the id, the file count,
+one line per file giving the target, the action, the SHA-256 of the bytes, the
+mode, the uid and the gid, and a closing \fBend <n>\fR line. It is the record
+that a restore is defined against, and the only file that makes a directory a
+backup.
+.TP
+.I /usr/share/keyrings/ubuntu-archive-keyring.gpg
+The keyring every signature check uses, shipped by the \fBubuntu\-keyring\fR
+package.
+.TP
+.I /usr/bin/gpgv
+The verifier, named by its fixed path and never resolved through \fBPATH\fR,
+shipped by the \fBgpgv\fR package.
+.SH ENVIRONMENT
+.TP
+.B NO_COLOR
+Any value, the empty one included, turns colour off. It is a display-only read:
+it reaches no decision, no path, no byte written and no exit code.
+.TP
+.B TMPDIR
+.br
+Selects where the verifier creates its private directory, which is also the
+\fBgpgv\fR home directory. It reaches no \fI/etc/apt\fR path and no byte
+written; a value that names no usable directory makes verification unavailable,
+and a write then fails closed.
+.TP
+.B LC_ALL, LANG
+Planned, not read today: no message catalog ships yet, so every message is
+English whatever these say. When they are read they will choose printed words
+only, and they will reach no decision, no path, a byte written or an exit code.
+.SH SECURITY
+Every candidate's \fI<codename>\-updates\fR \fBInRelease\fR is verified with
+\fB/usr/bin/gpgv\fR and the Ubuntu archive keyring before a write may use it,
+and only a \fByes\fR authorizes a write.
+.PP
+The plan a write executes is validated against the on-disk bytes it was
+computed from. A target that is not a regular file after resolution, a mismatch
+with the file as it is on disk, a digest the writer cannot recompute, or any
+field it cannot check aborts the write before its first byte.
+.PP
+The backup comes first: \fI/var/backups/apt-scout/<id>/\fR is created mode 0700
+with a 0600 \fBMANIFEST\fR, and a backup that fails aborts the whole write with
+nothing written.
+.PP
+Each target is replaced atomically: a temporary file in the same directory, an
+fsync, and a rename. Its mode and its owner are kept.
+.PP
+A non-root run cannot write: the writer refuses, and the run prints the
+\fBsudo\fR line and exits 3.
+.PP
+The write path runs no shell, resolves no command through \fBPATH\fR, makes no
+network request of its own, and reads no environment variable. The program
+never re-executes itself privileged, never invokes \fBsudo\fR and is never
+installed setuid: privilege comes only from the user running it as root.
+.PP
+The confirmation prompt is a safety rail, not a security control. \fB\-\-yes\fR
+removes only the prompt; the guarantee is the validation above.
+.SH EXAMPLES
+.nf
+.RS 4
+apt\-scout \-l              # preview: table and planned change
+sudo apt\-scout             # root: confirm, then write
+sudo apt\-scout \-y         # root: write without the prompt
+sudo apt\-scout \-c DE      # switch to a mirror in Germany instead
+apt\-scout \-a \-n          # every country, no geolocation lookups
+sudo apt\-scout \-v \-t 10  # the proof behind the report, 10 rows
+.RE
+.fi
+.SH LIMITATIONS
+\fB\-\-restore\fR, \fB\-\-tui\fR and \fB\-\-refresh\fR are not implemented yet:
+a run given one of them, or given the reserved \fB\-r\fR or \fB\-R\fR, fails as
+an unknown option with exit 2. This page documents only what ships, which is
+why they are absent from \fBOPTIONS\fR and from \fBMODES\fR. Localized pages
+are planned for the locales that ship a message catalog; this English page is
+the source of truth until then.
+.SH SEE ALSO
+.BR apt\-get (8),
+.BR sources.list (5),
+.BR gpgv (1)

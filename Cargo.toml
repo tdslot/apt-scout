@@ -19,4 +19,7 @@ maintainer = "Tadas Lotužas <tdslot@gmail.com>"
 depends = "gpgv, ubuntu-keyring"
 section = "admin"
 priority = "optional"
-assets = [["target/release/apt-scout", "usr/bin/", "755"]]
+assets = [
+    ["target/release/apt-scout", "usr/bin/", "755"],
+    ["man/apt-scout.1", "usr/share/man/man1/", "644"],
+]
