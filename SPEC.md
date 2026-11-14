@@ -16,7 +16,7 @@ Single command, no subcommands: `apt-scout [flags]`
 
 No flag is required. The uid decides whether the run writes: it discovers, ranks and recommends, and a non-root run prints the one line that repeats the run under `sudo` and exits 3, while the same command under `sudo` writes the best mirror. Every flag below is an override, never a step in the workflow.
 
-A short form exists for every flag that is implemented today: `-a`, `-c`, `-n`, `-s`, `-t`, `-v`, `-l`, `-y`, `-r` and `-h`. `--no-color` is the one implemented flag without a short form. `-R` stays reserved for `--refresh` and is rejected until that flag exists. Short flags are never bundled: `-lyc NO` is an unknown option. The line a non-root run prints always spells the long forms, so a copied command is unambiguous.
+A short form exists for every flag that is implemented today: `-a`, `-c`, `-n`, `-s`, `-t`, `-v`, `-l`, `-y`, `-r`, `-h` and `-V`. `--no-color` is the one implemented flag without a short form. `-R` stays reserved for `--refresh` and is rejected until that flag exists. Short flags are never bundled: `-lyc NO` is an unknown option. The line a non-root run prints always spells the long forms, so a copied command is unambiguous.
 
 | Flag | Meaning |
 | --- | --- |
@@ -32,6 +32,9 @@ A short form exists for every flag that is implemented today: `-a`, `-c`, `-n`, 
 | `-r`, `--restore` | Restore the newest backup instead of applying a mirror. Root is needed for the read of the backup and for the write. |
 | `-v`, `--verbose` | The proof behind the default report (Output): each row's AS number and same/`diff`/`unknown` match, the server's AS, each row's country and the address the run resolved, both pocket dates in full, the `-security` lag, the exact signature status, a redirect host in full, and the full text of every rejection reason. Display only; it changes no decision. |
 | `--no-color` | No colour in the report, whatever the terminal is. Display only; Output states the rules. No short form. |
+| `-V`, `--version` | Print the one line `apt-scout <version>` and exit 0. The version is the crate's own, so it cannot drift from `Cargo.toml`. |
+
+`--version` and `--help` are answered while the arguments are read, before distro detection and before any file is opened or any request made, so both work whatever the uid, on any distribution and with no network. Whichever of the two a run meets first answers it and exits 0; a usage error before them is still exit 2.
 
 Command, uid, and whether apt sources change:
 

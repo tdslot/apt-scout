@@ -175,6 +175,12 @@ words, the same columns and the same headings, minus the escape sequences.
 .TP
 .B \-h, \-\-help
 Print the help text and exit 0 before any run starts.
+.TP
+.B \-V, \-\-version
+Print one line, \fBapt\-scout\fR and the version of this build, and exit 0.
+Like \fB\-\-help\fR it is answered while the arguments are read, so it works
+whatever the uid, on any distribution and with no network; the first of the two
+a command line carries answers it, and a usage error before them still exits 2.
 .PP
 \fB\-R\fR is reserved for \fB\-\-refresh\fR and is not accepted yet, and
 neither are \fB\-\-refresh\fR and \fB\-\-tui\fR themselves. A run given

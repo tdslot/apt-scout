@@ -124,6 +124,10 @@ fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args, Strin
                     .filter(|n| *n > 0)
                     .ok_or(format!("{arg} '{n}' is not a positive number"))?;
             }
+            arg if version_requested(arg) => {
+                println!("{}", version_line());
+                std::process::exit(0);
+            }
             arg if help_requested(arg) => {
                 println!("{HELP}");
                 std::process::exit(0);
@@ -165,6 +169,19 @@ fn help_requested(arg: &str) -> bool {
     matches!(arg, "-h" | "--help")
 }
 
+/// `-V` and `--version` are one request, answered the way `--help` is: the argument that answers it
+/// exits the process where the loop meets it, so the first of the two a run was given wins and a
+/// usage error before it still wins over both. `-V` is capital because `-v` is `--verbose`.
+fn version_requested(arg: &str) -> bool {
+    matches!(arg, "-V" | "--version")
+}
+
+/// The one line `--version` prints. The version is the crate's own, so it cannot drift from
+/// `Cargo.toml` and needs no second place to be bumped (SPEC.md CLI).
+fn version_line() -> String {
+    format!("apt-scout {}", env!("CARGO_PKG_VERSION"))
+}
+
 /// `--help`, once: the flags (long form first, the short alias beside it), what a run does with
 /// them, the exit codes and one example each. The rule that used to repeat under every table lives
 /// here instead. Examples and the `sudo` line stay long-form, so a copied command is unambiguous.
@@ -175,6 +192,7 @@ USAGE
   apt-scout [OPTIONS]
 
   -h, --help          this text, then exit 0
+  -V, --version       the version of this build, then exit 0
 
 DISCOVERY
   -c, --country <CC>  two-letter country; overrides detection
@@ -3409,6 +3427,7 @@ mod tests {
         assert!(!help_requested("--helpp"));
         for (long, short) in [
             ("--help", "-h"),
+            ("--version", "-V"),
             ("--country", "-c"),
             ("--any", "-a"),
             ("--no-geo", "-n"),
@@ -3425,6 +3444,29 @@ mod tests {
                 "{pair} is missing from --help:\n{HELP}"
             );
         }
+    }
+
+    /// `-V` and `--version` are one request, answered the way `--help` is, and the line it prints is
+    /// the crate's own version so a bump in `Cargo.toml` is the only place a version is written.
+    #[test]
+    fn version_is_two_spellings_and_the_line_is_the_crate_version() {
+        assert!(version_requested("-V"));
+        assert!(version_requested("--version"));
+        // `-v` is `--verbose` and keeps it, and neither a bundle nor a misspelling is a request.
+        assert!(!version_requested("-v"));
+        assert!(!version_requested("-VV"));
+        assert!(!version_requested("--versions"));
+        assert!(!version_requested("-vV"));
+
+        let line = version_line();
+        assert_eq!(
+            line,
+            format!("apt-scout {}", env!("CARGO_PKG_VERSION")),
+            "the line names the crate version"
+        );
+        // One line, ending in no newline of its own: `println!` adds the one terminator.
+        assert_eq!(line.lines().count(), 1, "{line}");
+        assert!(!line.contains('\n'), "{line}");
     }
 
     /// One alias and one value per argument, never a bundle: `-lyc NO` stays an unknown option. The
