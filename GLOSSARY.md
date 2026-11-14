@@ -50,7 +50,7 @@
 
 **Primary mirror**: The first checked mirror in rank order; written as the active apt URI.
 
-**Alternative mirror**: Any other checked mirror; written as a `# alternative:` comment. apt does not use it.
+**Alternative mirror**: In the TUI, a checked mirror other than the primary, written above the changed line as a `# alternative:` comment. apt does not use it, and a non-interactive run has none: it writes the one mirror it recommends.
 
 **TUI**: The interactive terminal interface for reviewing mirrors and choosing which to use.
 
