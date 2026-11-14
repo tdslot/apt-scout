@@ -9,17 +9,21 @@
 //! rather than falling back to an older backup or to a subset of the plan.
 //!
 //! The plan this module returns is the plan the ordinary writer applies, so the write re-reads the
-//! same targets a second time and `capture` is what refuses a swap between the two reads.
+//! same targets a second time and `capture` is what refuses a swap between the two reads. [`run`] is
+//! the one production entry point: it builds that plan and hands it to the writer with no baseline,
+//! because what authorizes a restore is the backup the plan was re-derived from.
 
 use std::fs::{self, File, Metadata};
 use std::io::{self, Read};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::apply::{self, ApplyError, Entry};
+use crate::apply::{self, ApplyError, Entry, Outcome};
 use crate::digest::sha256;
 use crate::manifest::{self, Action, BackupId, ManifestEntry};
 use crate::plan::{Effect, Plan, PlannedWrite};
+use crate::verify::VerifiedDate;
 
 /// A backup this module has read and re-derived, and the only thing that authorizes a restore.
 ///
@@ -101,6 +105,49 @@ fn build_as(
     }
     let writes = derive(&dir, apt_root, manifest.entries(), owner_uid, owner_gid)?;
     Plan::for_restore(&ValidatedBackup { id }, writes).map_err(ApplyError::Plan)
+}
+
+/// Put the newest backup back: build its plan, then hand it to the one writer.
+///
+/// Root-only, like the read and the write it spans, and the read is checked first: the manifest is
+/// root's, so a non-root run is refused before the backup is opened. The writer's second argument is
+/// a mirror's freshness baseline, and a restore has no mirror: what authorizes its write is the
+/// backup `build` just re-derived, so this path passes `None` and never derives anything else to
+/// pass. `now` names the backup this restore makes before it writes, the same way the mirror path
+/// names its own.
+pub fn run(backup_root: &Path, apt_root: &Path) -> Result<Outcome, ApplyError> {
+    apply::require_root()?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .map_err(|e| {
+            refusal(
+                backup_root,
+                format!(
+                    "cannot read the system clock: {e}, and a restore names its own backup with it"
+                ),
+            )
+        })?;
+    run_as(backup_root, apt_root, now, 0, 0, apply::apply)
+}
+
+/// The one restore path, with the clock, the run's owner and the writer as parameters.
+///
+/// Private for the same reason `build_as` is: `0, 0` is the only owner production reaches, and
+/// `apply::apply` the only writer it hands the plan to, because the writer keeps one entry point for
+/// both forms. A unit test is not root and never will be, so it passes `apply::run_for_test` here
+/// and can watch the baseline this function hands over, which for a restore is always `None`.
+fn run_as(
+    backup_root: &Path,
+    apt_root: &Path,
+    now_secs: u64,
+    owner_uid: u32,
+    owner_gid: u32,
+    write: impl FnOnce(&Plan, Option<&VerifiedDate>, u64) -> Result<Outcome, ApplyError>,
+) -> Result<Outcome, ApplyError> {
+    let plan = build_as(backup_root, apt_root, owner_uid, owner_gid)?;
+    // A restore is authorized by its backup, not by a mirror, so there is no baseline to hand over.
+    write(&plan, None, now_secs)
 }
 
 /// Refuse a backup file apt-scout did not write, naming the path and the fact that failed.
@@ -427,6 +474,7 @@ fn derive_one(
 #[rustfmt::skip]
 mod tests {
     use super::*;
+    use crate::apply::Touched;
     use crate::manifest::{Action, ManifestEntry};
     use crate::plan::{Authority, FileState, Target};
     use std::os::unix::fs::{PermissionsExt, symlink};
@@ -987,6 +1035,79 @@ mod tests {
         // The root entry point refuses a non-root run before the backup is opened.
         if uid != 0 {
             assert!(matches!(build(&backups, &apt), Err(ApplyError::NotRoot)));
+        }
+    }
+
+    /// Criterion 8: `run` is the one production entry point — it re-derives the plan and hands it
+    /// to the one writer with no baseline — and a second run against the same backup is refused by
+    /// the record-versus-disk rule rather than guessed.
+    ///
+    /// The baseline is asserted on the argument and not on the outcome, because `check_freshness`
+    /// accepts either value for a restore plan: only the value the run chose shows which it passed.
+    #[test]
+    fn run_restores_the_backup_and_a_second_run_is_refused() {
+        let root = TempRoot::new("run");
+        let (uid, gid) = root.owner();
+        let apt = root.apt();
+        let backups = root.backups();
+        let dir = backup_dir(&backups, ID);
+        // The machine a mirror run left behind: sources.list points at the mirror and the security
+        // source exists, while the backup holds what both were before that run.
+        let list = apt_file(&apt, LIST, MIRROR, 0o644);
+        let security = apt_file(&apt, SECURITY, CREATED, FILE_MODE);
+        let list_mode = state(&list).mode;
+        write_copy(&dir, LIST, OLD, list_mode);
+        write_manifest(&dir, ID, &[
+            entry(SECURITY, Action::Create, CREATED, state(&security).mode),
+            entry(LIST, Action::Replace, OLD, list_mode),
+        ]);
+
+        let mut handed = Some(0i64);
+        let outcome = run_as(&backups, &apt, NOW + 1, uid, gid, |plan, baseline, now| {
+            handed = baseline.map(|date| date.seconds());
+            apply::run_for_test(&apt, &backups, plan, baseline, now, uid, gid)
+        })
+        .expect("the newest backup is read and its plan applied");
+        assert_eq!(handed, None, "a restore hands the writer no baseline");
+
+        // The bytes, the mode and the owner are the record's again, and the creation is gone.
+        let restored = state(&list);
+        assert_eq!(restored.bytes, OLD, "the replace put the backup's bytes back");
+        assert_eq!(restored.mode, list_mode, "the mode is the record's");
+        assert_eq!((restored.uid, restored.gid), (uid, gid), "the owner is the record's");
+        assert!(!security.exists(), "the file the manifest records as created is removed");
+        assert_eq!(outcome.backup_id, BackupId::from_secs(NOW + 1).expect("id"));
+        assert_eq!(outcome.touched, vec![
+            Touched { target: Target::parse(LIST).expect("target"), effect: Effect::Replace },
+            Touched { target: Target::parse(SECURITY).expect("target"), effect: Effect::Remove },
+        ], "the replacement lands before the removal");
+
+        // The restore is itself a write, so it backed up what it replaced under its own id, which
+        // is now the newest backup a second run reads.
+        let restore_dir = backups.join("20261112T203046Z");
+        assert_eq!(fs::read(restore_dir.join(LIST)).expect("the restore's copy"), MIRROR,
+            "the restore backed up the file it replaced");
+        // A root run's backup records root ownership, which is the only ownership `manifest::parse`
+        // accepts and which a non-root test cannot create; rewritten that one way, the manifest is
+        // the record the restore's own run would have left behind.
+        write_manifest(&restore_dir, "20261112T203046Z", &[
+            entry(SECURITY, Action::Replace, CREATED, FILE_MODE),
+            entry(LIST, Action::Replace, MIRROR, list_mode),
+        ]);
+
+        // The removed file is recorded there as a replacement whose copy still exists, and the
+        // target does not: the record and the disk disagree, so the second restore writes nothing.
+        let err = run_as(&backups, &apt, NOW + 2, uid, gid, |plan, baseline, now| {
+            apply::run_for_test(&apt, &backups, plan, baseline, now, uid, gid)
+        })
+        .expect_err("a second restore is refused");
+        assert!(matches!(err, ApplyError::Changed { .. }), "{err}");
+        assert!(err.to_string().contains("not on disk"), "{err}");
+        assert_eq!(state(&list).bytes, OLD, "the refused run wrote nothing");
+
+        // The root entry point refuses a non-root run before the backup is opened, like `build`.
+        if uid != 0 {
+            assert!(matches!(run(&backups, &apt), Err(ApplyError::NotRoot)));
         }
     }
 }
