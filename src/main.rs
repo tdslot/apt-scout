@@ -201,6 +201,11 @@ fn sudo_command(args: &Args) -> String {
     if args.verbose {
         line.push_str(" --verbose");
     }
+    // The report's display is part of the run the line reproduces: a copy-pasted command must not
+    // colour what the user asked it not to colour.
+    if args.no_color {
+        line.push_str(" --no-color");
+    }
     line
 }
 
@@ -3079,14 +3084,22 @@ mod tests {
         assert_eq!(sudo_command(&plain), "sudo apt-scout");
 
         let flags = parse_args_from(
-            ["--country", "lt", "--no-geo", "--top", "3", "--https-only"]
-                .into_iter()
-                .map(str::to_string),
+            [
+                "--country",
+                "lt",
+                "--no-geo",
+                "--top",
+                "3",
+                "--https-only",
+                "--no-color",
+            ]
+            .into_iter()
+            .map(str::to_string),
         )
         .unwrap();
         assert_eq!(
             sudo_command(&flags),
-            "sudo apt-scout --country LT --no-geo --top 3 --https-only"
+            "sudo apt-scout --country LT --no-geo --top 3 --https-only --no-color"
         );
     }
 
