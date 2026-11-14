@@ -1,7 +1,6 @@
-#![cfg_attr(not(test), allow(dead_code))] // the CLI reaches this reader in D11b
 //! Re-derive a plan from the newest backup. The manifest is the source of truth, not a list.
 //!
-//! Nothing here is reachable from a CLI path yet, and nothing here trusts a disk: the backup root,
+//! The CLI reaches this reader with `--restore`, and nothing here trusts a disk: the backup root,
 //! the directory, the `MANIFEST` and every copy it names are checked against `docs/threat-model.md`
 //! §8 G1 (a root-owned regular file in mode 0600, never a symlink, in a root-owned 0700 directory)
 //! before a byte of the manifest is parsed, and then every record is re-derived against the copy it
@@ -9,9 +8,11 @@
 //! rather than falling back to an older backup or to a subset of the plan.
 //!
 //! The plan this module returns is the plan the ordinary writer applies, so the write re-reads the
-//! same targets a second time and `capture` is what refuses a swap between the two reads. [`run`] is
-//! the one production entry point: it builds that plan and hands it to the writer with no baseline,
-//! because what authorizes a restore is the backup the plan was re-derived from.
+//! same targets a second time and `capture` is what refuses a swap between the two reads. Two calls
+//! and one plan: [`build`] re-derives the newest backup into a `Plan`, and [`run`] writes exactly the
+//! plan it is handed, with no baseline, because what authorizes a restore is the backup that plan was
+//! re-derived from. Nothing re-derives a plan between the confirmation a person answers and the
+//! write that follows it, so the plan a prompt named is the plan that reaches the disk.
 
 use std::fs::{self, File, Metadata};
 use std::io::{self, Read};
@@ -106,41 +107,36 @@ fn build_as(
     Plan::for_restore(&ValidatedBackup { id }, writes).map_err(ApplyError::Plan)
 }
 
-/// Put the newest backup back: build its plan, then hand it to the one writer.
+/// Write exactly this plan: the one a confirmation named, or the one [`build`] just re-derived.
 ///
-/// Root-only, like the read and the write it spans, and the read is checked first: the manifest is
-/// root's, so a non-root run is refused before the backup is opened. The writer's second argument is
-/// a mirror's freshness baseline, and a restore has no mirror: what authorizes its write is the
-/// backup `build_as` just re-derived, so this path passes `None` and never derives anything else to
-/// pass. `now` names the backup this restore makes before it writes, the same way the mirror path
-/// names its own. Both roots bind the read only, because `apply::apply` is the one production writer
-/// and it writes to the crate's fixed `/etc/apt` and `/var/backups/apt-scout`: that asymmetry is why
-/// a test reaches this path through `run_as` with `apply::run_for_test`.
-pub fn run(backup_root: &Path, apt_root: &Path) -> Result<Outcome, ApplyError> {
-    apply::require_root()?;
-    // The clock is the mirror path's, so the two cannot drift; its refusal is typed for `main`, so
-    // it is mapped into this module's error instead of the idiom being spelled a second time.
-    let now = crate::now_secs().map_err(|(_, reason)| refusal(backup_root, reason))?;
-    run_as(backup_root, apt_root, now, 0, 0, apply::apply)
+/// The writer's second argument is a mirror's freshness baseline, and a restore has no mirror: what
+/// authorizes its write is the backup the plan was re-derived from, so this path passes `None` and
+/// derives nothing of its own. That is the whole point of taking the plan: a backup that appeared or
+/// vanished while a person was deciding cannot change what is written, and a run never prints one
+/// plan beside another plan's outcome. `now_secs` names the backup this restore makes before it
+/// writes, and the CLI takes it once so the directory its confirmation names is the one the writer
+/// creates, the same way the mirror path names its own. Root is not re-checked here: a plan of this
+/// shape only comes from `build`, which refuses a non-root run, and `apply::apply` checks again on
+/// its own entry point. That entry point is why a test reaches this path through `run_as` with
+/// `apply::run_for_test`: `apply::apply` is the one production writer, and it writes to the crate's
+/// fixed `/etc/apt` and `/var/backups/apt-scout`.
+pub fn run(plan: &Plan, now_secs: u64) -> Result<Outcome, ApplyError> {
+    run_as(plan, now_secs, apply::apply)
 }
 
-/// The one restore path, with the clock, the run's owner and the writer as parameters.
+/// The one restore writer, with the clock and the writer as parameters.
 ///
-/// Private for the same reason `build_as` is: `0, 0` is the only owner production reaches, and
-/// `apply::apply` the only writer it hands the plan to, because the writer keeps one entry point for
-/// both forms. A unit test is not root and never will be, so it passes `apply::run_for_test` here
-/// and can watch the baseline this function hands over, which for a restore is always `None`.
+/// Private so that `apply::apply` is the only writer production hands a plan to, because the writer
+/// keeps one entry point for both forms. A unit test is not root and never will be, so it passes
+/// `apply::run_for_test` here and can watch the baseline this function hands over, which for a
+/// restore is always `None`.
 fn run_as(
-    backup_root: &Path,
-    apt_root: &Path,
+    plan: &Plan,
     now_secs: u64,
-    owner_uid: u32,
-    owner_gid: u32,
     write: impl FnOnce(&Plan, Option<&VerifiedDate>, u64) -> Result<Outcome, ApplyError>,
 ) -> Result<Outcome, ApplyError> {
-    let plan = build_as(backup_root, apt_root, owner_uid, owner_gid)?;
     // A restore is authorized by its backup, not by a mirror, so there is no baseline to hand over.
-    write(&plan, None, now_secs)
+    write(plan, None, now_secs)
 }
 
 /// Refuse a backup file apt-scout did not write, naming the path and the fact that failed.
@@ -1031,9 +1027,9 @@ mod tests {
         }
     }
 
-    /// Criterion 8: `run` is the one production entry point — it re-derives the plan and hands it
-    /// to the one writer with no baseline — and a second run against the same backup is refused by
-    /// the record-versus-disk rule rather than guessed.
+    /// Criterion 8: `build` re-derives the plan and `run` writes it with no baseline — the two
+    /// calls the CLI makes — and a second run against the same backup is refused by the
+    /// record-versus-disk rule rather than guessed.
     ///
     /// The baseline is asserted on the argument and not on the outcome, because `check_freshness`
     /// accepts either value for a restore plan: only the value the run chose shows which it passed.
@@ -1055,8 +1051,9 @@ mod tests {
             entry(LIST, Action::Replace, OLD, list_mode),
         ]);
 
+        let plan = build_as(&backups, &apt, uid, gid).expect("the backup is read");
         let mut handed = Some(0i64);
-        let outcome = run_as(&backups, &apt, NOW + 1, uid, gid, |plan, baseline, now| {
+        let outcome = run_as(&plan, NOW + 1, |plan, baseline, now| {
             handed = baseline.map(|date| date.seconds());
             apply::run_for_test(&apt, &backups, plan, baseline, now, uid, gid)
         })
@@ -1090,18 +1087,55 @@ mod tests {
         ]);
 
         // The removed file is recorded there as a replacement whose copy still exists, and the
-        // target does not: the record and the disk disagree, so the second restore writes nothing.
-        let err = run_as(&backups, &apt, NOW + 2, uid, gid, |plan, baseline, now| {
-            apply::run_for_test(&apt, &backups, plan, baseline, now, uid, gid)
-        })
-        .expect_err("a second restore is refused");
-        assert!(matches!(err, ApplyError::Changed { .. }), "{err}");
-        assert!(err.to_string().contains("not on disk"), "{err}");
+        // target does not: the record and the disk disagree, so a second restore is refused whole
+        // and writes nothing.
+        let refused = build_as(&backups, &apt, uid, gid).expect_err("a second restore is refused");
+        assert!(matches!(refused, ApplyError::Changed { .. }), "{refused}");
+        assert!(refused.to_string().contains("not on disk"), "{refused}");
         assert_eq!(state(&list).bytes, OLD, "the refused run wrote nothing");
+    }
 
-        // The root entry point refuses a non-root run before the backup is opened, like `build`.
-        if uid != 0 {
-            assert!(matches!(run(&backups, &apt), Err(ApplyError::NotRoot)));
-        }
+    /// The plan a confirmation named is the plan that is written: a backup that appears while the
+    /// user is deciding changes nothing, because `run` is handed that plan and re-derives nothing.
+    ///
+    /// The fixture makes the two plans differ — a newer backup, complete and valid, with other
+    /// bytes appears between the build and the write — so a re-derivation would hand the writer the
+    /// newer plan and write its bytes where this asserts the confirmed plan's.
+    #[test]
+    fn the_plan_a_confirmation_named_is_the_plan_that_is_written() {
+        let root = TempRoot::new("confirmed-plan");
+        let (uid, gid) = root.owner();
+        let apt = root.apt();
+        let backups = root.backups();
+        let list = apt_file(&apt, LIST, MIRROR, 0o644);
+        let mode = state(&list).mode;
+        let dir = backup_dir(&backups, ID);
+        write_copy(&dir, LIST, OLD, mode);
+        write_manifest(&dir, ID, &[entry(LIST, Action::Replace, OLD, mode)]);
+        // The plan the confirmation prints.
+        let plan = build_as(&backups, &apt, uid, gid).expect("the backup is read");
+
+        // The window the prompt opens: a newer backup lands, complete and valid, and says something
+        // else. `build` would return that one now, and a second derivation would write its bytes.
+        let later = b"deb https://later.example/ubuntu noble main\n";
+        let newer = backup_dir(&backups, NEWER);
+        write_copy(&newer, LIST, later, mode);
+        write_manifest(&newer, NEWER, &[entry(LIST, Action::Replace, later, mode)]);
+        // The window really holds a different newest backup, so a re-derivation would differ.
+        let redone = build_as(&backups, &apt, uid, gid).expect("the newer backup is read");
+        assert_ne!(redone.authority(), plan.authority(), "the window changed which plan is newest");
+
+        let mut handed: Option<Authority> = None;
+        let outcome = run_as(&plan, NOW + 1, |write_plan, baseline, now| {
+            handed = Some(write_plan.authority().clone());
+            apply::run_for_test(&apt, &backups, write_plan, baseline, now, uid, gid)
+        })
+        .expect("the plan the confirmation named is written");
+        assert_eq!(handed.as_ref(), Some(plan.authority()),
+            "the writer is handed the confirmed plan, not one re-derived after the prompt");
+        assert_eq!(state(&list).bytes, OLD, "the confirmed plan's bytes, not the newer backup's");
+        assert_eq!(outcome.touched, vec![
+            Touched { target: Target::parse(LIST).expect("target"), effect: Effect::Replace },
+        ], "one target, the confirmed plan's");
     }
 }
