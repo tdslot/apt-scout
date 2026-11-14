@@ -813,7 +813,7 @@ else
   fail "W26 --any -> outside=$outside lt-hosts=$lt_hosts: $(printf '%s\n' "$run2_out" | head -14)"
 fi
 
-# W27–W31 are restore: the flag the user can type, against a backup a real write made. The backup
+# W27–W33 are restore: the flag the user can type, against a backup a real write made. The backup
 # every case restores is the harness's fixed `20261112T000000Z`, and `apply-pop` seeds it offline
 # with the one creation (`system-security.sources`) and one replacement (`ubuntu.sources`) a restore
 # has to undo. The restore's own backup is named from the container's clock, so a case never spells
@@ -925,6 +925,52 @@ if [ "$rc" -eq 0 ] && printf '%s\n' "$got" | grep -qx 'rc=1' \
   pass "W31 target replaced behind the backup's back -> refused by name, canary and /etc/apt identical"
 else
   fail "W31 target replaced behind the backup's back -> exit $rc: $(echo "$got" | head -10)"
+fi
+
+# W32 (S10) Offline: the interactive confirmation, answered yes. The same restore as W27 without
+#   `--yes`, so the path a person actually takes runs: the run names the backup it reads, the files
+#   it writes and the backup it creates, asks once, and a `y` on standard input writes the plan it
+#   printed. The block after the prompt is the one `--yes` prints, so the prompt's own path is
+#   covered and not only the flag's. Standard input is a pipe, so the answer is not echoed and the
+#   block's heading lands on the prompt's line; that glue is what this asserts.
+rc=0; got=$(WCASE_DIGESTS=/etc/apt/sources.list.d/ubuntu.sources wcase ubuntu:24.04 "$FIX_DEB822" \
+  "/apt-scout __write-harness apply-pop >/dev/null 2>&1 && printf 'y\\n' | /apt-scout --restore" 2>&1) || rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s\n' "$got" | grep -qx 'rc=0' \
+  && printf '%s\n' "$got" | grep -qxF 'Restore backup 20261112T000000Z' \
+  && printf '%s\n' "$got" | grep -qxF '  write /etc/apt/sources.list.d/ubuntu.sources' \
+  && printf '%s\n' "$got" | grep -qxF '  remove /etc/apt/sources.list.d/system-security.sources' \
+  && printf '%s\n' "$got" | grep -qE '^  copies: /var/backups/apt-scout/[0-9]{8}T[0-9]{6}Z$' \
+  && [[ "$got" == *'Restore this backup? [y/N] Restore'* ]] \
+  && printf '%s\n' "$got" | grep -qxF '  backup: 20261112T000000Z' \
+  && printf '%s\n' "$got" | grep -qxF '  wrote /etc/apt/sources.list.d/ubuntu.sources' \
+  && printf '%s\n' "$got" | grep -qxF '  removed /etc/apt/sources.list.d/system-security.sources' \
+  && [[ "$got" == *"same=yes"* ]] && [[ "$got" == *"digests=unchanged"* ]] \
+  && [[ "$got" == *"backups=yes"* ]]; then
+  pass "W32 restore prompt -> a yes writes the plan it printed and prints the same block"
+else
+  fail "W32 restore prompt -> exit $rc: $(echo "$got" | head -16)"
+fi
+
+# W33 (S10) Offline: the interactive confirmation, answered no. A `n` is the user's decision and not
+#   a failure: exit 0, `/etc/apt` byte-identical, no second backup, and the sentence `SPEC.md` CLI and
+#   `man/apt-scout.1` EXIT STATUS name. The seed write runs in the setup, so the snapshot this case
+#   compares is the post-write state a declined restore must leave alone; a run that wrote through
+#   the answer would show as same=no. The prompt is on stdout with no trailing newline, so the
+#   sentence follows it on that line.
+rc=0; got=$(WCASE_DIGESTS=/etc/apt/sources.list.d/ubuntu.sources wcase ubuntu:24.04 "$FIX_DEB822
+/apt-scout __write-harness apply-pop >/dev/null 2>&1 || echo SEED_FAILED" \
+  "printf 'n\\n' | /apt-scout --restore > /tmp/no 2>&1; echo restore-rc=\$?
+echo backups-count=\$(find /var/backups/apt-scout -mindepth 1 -maxdepth 1 -type d | wc -l)
+cat /tmp/no" 2>&1) || rc=$?
+if [ "$rc" -eq 0 ] && printf '%s\n' "$got" | grep -qx 'restore-rc=0' \
+  && printf '%s\n' "$got" | grep -qx 'backups-count=1' \
+  && [[ "$got" == *'Restore this backup? [y/N] Nothing was written: the backup is still the newest one.'* ]] \
+  && [[ "$got" != *'  backup: '* ]] && [[ "$got" != *'  wrote '* ]] && [[ "$got" != *'  removed '* ]] \
+  && [[ "$got" == *"same=yes"* ]] && [[ "$got" == *"digests=unchanged"* ]]; then
+  pass "W33 restore prompt -> a no writes nothing, starts no backup and exits 0"
+else
+  fail "W33 restore prompt -> exit $rc: $(echo "$got" | head -16)"
 fi
 
 exit $status
