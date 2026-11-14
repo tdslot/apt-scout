@@ -8,17 +8,21 @@
 
 **Reference**: The canonical `archive.ubuntu.com` `InRelease` files; the baseline for freshness.
 
-**Lag**: How much older a mirror's `InRelease` `Date` is than the reference for the same pocket.
+**Lag** (shown in the ranked table as `behind`): How much older a mirror's `InRelease` `Date` is than the reference for the same pocket, in minutes, `0m` when it matches. It is freshness, never network latency, which is `latency`.
+
+**Latency**: The measured round trip of a mirror's `<codename>-updates` request, time to first byte; the ranked table's `latency` column. It is speed of response, never freshness, which is `behind`.
 
 **Widened run**: A run whose own country produced no usable mirror, so the mirrors of every other country were added to its candidate set once and ranked together. It prints why it widened, and a run that found a usable mirror in its own country never becomes one.
 
 **Freshness**: A mirror is fresh when its `<codename>-updates` lag is within `MAX_LAG` (24 hours). The release pocket is not compared and `-security` lag is informational. Stale mirrors are rejected; lagging but fresh mirrors rank lower.
 
-**verified** (signature status): The `<codename>-updates` `InRelease` carries a good OpenPGP signature from the Ubuntu archive keyring. The only status a write may trust.
+**verified** (signature status): The `<codename>-updates` `InRelease` carries a good OpenPGP signature from the Ubuntu archive keyring. The only status a write may trust, and the ranked table's `verified` column shows it as `yes`.
 
-**invalid** (signature status): The `InRelease` was readable but is unsigned, altered, or signed by an unknown key.
+**invalid** (signature status): The `InRelease` was readable but is unsigned, altered, or signed by an unknown key. The table shows it as `no`, and the exact status belongs to `--verbose`.
 
-**unavailable** (signature status): Verification could not run: `gpgv` or the keyring is missing, the file is over the size limit, or the check timed out or failed to execute. Ranking still works; a write does not.
+**unavailable** (signature status): Verification could not run: `gpgv` or the keyring is missing, the file is over the size limit, or the check timed out or failed to execute. The table shows it as `?`; ranking still works and a write does not.
+
+**Default report**: What a run prints without `--verbose`: the facts a person choosing a mirror acts on — the identity line, `Sources`, the table, the recommendation and the planned change. `--verbose` adds the proof that a reader checks the run with, and changes nothing else.
 
 **Server AS**: The autonomous system of the machine running apt-scout, as reported by the first geolocation source that answers.
 
@@ -46,7 +50,7 @@
 
 **Primary mirror**: The first checked mirror in rank order; written as the active apt URI.
 
-**Alternative mirror**: Any other checked mirror; written as a `# alternative:` comment. apt does not use it.
+**Alternative mirror**: In the TUI, a checked mirror other than the primary, written above the changed line as a `# alternative:` comment. apt does not use it, and a non-interactive run has none: it writes the one mirror it recommends.
 
 **TUI**: The interactive terminal interface for reviewing mirrors and choosing which to use.
 

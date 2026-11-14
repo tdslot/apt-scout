@@ -19,6 +19,7 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::ExitCode;
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -143,9 +144,20 @@ MODE
   -y, --yes           skip the one confirmation
 
 TABLE
-  sig reads ok only for a verified -updates InRelease; only ok may authorize a write.
-  notes reads sec:<n>m for a -security lag and redir:<host> for a redirect to another host;
-  a host that does not fit is cut and ends in ~; --verbose prints it in full.
+  behind    how far this mirror's -updates package lists trail the freshest date the run
+            knows, in minutes; 0m means up to date, and it is freshness, never latency.
+  latency   the network round trip to the mirror's -updates request, never freshness.
+  verified  the -updates InRelease signature: yes = gpgv accepted it with the Ubuntu archive
+            keyring; no = readable but unsigned, altered or signed by an unknown key;
+            ? = verification could not run (no gpgv or keyring, oversized body, timeout).
+            Only yes may authorize a write; no and ? never do.
+  notes     redir:<host> for a redirect to another host; a host that does not fit is cut
+            and ends in ~.
+  --verbose adds the proof behind these words: each row's AS number and its same/diff/unknown
+  match with the server (and the chosen mirror's in the recommendation), the server's AS on the
+  context line, each row's country and resolved address, both pocket dates in full, the
+  -security lag, the exact signature status, a redirect host uncut, and the full text of every
+  rejection reason.
 
 DISPLAY
   --no-color          no colour in the report, even on a terminal
@@ -739,88 +751,333 @@ fn done_line(usable: usize, rejected: usize, elapsed: Duration) -> String {
     )
 }
 
+/// One Braille cell of the animation, advanced one frame about every `SPIN_INTERVAL` for as long as a
+/// phase is active (SPEC.md Output). Ten cells, so the loop takes about a second to turn over.
+const SPIN: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+/// About ten frames a second: fast enough to read as motion, cheap enough that a frame costs nothing
+/// beside the probes it is drawn over.
+const SPIN_INTERVAL: Duration = Duration::from_millis(100);
+
+/// The frame the animation shows once a phase has been active for `elapsed`. A pure function of the
+/// time, so the animation can be asserted without a clock, a thread or a terminal (SPEC.md Output).
+fn spinner_frame(elapsed: Duration) -> char {
+    let frame = (elapsed.as_millis() / SPIN_INTERVAL.as_millis()) as usize;
+    SPIN[frame % SPIN.len()]
+}
+
+/// The one line the animation draws: the frame and the phase's own text, so the probing count rides
+/// inside the same frame instead of becoming a second line (SPEC.md Output). Pure.
+fn spinner_line(elapsed: Duration, text: &str) -> String {
+    format!("{} {text}", spinner_frame(elapsed))
+}
+
+/// What the run tells the animation. Both drawing messages carry an acknowledgement, so the caller
+/// learns that the line it asked for is on the screen — a phase is visible the moment the run names
+/// it, not on the next frame — and that a line is gone before a warning takes one of its own.
+/// `Phase` is the run naming a phase and `Text` is the same phase's line changing under it: the frame
+/// is a pure function of the time **this** phase has been active (SPEC.md Output), so a phase starts
+/// the clock and a count does not.
+enum Tick {
+    Phase(String, mpsc::SyncSender<()>),
+    Text(String, mpsc::SyncSender<()>),
+    Hide(mpsc::SyncSender<()>),
+    Stop,
+}
+
+/// What one wait on the animation's channel produced. Its own type so the loop below can be driven by
+/// a scripted wait in a test: no thread, no sleep and no terminal (SPEC.md Output).
+enum Wake {
+    Message(Tick),
+    Closed,
+    Timeout,
+}
+
+/// The animation's whole loop, and the only place a frame is drawn: draw the line the phase handed it,
+/// then wait up to `SPIN_INTERVAL`. A `Phase` replaces the line, starts the frame's clock over and is
+/// drawn at once; a `Text` replaces the line without touching that clock, because a count changed and
+/// the phase did not; a `Hide` erases the line and acknowledges, `Stop` or a closed channel ends the
+/// loop, and a timeout is what advances the frame. So the frame moves with time and not with a change
+/// of count — the whole point of the ticker: a phase that runs for five seconds visibly moves — and a
+/// long run still opens every phase on the first cell (SPEC.md Output). A frame does nothing but
+/// draw, so no probe's timeout, measurement, rejection or join order changes because one was drawn.
+fn run_ticker<S: Sink>(sink: &mut S, mut wait: impl FnMut(Duration) -> Wake) {
+    let mut text: Option<String> = None;
+    // The draw a message asked for, whose sender is released once the line is on the screen.
+    let mut ack: Option<mpsc::SyncSender<()>> = None;
+    let mut elapsed = Duration::ZERO;
+    loop {
+        if let Some(text) = text.as_deref() {
+            sink.rewrite(&spinner_line(elapsed, text));
+        }
+        if let Some(ack) = ack.take() {
+            let _ = ack.send(());
+        }
+        match wait(SPIN_INTERVAL) {
+            Wake::Message(Tick::Phase(next, drawn)) => {
+                text = Some(next);
+                elapsed = Duration::ZERO;
+                ack = Some(drawn);
+            }
+            Wake::Message(Tick::Text(next, drawn)) => {
+                text = Some(next);
+                ack = Some(drawn);
+            }
+            Wake::Message(Tick::Hide(hidden)) => {
+                sink.clear();
+                text = None;
+                let _ = hidden.send(());
+            }
+            Wake::Message(Tick::Stop) | Wake::Closed => return,
+            Wake::Timeout => elapsed += SPIN_INTERVAL,
+        }
+    }
+}
+
+/// The sink the animation thread draws through: the run's own sink, behind the mutex both of them
+/// write through, so a phase line and a frame can never split one line between them.
+struct Locked<S> {
+    sink: Arc<Mutex<S>>,
+}
+
+impl<S: Sink> Sink for Locked<S> {
+    fn rewrite(&mut self, line: &str) {
+        lock(&self.sink).rewrite(line);
+    }
+
+    fn clear(&mut self) {
+        lock(&self.sink).clear();
+    }
+
+    fn settle(&mut self, line: &str) {
+        lock(&self.sink).settle(line);
+    }
+}
+
+/// The one mutex, with poisoning read as "take the data anyway": progress is decoration, so a panic
+/// somewhere else must not turn a dropped line into a second panic. Never `unwrap`, as everywhere else
+/// outside a test.
+fn lock<S>(sink: &Mutex<S>) -> std::sync::MutexGuard<'_, S> {
+    match sink.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+/// The animation thread and the channel to it. `hide` blocks until the line is off the screen, `stop`
+/// joins, and `Drop` stops it, so an early `return Err` in `run()` cannot leave a thread drawing a
+/// frame into the report that follows.
+struct Ticker {
+    tx: mpsc::Sender<Tick>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl Ticker {
+    /// Start the animation over the run's sink. Standard library only: a thread, a channel, the
+    /// mutex and the clock, so no terminal or progress crate is added for one cell of Braille.
+    fn start<S: Sink + Send + 'static>(sink: Arc<Mutex<S>>) -> Self {
+        let (tx, rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            let mut locked = Locked { sink };
+            run_ticker(&mut locked, |interval| match rx.recv_timeout(interval) {
+                Ok(message) => Wake::Message(message),
+                Err(mpsc::RecvTimeoutError::Timeout) => Wake::Timeout,
+                Err(mpsc::RecvTimeoutError::Disconnected) => Wake::Closed,
+            });
+        });
+        Ticker {
+            tx,
+            handle: Some(handle),
+        }
+    }
+
+    /// Hand the animation a new line and wait for it to be drawn, so the phase is on screen before the
+    /// work it names starts. One writer draws the line, so a phase and a frame can never split it.
+    fn draw(&self, tick: fn(String, mpsc::SyncSender<()>) -> Tick, line: String) {
+        let (ack, drawn) = mpsc::sync_channel(0);
+        if self.tx.send(tick(line, ack)).is_err() {
+            // The animation is already gone; there is no line to put up and nothing to wait for.
+            return;
+        }
+        let _ = drawn.recv();
+    }
+
+    /// A phase starts: the line goes up and the frame's clock starts over.
+    fn phase(&self, line: String) {
+        self.draw(Tick::Phase, line);
+    }
+
+    /// The phase's line changes without the phase changing, so the clock keeps running.
+    fn text(&self, line: String) {
+        self.draw(Tick::Text, line);
+    }
+
+    /// Erase the line and wait until it is gone, so a warning that follows starts on a line of its own
+    /// and nothing the animation drew can overwrite it (SPEC.md Output).
+    fn hide(&self) {
+        let (ack, acked) = mpsc::sync_channel(0);
+        if self.tx.send(Tick::Hide(ack)).is_err() {
+            // The animation is already gone, so it has nothing left on the screen to erase.
+            return;
+        }
+        let _ = acked.recv();
+    }
+
+    /// Stop and join: after this call no frame can be drawn, so the summary and the report that follow
+    /// are the last things on that line.
+    fn stop(&mut self) {
+        let Some(handle) = self.handle.take() else {
+            return;
+        };
+        let _ = self.tx.send(Tick::Stop);
+        let _ = handle.join();
+    }
+}
+
+impl Drop for Ticker {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// The probing line: `probing 3 mirrors… 1/3`. `done` is how many probes the whole run has finished
+/// and `total` how many it has to probe, which `await_probes` reads from the probes themselves rather
+/// than from the joins. Both grow when the one widening adds candidates, so the line never runs
+/// backwards (SPEC.md Output). Pure, so the count can be asserted without a terminal.
+fn probing_line(done: usize, total: usize) -> String {
+    let noun = if total == 1 { "mirror" } else { "mirrors" };
+    format!("probing {total} {noun}… {done}/{total}")
+}
+
 /// The status line a run shows while it works: one line, on standard error, rewritten in place, and
-/// only when standard error is a terminal (SPEC.md Output). `enabled == false` makes every method
-/// return at once, so a piped run takes the same code path and writes nothing at all — no line and no
-/// "still working" notice.
-struct Progress<S: Sink> {
-    sink: S,
-    enabled: bool,
+/// only when standard error is a terminal (SPEC.md Output). With no terminal there is no `Ticker` at
+/// all — nothing is started to draw a line — so a piped run takes the same code path and writes
+/// nothing: no line, no frame and no "still working" notice.
+struct Progress<S: Sink + Send + 'static> {
+    /// The run's sink, shared with the animation thread, so the summary the run writes and a frame the
+    /// animation draws can never split one line between them.
+    sink: Arc<Mutex<S>>,
+    /// The animation, when there is one. `None` is a piped run.
+    ticker: Option<Ticker>,
     started: Instant,
     /// How many probes this run has finished. Pass 1 and the one widening of SPEC step 4 both count
     /// into it, because both probe the run's one candidate set: a count that restarted would show a
     /// viewer `30/30` and then `0/30` for the same set.
     probed: usize,
+    /// Whether probing has named itself yet. The first probing line of a run starts that phase, so the
+    /// frame's clock starts with it; the count updates after it are the same phase and are not.
+    probing: bool,
 }
 
-impl<S: Sink> Progress<S> {
+impl<S: Sink + Send + 'static> Progress<S> {
     /// The clock starts here, so the summary spans the run's work and not only its last phase.
+    /// `enabled` is whether standard error is a terminal: false starts no thread at all.
     fn new(sink: S, enabled: bool) -> Self {
+        let sink = Arc::new(Mutex::new(sink));
+        let ticker = enabled.then(|| Ticker::start(Arc::clone(&sink)));
         Progress {
             sink,
-            enabled,
+            ticker,
             started: Instant::now(),
             probed: 0,
+            probing: false,
         }
     }
 
+    fn enabled(&self) -> bool {
+        self.ticker.is_some()
+    }
+
+    /// Name the phase now — a person sees it the moment it starts, not on the next frame — and let the
+    /// animation redraw it with each frame from then on. The frame's clock starts here, because it is
+    /// a function of how long this phase has been active and of nothing earlier in the run.
+    fn phase(&mut self, line: String) {
+        if let Some(ticker) = &self.ticker {
+            ticker.phase(line);
+        }
+    }
+
+    /// The phase's line changes and the phase does not, so the frame keeps the age it has.
     fn show(&mut self, line: String) {
-        if self.enabled {
-            self.sink.rewrite(&line);
+        if let Some(ticker) = &self.ticker {
+            ticker.text(line);
         }
     }
 
     /// The four phases SPEC.md Output names, in the order a run reaches them.
     fn load(&mut self) {
-        self.show("loading the mirror list".to_string());
+        self.phase("loading the mirror list".to_string());
     }
 
     fn reference(&mut self) {
-        self.show("verifying the reference".to_string());
+        self.phase("verifying the reference".to_string());
     }
 
-    /// The candidates probed **so far** (SPEC.md Output): `done` is how many probes the whole run has
-    /// finished and `total` how many it has to probe, which `await_probes` reads from the probes
-    /// themselves rather than from the joins. Both grow when the one widening adds candidates, so the
-    /// line never runs backwards.
+    /// The candidates probed **so far** (SPEC.md Output). The first line of the run starts the probing
+    /// phase; every later one is the same phase counting higher.
     fn probe(&mut self, done: usize, total: usize) {
-        let noun = if total == 1 { "mirror" } else { "mirrors" };
-        self.show(format!("probing {total} {noun}… {done}/{total}"));
+        let line = probing_line(done, total);
+        if self.probing {
+            self.show(line);
+        } else {
+            self.probing = true;
+            self.phase(line);
+        }
     }
 
     fn ranked(&mut self) {
-        self.show("ranking".to_string());
+        self.phase("ranking".to_string());
     }
 
-    /// Erase the live line before something that needs a line of its own, such as a warning.
+    /// Erase the live line before something that needs a line of its own, such as a warning. It waits
+    /// for the erase, so the warning cannot land on a line the animation redraws.
     fn clear(&mut self) {
-        if self.enabled {
-            self.sink.clear();
+        if let Some(ticker) = &self.ticker {
+            ticker.hide();
         }
     }
 
-    /// End the progress at the end of ranking: the line becomes the one summary that stays, so no
-    /// transient line survives into the report and an error that follows starts on a line of its own
+    /// End the progress where no summary belongs: the line is erased and the animation stopped and
+    /// joined, so the report that prints next cannot have a frame written over it (SPEC.md Output). A
+    /// run that stops before ranking prints no `done` line, because there is no count to give.
+    fn stop(&mut self) {
+        self.clear();
+        self.halt();
+    }
+
+    /// Stop and join the animation and leave the line as it is, for a caller that replaces it itself —
+    /// the summary does — or has erased it already.
+    fn halt(&mut self) {
+        if let Some(ticker) = &mut self.ticker {
+            ticker.stop();
+        }
+    }
+
+    /// End the progress at the end of ranking: the animation is stopped first, so no frame may follow
+    /// the summary or the report's first line, and the line becomes the one summary that stays
     /// (SPEC.md Output).
     fn finish(&mut self, usable: usize, rejected: usize) {
-        if self.enabled {
-            let line = done_line(usable, rejected, self.started.elapsed());
-            self.sink.settle(&line);
+        if !self.enabled() {
+            return;
         }
+        self.halt();
+        let line = done_line(usable, rejected, self.started.elapsed());
+        lock(&self.sink).settle(&line);
     }
 }
 
-/// How often the probing line is redrawn while probes are in flight: short enough that the count keeps
-/// up with the mirrors landing, long enough that waiting costs nothing.
+/// How often the run asks the probes whether they have finished: short enough that the count it hands
+/// the animation keeps up with the mirrors landing, long enough that asking costs nothing. The frames
+/// between two counts come from the animation's own clock, not from this poll.
 const PROBE_POLL: Duration = Duration::from_millis(50);
 
 /// Wait for every probe with the line counting the probes that have **finished**, and hand back the
 /// joins in candidate order. `handle.join()` blocks in candidate order, so a loop that joins first
 /// would count the joins: a slow first mirror would freeze the line while the other twenty-eight are
 /// already done, which is not "the candidates probed so far" (SPEC.md Output). Polling the probes
-/// redraws as each one lands, and the results still come back in candidate order, so nothing
-/// downstream depends on which probe answered first.
-fn await_probes<T, S: Sink>(
+/// gives the animation a new count as each one lands, and the results still come back in candidate
+/// order, so nothing downstream depends on which probe answered first.
+fn await_probes<T, S: Sink + Send + 'static>(
     handles: Vec<thread::JoinHandle<T>>,
     progress: &mut Progress<S>,
 ) -> Vec<thread::Result<T>> {
@@ -856,7 +1113,7 @@ fn await_probes<T, S: Sink>(
 /// in candidate order. Both passes use this, so the one widening probes exactly as pass 1 does. A
 /// probe thread that crashed is reported as a rejection instead of becoming a silent gap: `probe`
 /// has no panic path of its own, so a crash is a bug and the run says so.
-fn probe_candidates<S: Sink>(
+fn probe_candidates<S: Sink + Send + 'static>(
     candidates: &[mirrors::Mirror],
     codename: &str,
     arch: &str,
@@ -930,11 +1187,15 @@ fn header_identity(
     ))
 }
 
-/// The facts about where the answer came from: server AS, mirror list source, freshness reference.
+/// The facts about where the answer came from: the server's AS, the mirror list source and the
+/// freshness reference. The server's AS is proof that the AS comparison happened at all and not a
+/// fact a person choosing a mirror acts on, so the default line keeps `mirrors:` and `reference:` and
+/// the AS is `--verbose`'s (SPEC.md Output).
 fn header_context(
     server_as: Option<&str>,
     list_source: &str,
     reference: Option<&probe::Reference>,
+    verbose: bool,
 ) -> String {
     let reference = match reference {
         Some(r) => format!(
@@ -943,10 +1204,13 @@ fn header_context(
         ),
         None => "reference: newest mirror date (archive.ubuntu.com unreachable)".to_string(),
     };
-    format!(
-        "server {} · mirrors: {list_source} · {reference}",
-        server_as.unwrap_or("AS unknown")
-    )
+    if verbose {
+        return format!(
+            "server {} · mirrors: {list_source} · {reference}",
+            server_as.unwrap_or("AS unknown")
+        );
+    }
+    format!("mirrors: {list_source} · {reference}")
 }
 
 /// A section title with an annotation on the right, so a heading can state the rule it follows
@@ -961,9 +1225,11 @@ fn titled(left: &str, right: &str, ink: Painter) -> String {
 }
 
 /// The one line under the table when no row has AS data: the run's own reason for it, because a
-/// column of `unknown` would read as an answer (SPEC step 9).
-fn as_note(rows: &[Row], reason: Option<&str>) -> Option<String> {
-    if rows.is_empty() || rows.iter().any(|row| row.as_cell.is_some()) {
+/// column of `unknown` would read as an answer (SPEC step 9). Only `--verbose` has that column, so
+/// only a `--verbose` run has the gap to explain: the default table never shows an AS, and a note
+/// apologising for a column it does not print would be a fact with nothing behind it.
+fn as_note(rows: &[Row], reason: Option<&str>, verbose: bool) -> Option<String> {
+    if !verbose || rows.is_empty() || rows.iter().any(|row| row.as_cell.is_some()) {
         return None;
     }
     Some(format!(
@@ -972,11 +1238,14 @@ fn as_note(rows: &[Row], reason: Option<&str>) -> Option<String> {
     ))
 }
 
-/// `Ranked — 5 of 12 usable, 7 rejected`: how much of the ranking is shown, and what did not make it.
+/// `Ranked — 5 of 12 usable, 7 rejected`, with one clause per column that needs one underneath the
+/// title (SPEC.md Output): the column words are the only place a reader learns that `behind` is
+/// freshness and `latency` is the network. `verified`'s clause says what the three cell values mean
+/// without repeating the `yes`/`no`/`?` rule, which `--help` spells out.
 fn ranked_title(shown: usize, usable: usize, rejected: usize, ink: Painter) -> String {
     titled(
         &format!("Ranked — {shown} of {usable} usable, {rejected} rejected"),
-        "lag = -updates age vs freshest",
+        "behind = -updates age vs freshest · latency = round trip · verified = InRelease signature",
         ink,
     )
 }
@@ -989,10 +1258,10 @@ struct Row<'a> {
     throughput_bps: u64,
     latency_ms: u64,
     signature: &'a verify::SignatureStatus,
-    /// `12929 same` when the run has the mirror's AS; the column exists when any row has one.
+    /// `12929 same` when the run has the mirror's AS; the column exists when any row has one. The
+    /// default report never fills it in, because the AS number and its match are proof that the
+    /// tie-break was auditable and not a fact a reader acts on (SPEC.md Output).
     as_cell: Option<String>,
-    /// The mirror's `-security` lag, which is informational only and never rejects (SPEC step 8).
-    security_lag: Option<i64>,
     /// The host this mirror redirected to, when it is not its own host (SPEC step 7).
     redirect_host: Option<&'a str>,
 }
@@ -1000,6 +1269,11 @@ struct Row<'a> {
 /// The narrowest the `as` column may be: a table with AS data still says `unknown` for a mirror the
 /// lookup could not name, and that word must fit the column it shares with the ASNs.
 const AS_MIN_WIDTH: usize = 7;
+
+/// The width of the `verified` column: the heading word itself, so the three short cells (`yes`, `no`,
+/// `?`) all fit and a note that follows a cell starts under the `notes` heading instead of five
+/// columns left of it.
+const VERIFIED_WIDTH: usize = 8;
 
 /// The most columns a redirect host may take in the `notes` cell. A host longer than this is cut,
 /// so one long name cannot wrap the table; `--verbose` prints it in full.
@@ -1009,7 +1283,7 @@ const REDIR_HOST_MAX: usize = 16;
 /// one, and it costs one column, so `REDIR_HOST_MAX` bounds the cell whether or not it was cut.
 const CUT_MARKER: char = '~';
 
-/// The ranked table (SPEC step 9): rank, mirror, lag, speed, delay, AS, signature, notes. The AS
+/// The ranked table (SPEC step 9): rank, mirror, behind, speed, latency, AS, verified, notes. The AS
 /// column is left out entirely when no row has AS data, so it can never read as "every mirror is
 /// unknown"; the notes column is left out when no shown row has a note, so a plain table gains no
 /// empty column.
@@ -1028,23 +1302,27 @@ fn ranked_rows(rows: &[Row], ink: Painter) -> Vec<String> {
     let mut out = Vec::new();
     // Each heading word is padded first and dimmed second: the width format counts bytes, so a
     // dimmed word would lose its padding and shift every column under it.
+    //
+    // `behind` is six columns where `lag` was three, so the numeric field grew to six in the same
+    // edit: a heading wider than its field overflows it and pushes every column after it one column
+    // to the right of the rows below, which is exactly the drift this table cannot afford.
     let mut head = format!("  {:>2}  {:<44} ", "#", "mirror");
-    head.push_str(&ink.dim(&format!("{:>5}", "lag")));
+    head.push_str(&ink.dim(&format!("{:>6}", "behind")));
     head.push(' ');
     head.push_str(&ink.dim(&format!("{:>10}", "speed")));
     head.push(' ');
-    head.push_str(&ink.dim(&format!("{:>9}", "delay")));
+    head.push_str(&ink.dim(&format!("{:>9}", "latency")));
     if let Some(width) = as_width {
         head.push_str(&format!(" {:>width$}", "as"));
     }
-    head.push_str("  sig");
+    head.push_str(&format!("  {:<VERIFIED_WIDTH$}", "verified"));
     if with_notes {
         head.push_str("  notes");
     }
     out.push(head);
     for (i, row) in rows.iter().enumerate() {
         let mut line = format!(
-            "  {:>2}  {:<44.44} {:>5} {:>10} {:>9}",
+            "  {:>2}  {:<44.44} {:>6} {:>10} {:>9}",
             i + 1,
             row.url,
             format!("{}m", row.lag_secs / 60),
@@ -1055,9 +1333,20 @@ fn ranked_rows(rows: &[Row], ink: Painter) -> Vec<String> {
             let cell = row.as_cell.as_deref().unwrap_or("unknown");
             line.push_str(&format!(" {cell:>width$}"));
         }
-        line.push_str(&format!("  {}", signature_cell_painted(row.signature, ink)));
         if let Some(note) = &notes[i] {
-            line.push_str(&format!("  {note}"));
+            // The cell is painted first and padded second, and only a row with a note pads: the
+            // escape sequence would spend the padding on itself, and a row that ends at its cell
+            // must not carry trailing blanks a captured line would still show. The two columns of
+            // separation the heading has before `notes` are part of the width, so a note starts
+            // under `notes` and not two columns left of it.
+            let pad = VERIFIED_WIDTH + 2 - signature_cell(row.signature).chars().count();
+            line.push_str("  ");
+            line.push_str(&signature_cell_painted(row.signature, ink));
+            line.push_str(&" ".repeat(pad));
+            line.push_str(note);
+        } else {
+            line.push_str("  ");
+            line.push_str(&signature_cell_painted(row.signature, ink));
         }
         out.push(line);
     }
@@ -1065,23 +1354,13 @@ fn ranked_rows(rows: &[Row], ink: Painter) -> Vec<String> {
 }
 
 /// The trailing `notes` cell, last so the facts it carries never push a row's other columns around:
-/// `sec:778m` for a `-security` lag and `redir:<host>` for a redirect to another host. Both are
-/// facts SPEC.md asks the default output to show (steps 7 and 8) and both were `--verbose`-only
-/// after the report rewrite. `None` when the row has neither, so the column can be omitted.
+/// `redir:<host>` for a redirect to another host, cut so one long name cannot wrap the table. The
+/// `-security` lag this cell used to carry is proof about a pocket that decides nothing, and
+/// `Detail` prints that pocket's date and lag in full, so the default report spends no column on it
+/// (SPEC.md Output). `None` when the row has no note, so the column can be omitted.
 fn note_cell(row: &Row) -> Option<String> {
-    let security = row
-        .security_lag
-        .filter(|lag| *lag > 0)
-        .map(|lag| format!("sec:{}m", lag / 60));
-    let redirect = row
-        .redirect_host
-        .map(|host| format!("redir:{}", host_prefix(host, REDIR_HOST_MAX)));
-    match (security, redirect) {
-        (None, None) => None,
-        (Some(sec), None) => Some(sec),
-        (None, Some(redir)) => Some(redir),
-        (Some(sec), Some(redir)) => Some(format!("{sec} {redir}")),
-    }
+    row.redirect_host
+        .map(|host| format!("redir:{}", host_prefix(host, REDIR_HOST_MAX)))
 }
 
 /// At most `room` columns of a host, ending in `CUT_MARKER` when the host did not fit: a cell that
@@ -1097,9 +1376,10 @@ fn host_prefix(host: &str, room: usize) -> String {
     cut
 }
 
-/// What `--verbose` prints about one mirror, and where the default table's `notes` cell reads the
-/// same two facts back: the country, both pocket dates and the redirect the probe saw. The
-/// `-security` lag is computed once, here, so `--verbose` and the table cannot disagree about it.
+/// What `--verbose` prints about one mirror: the country, the resolved address, the AS and its
+/// holder, both pocket dates with their lag and the redirect the probe saw. The default report shows
+/// only the redirect, cut, so this is where the rest of the proof lives (SPEC.md Output). The
+/// `-security` lag is computed once, here, so no two places can disagree about it.
 fn detail_of(reference_security: Option<i64>, country: &str, outcome: &probe::Outcome) -> Detail {
     let security_lag = match (reference_security, outcome.security_date) {
         (Some(reference), Some(security)) => Some(fresh::lag(reference, security)),
@@ -1113,16 +1393,18 @@ fn detail_of(reference_security: Option<i64>, country: &str, outcome: &probe::Ou
     }
 }
 
-/// The rows the table prints, in rank order and capped at `top`, each carrying the AS cell and the
-/// two facts the `notes` column shows. Both note facts are read from the run's own probe results
-/// (`details`) instead of being recomputed here, so the default table and `--verbose` describe the
-/// same run (SPEC steps 7 and 8).
+/// The rows the table prints, in rank order and capped at `top`, each carrying the AS cell (a
+/// `--verbose` fact) and the redirect the `notes` column shows. The note fact and the facts `Detail`
+/// prints are read from the run's own probe results (`details`) instead of being recomputed here, so
+/// the table and `--verbose` describe the same run (SPEC steps 7 and 8). No decision reads `verbose`:
+/// it decides only whether the AS cell is filled in at all.
 fn table_rows<'a>(
     ranked: &'a [fresh::Probed],
     details: &'a std::collections::HashMap<String, Detail>,
     mirror_asn: &std::collections::HashMap<String, ResolvedAs>,
     server_asn: Option<&str>,
     top: usize,
+    verbose: bool,
 ) -> Vec<Row<'a>> {
     ranked
         .iter()
@@ -1136,37 +1418,51 @@ fn table_rows<'a>(
                 throughput_bps: r.throughput_bps,
                 latency_ms: r.latency_ms,
                 signature: &r.signature,
-                as_cell: as_cell(mirror_asn, server_asn, &r.url),
-                // Neither fact is a reason to reject or to reorder, but both are facts this run
-                // saw, so they ride on the row instead of being dropped between the probe and the
-                // table.
-                security_lag: detail.and_then(|d| d.security_lag),
+                as_cell: if verbose {
+                    as_cell(mirror_asn, server_asn, &r.url)
+                } else {
+                    None
+                },
+                // A redirect is a fact about how the request was answered, not a decision, so the
+                // row carries it and the table prints it cut; `--verbose` prints it whole.
                 redirect_host: detail.and_then(|d| d.redirected_to.as_deref()),
             }
         })
         .collect()
 }
 
-/// The recommendation and the facts behind it: host, country, AS, speed, lag and signature status
-/// (SPEC.md CLI), in one line so nothing repeats the table. The AS cell is the table's own, so the
-/// ASN the tie-break used is named here too instead of the bare match word.
+/// The recommendation and the facts behind it: host, country, speed, `behind`, `latency` and the
+/// signature status (SPEC.md CLI), in one line so nothing repeats the table, and in the table's own
+/// words for the two numbers. The chosen mirror's AS and its match are proof that the tie-break was
+/// auditable, not facts a reader acts on when choosing a mirror, so only a `--verbose` run names them
+/// (SPEC.md Output). The signature is the same split: the default line names the column and its cell
+/// — `verified yes`, `verified no`, `verified ?` — and the exact status the cell stands for is
+/// `--verbose`'s, because it is the proof and not the decision (SPEC.md Output).
 fn recommendation(
     best: &fresh::Probed,
     country: &str,
     as_cell: Option<&str>,
+    verbose: bool,
     ink: Painter,
 ) -> String {
+    let as_fact = if verbose {
+        format!(", AS {}", as_cell.unwrap_or("unknown"))
+    } else {
+        String::new()
+    };
+    let freshness = if best.lag_secs == 0 {
+        "freshest"
+    } else {
+        "closest"
+    };
+    let signature = if verbose {
+        format!("{freshness} {}", signature_words(&best.signature))
+    } else {
+        format!("{freshness}, verified {}", signature_cell(&best.signature))
+    };
     format!(
-        "  {} — {} {}, {}, AS {}, {}m lag, {:.1} MB/s, {} ms",
+        "  {} — {signature}, {country}{as_fact}, {}m behind, {:.1} MB/s, {} ms latency",
         ink.bold(&best.url),
-        if best.lag_secs == 0 {
-            "freshest"
-        } else {
-            "closest"
-        },
-        signature_words(&best.signature),
-        country,
-        as_cell.unwrap_or("unknown"),
         best.lag_secs / 60,
         best.throughput_bps as f64 / 1e6,
         best.latency_ms
@@ -1637,8 +1933,9 @@ fn run() -> Result<u8, (u8, String)> {
         );
         report.line(no_eligible_hint(list_source));
         // No phase after the list load ran, so there is no summary to print: the line is erased and the
-        // report starts on its own (SPEC.md Output).
-        progress.clear();
+        // animation joined, so the report that follows starts on its own line and nothing can draw
+        // over it (SPEC.md Output).
+        progress.stop();
         report.print();
         return no_eligible_uri(mode, &args, list_source);
     }
@@ -1776,12 +2073,14 @@ fn run() -> Result<u8, (u8, String)> {
         &mirror_asn,
         server_asn.as_deref(),
         args.top,
+        args.verbose,
     );
     report.block({
         let mut header = vec![header_context(
             server_asn.as_deref(),
             list_source,
             reference.as_ref(),
+            args.verbose,
         )];
         // SPEC.md Output: the reason a run widened is one line directly under the header and before
         // the table. It belongs to this block, not the ranked one, so the no-fresh-mirror return
@@ -1798,9 +2097,10 @@ fn run() -> Result<u8, (u8, String)> {
     });
     let mut ranked_lines = vec![ranked_title(rows.len(), ranked.len(), rejected.len(), ink)];
     ranked_lines.extend(ranked_rows(&rows, ink));
-    // A run with no AS data says why under the table, once, instead of printing a column of
-    // `unknown` that implies the lookup happened (SPEC step 9).
-    ranked_lines.extend(as_note(&rows, as_error.as_deref()));
+    // A `--verbose` run with no AS data says why under the table, once, instead of printing a column
+    // of `unknown` that implies the lookup happened (SPEC step 9). The default table has no such
+    // column, so it has no gap to explain.
+    ranked_lines.extend(as_note(&rows, as_error.as_deref(), args.verbose));
     report.block(ranked_lines);
     // SPEC.md Output: the status line ends with the ranking it was counting, and becomes the one line
     // that stays. Everything below only assembles what the report will say, so a failure there cannot
@@ -1814,13 +2114,18 @@ fn run() -> Result<u8, (u8, String)> {
         report.print();
         return Err(no_fresh_mirror());
     };
-    let best_cell = as_cell(&mirror_asn, server_asn.as_deref(), &best.url);
+    // The AS cell is only asked for in a `--verbose` run: the default recommendation names no AS, so
+    // the map lookup that would fill it in is not even made (SPEC.md Output).
+    let best_cell = args
+        .verbose
+        .then(|| as_cell(&mirror_asn, server_asn.as_deref(), &best.url))
+        .flatten();
     // The mirror's own country, not the run's: only the mirror's is a fact about the mirror (SPEC.md
     // CLI), and the two differ once a run is not narrowed to one country.
     let best_country = recommendation_country(&details, &best.url);
     report.block(vec![
         ink.bold("Recommendation"),
-        recommendation(best, best_country, best_cell.as_deref(), ink),
+        recommendation(best, best_country, best_cell.as_deref(), args.verbose, ink),
     ]);
 
     let platform = if d.id == "pop" {
@@ -1968,18 +2273,22 @@ fn architecture() -> Result<String, (u8, String)> {
     }
 }
 
-/// The `sig` column: the short status, so a row says in one word whether a write may use it. Only
-/// `ok` (a verified `-updates` `InRelease`) can authorize a write (SPEC: Freshness trust boundary).
+/// The `verified` column: three values, and only one of them authorizes a write (SPEC: Freshness
+/// trust boundary). `yes` is an `InRelease` that `/usr/bin/gpgv` accepted with the Ubuntu archive
+/// keyring, `no` is a body that was readable but unsigned, altered or signed by an unknown key, and
+/// `?` is verification that could not run at all — no `gpgv` or keyring, an oversized body, a
+/// timeout. So `?` is never a pass: the cell says "could not check", not "checked and fine".
 fn signature_cell(status: &verify::SignatureStatus) -> &'static str {
     match status {
-        verify::SignatureStatus::Verified(_) => "ok",
+        verify::SignatureStatus::Verified(_) => "yes",
         verify::SignatureStatus::Invalid(_) => "no",
-        verify::SignatureStatus::Unavailable(_) => "unavailable",
+        verify::SignatureStatus::Unavailable(_) => "?",
     }
 }
 
-/// The `sig` column in its ink: `ok` green, `no` and `unavailable` yellow (SPEC.md Output). The cell
-/// names itself; the ink repeats it for a reader who scans the column.
+/// The `verified` column in its ink: `yes` green, `no` and `?` yellow (SPEC.md Output). The cell
+/// names itself; the ink repeats it for a reader who scans the column, and it never paints `?` the
+/// colour of a pass.
 fn signature_cell_painted(status: &verify::SignatureStatus, ink: Painter) -> String {
     let cell = signature_cell(status);
     match status {
@@ -1990,7 +2299,9 @@ fn signature_cell_painted(status: &verify::SignatureStatus, ink: Painter) -> Str
     }
 }
 
-/// The same status in words, for the recommendation and `--verbose`.
+/// The same status in words, for `--verbose` alone: the exact status is the proof behind the table's
+/// `yes`/`no`/`?`, and proof is what `-v` adds (SPEC.md Output). A default run asks
+/// `signature_cell` for the column's word instead.
 fn signature_words(status: &verify::SignatureStatus) -> &'static str {
     match status {
         verify::SignatureStatus::Verified(_) => "verified",
@@ -2461,7 +2772,7 @@ fn rejected_note(list: &str, rejected: &[String]) -> Option<String> {
 /// goes up **before** the work (the load is the longest silent stretch of a run — Launchpad up to
 /// 10 s, then `mirrors.ubuntu.com` up to another 10 s) and is erased after it, so a warning or an
 /// error that follows never lands on top of a live line (SPEC.md Output).
-fn load_with_progress<S: Sink>(
+fn load_with_progress<S: Sink + Send + 'static>(
     net: &dyn Fetch,
     country: Option<Country<'_>>,
     narrow: bool,
@@ -3246,16 +3557,18 @@ mod tests {
 
     /// One ordered log of what a run showed and what it asked the network for, so a test can pin which
     /// came first.
+    /// Shared and `Send`, because the same log is written from two threads: the run draws its phase
+    /// lines and the animation redraws them with each frame.
     #[derive(Clone, Default)]
-    struct Trace(std::rc::Rc<std::cell::RefCell<Vec<String>>>);
+    struct Trace(Arc<Mutex<Vec<String>>>);
 
     impl Trace {
         fn note(&self, what: impl Into<String>) {
-            self.0.borrow_mut().push(what.into());
+            lock(&self.0).push(what.into());
         }
 
         fn lines(&self) -> Vec<String> {
-            self.0.borrow().clone()
+            lock(&self.0).clone()
         }
     }
 
@@ -3325,15 +3638,42 @@ mod tests {
         )
         .unwrap();
         assert!(!cands.is_empty(), "{src}");
+        // The order is the contract, not the number of frames: the animation redraws the same phase
+        // line while the work runs, so the assertions are about what came first and what came last.
+        let events = trace.lines();
+        let phase = events
+            .iter()
+            .position(|e| e.starts_with("show: ") && e.ends_with("loading the mirror list"))
+            .unwrap_or_else(|| panic!("no phase line: {events:?}"));
         assert_eq!(
-            trace.lines(),
-            [
-                "show: loading the mirror list",
-                "fetch: https://launchpad.net/ubuntu/+archivemirrors",
-                "fetch: http://mirrors.ubuntu.com/LT.txt",
-                // The line is erased once the load is over, before the warning it produced prints.
-                "clear",
-            ]
+            phase, 0,
+            "the phase line goes up before the work: {events:?}"
+        );
+        let first_fetch = events
+            .iter()
+            .position(|e| e.starts_with("fetch: "))
+            .unwrap_or_else(|| panic!("nothing was fetched: {events:?}"));
+        assert!(phase < first_fetch, "{events:?}");
+        // Launchpad first, then the fallback, in that order.
+        let launchpad = events
+            .iter()
+            .position(|e| e == "fetch: https://launchpad.net/ubuntu/+archivemirrors")
+            .unwrap_or_else(|| panic!("Launchpad was not tried: {events:?}"));
+        let fallback = events
+            .iter()
+            .position(|e| e == "fetch: http://mirrors.ubuntu.com/LT.txt")
+            .unwrap_or_else(|| panic!("the fallback was not tried: {events:?}"));
+        assert!(launchpad < fallback, "{events:?}");
+        // The line is erased once the load is over, before the warning it produced prints, and that
+        // erase is the last thing the sink sees.
+        let cleared = events
+            .iter()
+            .position(|e| e == "clear")
+            .unwrap_or_else(|| panic!("the line was never erased: {events:?}"));
+        assert_eq!(
+            cleared,
+            events.len() - 1,
+            "the erase comes last: {events:?}"
         );
     }
 
@@ -4100,8 +4440,8 @@ mod tests {
         let country = recommendation_country(&details, MIRROR);
         assert_eq!(country, "Germany");
         assert_eq!(
-            recommendation(&best, country, None, Painter::plain()),
-            "  https://mirror.example/ubuntu/ — freshest verified, Germany, AS unknown, 0m lag, 1.0 MB/s, 10 ms"
+            recommendation(&best, country, None, false, Painter::plain()),
+            "  https://mirror.example/ubuntu/ — freshest, verified yes, Germany, 0m behind, 1.0 MB/s, 10 ms latency"
         );
         // A mirror whose probe recorded no country still gets a word, never a blank.
         assert_eq!(
@@ -4618,20 +4958,24 @@ mod tests {
         );
     }
 
-    /// The `sig` column's whole job: a verified `-updates` `InRelease` is the only `ok`.
+    /// The `verified` column's whole job: a verified `-updates` `InRelease` is the only `yes`, and
+    /// the writer's own gate agrees with the label it prints.
     #[test]
-    fn signature_cell_is_ok_only_for_verified() {
+    fn signature_cell_is_yes_only_for_verified() {
         assert_eq!(
             signature_cell(&verify::SignatureStatus::verified_for_test()),
-            "ok"
+            "yes"
         );
+        // `no` is a body that was readable and did not verify; `?` is verification that could not
+        // run at all — no gpgv, no keyring, an oversized body, a timeout. Neither is a pass, and
+        // neither label may read like one.
         assert_eq!(
             signature_cell(&verify::SignatureStatus::Invalid("bad".into())),
             "no"
         );
         assert_eq!(
             signature_cell(&verify::SignatureStatus::Unavailable("no gpgv".into())),
-            "unavailable"
+            "?"
         );
         // The words the recommendation and --verbose use say what the cell cannot.
         assert_eq!(
@@ -4642,6 +4986,12 @@ mod tests {
             signature_words(&verify::SignatureStatus::Unavailable("no gpgv".into())),
             "unverified (signature unavailable)"
         );
+        // Only `yes` may authorize a write (SPEC: Freshness trust boundary). The writer's own gate
+        // is `is_verified`, so this pins the labels to exactly what the writer grants: a `no` or a
+        // `?` cell never reads as one it would accept.
+        assert!(verify::SignatureStatus::verified_for_test().is_verified());
+        assert!(!verify::SignatureStatus::Invalid("bad".into()).is_verified());
+        assert!(!verify::SignatureStatus::Unavailable("no gpgv".into()).is_verified());
     }
 
     fn row<'a>(
@@ -4658,19 +5008,13 @@ mod tests {
             latency_ms: 1235,
             signature,
             as_cell: as_cell.map(str::to_string),
-            security_lag: None,
             redirect_host: None,
         }
     }
 
-    /// The same row with the two facts the `notes` column carries. `--verbose` prints them long; the
-    /// table prints them compact, and both read the same row.
-    fn noted<'a>(
-        mut row: Row<'a>,
-        security_lag: Option<i64>,
-        redirect_host: Option<&'a str>,
-    ) -> Row<'a> {
-        row.security_lag = security_lag;
+    /// The same row with the one fact the default `notes` column carries. `--verbose` prints the
+    /// redirect whole and the table prints it cut, and both read the same row.
+    fn noted<'a>(mut row: Row<'a>, redirect_host: Option<&'a str>) -> Row<'a> {
         row.redirect_host = redirect_host;
         row
     }
@@ -4678,7 +5022,8 @@ mod tests {
     /// The AS column exists only when the run has AS data for at least one row: a table of
     /// `unknown` would read as "every lookup answered", which is exactly the silent failure the
     /// column used to have. When it does exist, every row carries a cell, so the columns stay
-    /// aligned and a mirror without an answer says `unknown` rather than writing nothing.
+    /// aligned and a mirror without an answer says `unknown` rather than writing nothing. Only a
+    /// `--verbose` run fills the column in at all (`table_rows`), so a default table has none.
     #[test]
     fn the_ranked_table_renders_the_as_column_only_with_as_data() {
         let ok = verify::SignatureStatus::verified_for_test();
@@ -4692,11 +5037,11 @@ mod tests {
         assert_eq!(
             without,
             [
-                "   #  mirror                                         lag      speed     delay  sig"
+                "   #  mirror                                       behind      speed   latency  verified"
                     .to_string(),
-                "   1  http://a.example/ubuntu                         0m   1.2 MB/s   1235 ms  ok"
+                "   1  http://a.example/ubuntu                          0m   1.2 MB/s   1235 ms  yes"
                     .to_string(),
-                "   2  http://b.example/ubuntu                        10m   1.2 MB/s   1235 ms  ok"
+                "   2  http://b.example/ubuntu                         10m   1.2 MB/s   1235 ms  yes"
                     .to_string(),
             ]
         );
@@ -4710,20 +5055,21 @@ mod tests {
         assert_eq!(
             with,
             [
-                "   #  mirror                                         lag      speed     delay         as  sig"
+                "   #  mirror                                       behind      speed   latency         as  verified"
                     .to_string(),
-                "   1  http://a.example/ubuntu                         0m   1.2 MB/s   1235 ms 12929 same  ok"
+                "   1  http://a.example/ubuntu                          0m   1.2 MB/s   1235 ms 12929 same  yes"
                     .to_string(),
-                "   2  http://b.example/ubuntu                         0m   1.2 MB/s   1235 ms    unknown  ok"
+                "   2  http://b.example/ubuntu                          0m   1.2 MB/s   1235 ms    unknown  yes"
                     .to_string(),
             ]
         );
     }
 
-    /// The `notes` column: the two facts SPEC.md asks the default output to show, compact, and only
-    /// when a shown row has one — a run with no lag and no redirect gains no empty column.
+    /// The `notes` column: the redirect, compact and cut, and only when a shown row redirected — a
+    /// plain table gains no empty column. The `-security` lag used to ride here and is a `--verbose`
+    /// fact now (`Detail` prints it in full), so no default row carries `sec:`.
     #[test]
-    fn the_notes_column_carries_each_fact_and_only_when_present() {
+    fn the_notes_column_carries_the_redirect_and_only_when_present() {
         let ok = verify::SignatureStatus::verified_for_test();
         let plain = ranked_rows(
             &[row("http://a.example/ubuntu", 0, &ok, None)],
@@ -4731,67 +5077,32 @@ mod tests {
         );
         assert_eq!(
             plain[0],
-            "   #  mirror                                         lag      speed     delay  sig"
+            "   #  mirror                                       behind      speed   latency  verified"
         );
         assert_eq!(
             plain[1],
-            "   1  http://a.example/ubuntu                         0m   1.2 MB/s   1235 ms  ok"
-        );
-
-        // A `-security` lag is informational only (it never rejects), but it is shown.
-        let lagging = ranked_rows(
-            &[noted(
-                row("http://a.example/ubuntu", 0, &ok, None),
-                Some(778 * 60),
-                None,
-            )],
-            Painter::plain(),
-        );
-        assert_eq!(
-            lagging[0],
-            "   #  mirror                                         lag      speed     delay  sig  notes"
-        );
-        assert_eq!(
-            lagging[1],
-            "   1  http://a.example/ubuntu                         0m   1.2 MB/s   1235 ms  ok  sec:778m"
+            "   1  http://a.example/ubuntu                          0m   1.2 MB/s   1235 ms  yes"
         );
 
         // A mirror that redirects to another host says which one, by default.
         let redirected = ranked_rows(
             &[noted(
                 row("http://a.example/ubuntu", 0, &ok, None),
-                None,
                 Some("mirror2.example"),
             )],
             Painter::plain(),
+        );
+        assert_eq!(
+            redirected[0],
+            "   #  mirror                                       behind      speed   latency  verified  notes"
         );
         assert_eq!(
             redirected[1],
-            "   1  http://a.example/ubuntu                         0m   1.2 MB/s   1235 ms  ok  redir:mirror2.example"
+            "   1  http://a.example/ubuntu                          0m   1.2 MB/s   1235 ms  yes       redir:mirror2.example"
         );
-
-        // Both facts, one row; a zero lag is not one of them.
-        let both = ranked_rows(
-            &[noted(
-                row("http://a.example/ubuntu", 0, &ok, None),
-                Some(60),
-                Some("mirror2.example"),
-            )],
-            Painter::plain(),
-        );
-        assert_eq!(
-            both[1],
-            "   1  http://a.example/ubuntu                         0m   1.2 MB/s   1235 ms  ok  sec:1m redir:mirror2.example"
-        );
-        let zero = ranked_rows(
-            &[noted(
-                row("http://a.example/ubuntu", 0, &ok, None),
-                Some(0),
-                None,
-            )],
-            Painter::plain(),
-        );
-        assert!(!zero[0].contains("notes") && !zero[1].contains("sec:"));
+        // The note starts under its own heading: `verified` is as wide as the heading word, so a
+        // note does not drift left by the length of the cell before it.
+        assert_eq!(redirected[0].find("notes"), redirected[1].find("redir:"));
     }
 
     /// One long host cannot wrap the table: the cell keeps the fact and cuts the name, ends the cut
@@ -4801,22 +5112,10 @@ mod tests {
     fn a_long_redirect_host_is_cut_and_verbose_prints_it_whole() {
         let ok = verify::SignatureStatus::verified_for_test();
         let long = "a-very-long-mirror-host.example.org";
-        let cell = noted(
-            row("http://a.example/ubuntu", 0, &ok, None),
-            Some(778 * 60),
-            Some(long),
-        );
-        assert_eq!(
-            note_cell(&cell),
-            Some("sec:778m redir:a-very-long-mir~".to_string())
-        );
+        let cell = noted(row("http://a.example/ubuntu", 0, &ok, None), Some(long));
+        assert_eq!(note_cell(&cell), Some("redir:a-very-long-mir~".to_string()));
         // The cut is bounded, so a run of long hostnames cannot widen the table without limit.
-        let cut = note_cell(&noted(
-            row("http://a.example/ubuntu", 0, &ok, None),
-            None,
-            Some(long),
-        ))
-        .expect("a redirect is a note");
+        let cut = note_cell(&cell).expect("a redirect is a note");
         assert_eq!(cut.len(), "redir:".len() + REDIR_HOST_MAX);
 
         // A host of exactly the limit is not cut, so it carries no marker: the marker means "cut"
@@ -4825,7 +5124,6 @@ mod tests {
         assert_eq!(
             note_cell(&noted(
                 row("http://a.example/ubuntu", 0, &ok, None),
-                None,
                 Some(&exact),
             )),
             Some(format!("redir:{exact}"))
@@ -4836,7 +5134,6 @@ mod tests {
         let wide = "→".repeat(REDIR_HOST_MAX + 2);
         let wide_cell = note_cell(&noted(
             row("http://a.example/ubuntu", 0, &ok, None),
-            None,
             Some(&wide),
         ))
         .expect("a redirect is a note");
@@ -4866,9 +5163,15 @@ mod tests {
                 .any(|l| l == &format!("     redirects to {long}")),
             "{verbose:?}"
         );
+        // The `-security` lag moved here with the note: printed in full, in minutes, and never in the
+        // table's `sec:` shorthand.
         assert!(
             verbose.iter().any(|l| l.contains("778m lag")),
             "{verbose:?}"
+        );
+        assert!(
+            !verbose.iter().any(|l| l.contains("sec:")),
+            "the shorthand is the table's, and the table no longer prints it: {verbose:?}"
         );
     }
 
@@ -4925,9 +5228,13 @@ mod tests {
         }
     }
 
-    /// The rendered table for one probe result, through the wiring the run uses: `probe` →
-    /// `detail_of` → `table_rows` → `ranked_rows`.
-    fn table_for(outcome: &probe::Outcome, reference_security: Option<i64>) -> Vec<String> {
+    /// Both reports for one probe result, through the wiring the run uses: `probe` → `detail_of` →
+    /// `table_rows` → `ranked_rows` for the default table, and `detail_section` over the same rows
+    /// for the `--verbose` run.
+    fn reports_for(
+        outcome: &probe::Outcome,
+        reference_security: Option<i64>,
+    ) -> (Vec<String>, Vec<String>) {
         let details = std::collections::HashMap::from([(
             outcome.url.clone(),
             detail_of(reference_security, "Lithuania", outcome),
@@ -4943,16 +5250,20 @@ mod tests {
             same_as: false,
             signature: outcome.updates_signature.clone(),
         }];
-        ranked_rows(
-            &table_rows(&ranked, &details, &no_as, None, 5),
+        let table = ranked_rows(
+            &table_rows(&ranked, &details, &no_as, None, 5, false),
             Painter::plain(),
-        )
+        );
+        let rows = table_rows(&ranked, &details, &no_as, None, 5, true);
+        let detail = detail_section(&rows, &details, &no_as, Painter::plain());
+        (table, detail)
     }
 
-    /// The table's `notes` cell is filled from the run's own probe result, not from a `Row` a test
-    /// built: a `-security` lag and a redirect both reach the rendered table here, and neither
-    /// appears when the mirror served neither. Cutting this test off from the probe is what let the
-    /// two facts regress silently, so it stays on the real path.
+    /// The table's `notes` cell and `Detail`'s `-security` line are filled from the run's own probe
+    /// result, not from a `Row` a test built: the redirect reaches the default table here, and the
+    /// `-security` date and lag reach the `--verbose` one, and neither appears when the mirror served
+    /// neither. Cutting this test off from the probe is what let the two facts regress silently, so
+    /// it stays on the real path.
     #[test]
     fn the_notes_come_from_the_probe_result() {
         let mut sample = vec![0u8; 70_000];
@@ -4971,25 +5282,32 @@ mod tests {
             std::str::from_utf8(SECURITY_INRELEASE).expect("the body is ascii"),
         )
         .expect("-security has a parsable Date");
-        let table = table_for(&outcome, Some(outcome.updates_date));
+        let lag = (outcome.updates_date - security_date) / 60;
+        let (table, detail) = reports_for(&outcome, Some(outcome.updates_date));
         assert!(
             table[0].contains("notes"),
             "the notes column is missing: {table:?}"
         );
         assert!(
-            table[1].contains(&format!(
-                "sec:{}m",
-                (outcome.updates_date - security_date) / 60
-            )),
-            "the -security lag is missing: {table:?}"
-        );
-        assert!(
             table[1].contains("redir:mirror2.example"),
             "the redirect is missing: {table:?}"
         );
+        // The `-security` lag is `--verbose`'s: the default row carries no `sec:`, and the detail
+        // line carries the same number the probe saw, on the pocket nobody writes from.
+        assert!(
+            !table[1].contains("sec:"),
+            "the -security lag is not a default fact: {table:?}"
+        );
+        assert!(
+            detail.iter().any(|l| l.contains(&format!(
+                "-security: {}, {lag}m lag",
+                utc_stamp(security_date)
+            ))),
+            "the -security date and lag are missing from --verbose: {detail:?}"
+        );
 
-        // The same mirror without a `-security` pocket and without a redirect: no notes column, and
-        // no token that would read as one.
+        // The same mirror without a `-security` pocket and without a redirect: no notes column, no
+        // token that would read as one, and a detail line that says the pocket was not served.
         let quiet = Mirror {
             security: None,
             sample,
@@ -5001,24 +5319,31 @@ mod tests {
             (outcome.security_date, outcome.redirected_to.clone()),
             (None, None)
         );
-        let table = table_for(&outcome, Some(outcome.updates_date));
+        let (table, detail) = reports_for(&outcome, Some(outcome.updates_date));
         assert!(!table[0].contains("notes"), "{table:?}");
         assert!(
             !table[1].contains("sec:") && !table[1].contains("redir:"),
             "{table:?}"
+        );
+        assert!(
+            detail.iter().any(|l| l.contains("-security: no InRelease")),
+            "{detail:?}"
         );
     }
 
     /// The table is a terminal table, so its width is pinned: one column that grows turns every row
     /// into a wrapped row. Measured on the shapes the default report prints, each with the longest
     /// fact its cells can carry: a `--no-geo` row (no AS column — what the 44-column mirror column
-    /// was sized for), a row with an AS cell and a note, and the widest row this report can produce
-    /// (an `unavailable` signature and a full-length note). The arithmetic of the widest row is
-    /// `6 prefix + 44 mirror + 6 lag + 11 speed + 10 delay + 10 as + 2 + 11 sig + 2 + 31 notes`; the
-    /// redirect host is the only cell that can grow with input, and `REDIR_HOST_MAX` is what bounds
-    /// it, so the `notes` column costs a fixed 33 columns instead of an unbounded amount. Reaching
-    /// 80 for this row would mean dropping the full mirror URL (which the container matrix anchors
-    /// on) or one of the numeric columns — a layout decision, not a note-column one.
+    /// was sized for), a row with a note, a `--verbose` row with an AS cell, and the widest row this
+    /// report can produce (a `?` cell, an AS cell and a full-length redirect). The widest row adds up
+    /// as `6 prefix, 44 mirror, 1, 6 behind, 1, 10 speed, 1, 9 latency, 1, 10 as, 2, 8 verified, 2,
+    /// 22 notes`, which is 123 columns; the redirect host is the only cell that can grow with input,
+    /// and `REDIR_HOST_MAX` is what bounds it, so the `notes` column costs a fixed 24 columns instead
+    /// of an unbounded amount. The two renamed words are why the numeric field is six wide and the
+    /// cell eight: `behind` is one column past `lag` and `verified` five past `sig`, and a heading
+    /// wider than its field drifts every column after it. Reaching 80 would mean dropping the full
+    /// mirror URL (which the container matrix anchors on) or one of the numeric columns — a layout
+    /// decision, not a note-column one.
     #[test]
     fn the_ranked_table_width_is_pinned() {
         let ok = verify::SignatureStatus::verified_for_test();
@@ -5033,60 +5358,94 @@ mod tests {
                 .unwrap_or(0)
         };
         let no_as = width(&[row(url, 0, &ok, None)]);
-        let a_note = width(&[noted(row(url, 0, &ok, None), Some(778 * 60), None)]);
+        let a_note = width(&[noted(row(url, 0, &ok, None), Some(longest_note))]);
         let with_as = width(&[row(url, 0, &ok, Some("12929 same"))]);
         let widest = width(&[noted(
-            row(url, 0, &bad, Some("12929 diff")),
-            Some(10_080 * 60),
+            row(url, 10_080 * 60, &bad, Some("12929 diff")),
             Some(longest_note),
         )]);
-        assert_eq!((no_as, a_note, with_as, widest), (82, 91, 93, 136));
+        assert_eq!((no_as, a_note, with_as, widest), (88, 112, 99, 123));
     }
 
-    /// `--help` is where the table's shorthand is defined: without the two token names the `notes`
-    /// column is unreadable, without the marker a cut host reads as a host of that name, and without
-    /// the pointer a reader cannot find the cut host again.
+    /// `--help` is where the table's shorthand is defined: without the column words a reader cannot
+    /// tell freshness from latency, without the `yes`/`no`/`?` mapping the `verified` cell is a guess
+    /// about a write, without the token name the `notes` column is unreadable, and without the
+    /// pointer a reader cannot find the cut host again.
     #[test]
-    fn the_help_defines_the_notes_column() {
-        assert!(HELP.contains("notes reads sec:<n>m"), "{HELP}");
+    fn the_help_defines_the_table_columns() {
+        for column in ["behind", "latency", "verified"] {
+            assert!(HELP.contains(column), "{column} is not in --help: {HELP}");
+        }
+        assert!(HELP.contains("yes = gpgv accepted it"), "{HELP}");
+        assert!(HELP.contains("? = verification could not run"), "{HELP}");
+        assert!(HELP.contains("notes"), "{HELP}");
         assert!(HELP.contains("redir:<host>"), "{HELP}");
-        assert!(HELP.contains("cut and ends in ~"), "{HELP}");
-        assert!(HELP.contains("--verbose prints it in full"), "{HELP}");
-        // The rule that only a verified InRelease may authorize a write stays where it was.
-        assert!(HELP.contains("only ok may authorize a write"), "{HELP}");
+        assert!(HELP.contains("cut"), "{HELP}");
+        assert!(HELP.contains("ends in ~"), "{HELP}");
+        assert!(HELP.contains("--verbose"), "{HELP}");
+        // The rule that only a verified InRelease may authorize a write stays where it was, in the
+        // table's own new words: `no` and `?` never do either, and the help says so.
+        assert!(HELP.contains("Only yes may authorize a write"), "{HELP}");
+        assert!(HELP.contains("no and ? never do"), "{HELP}");
+        assert!(
+            !HELP.contains("only ok"),
+            "`ok` is not a cell value: {HELP}"
+        );
     }
 
-    /// "N of M usable" counts what is shown against what survived, and the right-hand note says what
-    /// the lag compares: without it `lag` has no baseline.
+    /// `--help` promises only what the binary prints. It promised "the alternatives when the run has
+    /// any" and no code path printed one: an alternative mirror is another **checked** mirror, written
+    /// as a `# alternative:` comment, and a non-interactive run checks exactly one, so it has none to
+    /// print — the promise belongs to the TUI and to no line of this report (GLOSSARY: Alternative
+    /// mirror; SPEC.md Output). The confirmation's own test is what proves the report prints none.
+    #[test]
+    fn the_help_promises_no_alternatives_the_report_never_prints() {
+        assert!(
+            HELP.contains("--verbose adds the proof behind these words"),
+            "{HELP}"
+        );
+        assert!(!HELP.contains("alternative"), "{HELP}");
+    }
+
+    /// "N of M usable" counts what is shown against what survived, and the legend underneath states
+    /// one clause per column that needs one, in the columns' own words (SPEC.md Output): without it
+    /// `behind` has no baseline and `latency` could be read as freshness.
     #[test]
     fn the_ranked_title_counts_what_is_shown() {
         assert_eq!(
             ranked_title(3, 12, 7, Painter::plain()),
-            "Ranked — 3 of 12 usable, 7 rejected            lag = -updates age vs freshest"
+            "Ranked — 3 of 12 usable, 7 rejected            behind = -updates age vs freshest · latency = round trip · verified = InRelease signature"
         );
     }
 
-    /// The one line under the table: only when no row has AS data, and it names the run's own
-    /// reason rather than a bare `unknown`.
+    /// The one line under the table: only in a `--verbose` run, only when no row has AS data, and it
+    /// names the run's own reason rather than a bare `unknown`. The default table has no AS column, so
+    /// it has no gap to explain and gets no note.
     #[test]
     fn the_as_note_appears_only_when_no_row_has_as_data() {
         let ok = verify::SignatureStatus::verified_for_test();
-        assert_eq!(as_note(&[], Some("whatever")), None);
+        assert_eq!(as_note(&[], Some("whatever"), true), None);
         assert_eq!(
             as_note(
                 &[row("http://a.example/ubuntu", 0, &ok, Some("12929 same"))],
-                Some("x")
+                Some("x"),
+                true
             ),
             None
         );
         assert_eq!(
-            as_note(&[row("http://a.example/ubuntu", 0, &ok, None)], Some("Team Cymru names no AS for 192.0.2.1: no AS data for this address")),
+            as_note(&[row("http://a.example/ubuntu", 0, &ok, None)], Some("Team Cymru names no AS for 192.0.2.1: no AS data for this address"), true),
             Some("note: AS data unavailable (Team Cymru names no AS for 192.0.2.1: no AS data for this address)".to_string())
         );
         // No reason was kept (nothing was ever asked): the note still says so, it does not vanish.
         assert_eq!(
-            as_note(&[row("http://a.example/ubuntu", 0, &ok, None)], None),
+            as_note(&[row("http://a.example/ubuntu", 0, &ok, None)], None, true),
             Some("note: AS data unavailable (no AS lookup answered)".to_string())
+        );
+        // The default report never prints an AS column, so it never explains its absence either.
+        assert_eq!(
+            as_note(&[row("http://a.example/ubuntu", 0, &ok, None)], None, false),
+            None
         );
     }
 
@@ -5104,22 +5463,96 @@ mod tests {
         assert_eq!(report.0, ["apt-scout 0.1.0 · Ubuntu 24.04 (noble)"]);
     }
 
-    /// The recommendation's reason carries every fact SPEC.md CLI asks for in it, and it names the
-    /// AS the tie-break used: the bare match word cannot be checked against the table.
+    /// The recommendation's reason carries every fact SPEC.md CLI asks for in it, in the table's own
+    /// words for the two numbers, and never a second spelling of the same fact — the signature
+    /// included: the default line names the column and its cell, and the exact status is `--verbose`'s
+    /// (SPEC.md Output).
     #[test]
-    fn the_recommendation_carries_country_as_lag_speed_and_signature() {
+    fn the_recommendation_carries_country_behind_latency_and_signature() {
         let best = probed(MIRROR, verify::SignatureStatus::verified_for_test());
+        // The default line: no AS, because the AS the tie-break used is proof of how the ranking was
+        // audited, not a fact a person choosing a mirror acts on, and the signature in the table's
+        // own words (SPEC.md Output).
         assert_eq!(
-            recommendation(&best, "Lithuania", Some("12929 same"), Painter::plain()),
-            "  https://mirror.example/ubuntu/ — freshest verified, Lithuania, AS 12929 same, 0m lag, 1.0 MB/s, 10 ms"
+            recommendation(
+                &best,
+                "Lithuania",
+                Some("12929 same"),
+                false,
+                Painter::plain()
+            ),
+            "  https://mirror.example/ubuntu/ — freshest, verified yes, Lithuania, 0m behind, 1.0 MB/s, 10 ms latency"
+        );
+        // The same mirror under --verbose names the AS the tie-break used: the bare match word
+        // cannot be checked against the table.
+        assert_eq!(
+            recommendation(
+                &best,
+                "Lithuania",
+                Some("12929 same"),
+                true,
+                Painter::plain()
+            ),
+            "  https://mirror.example/ubuntu/ — freshest verified, Lithuania, AS 12929 same, 0m behind, 1.0 MB/s, 10 ms latency"
         );
         // A mirror one generation behind says so instead of claiming to be the freshest.
         let mut lagging = best;
         lagging.lag_secs = 6 * 3600;
         assert_eq!(
-            recommendation(&lagging, "Lithuania", None, Painter::plain()),
-            "  https://mirror.example/ubuntu/ — closest verified, Lithuania, AS unknown, 360m lag, 1.0 MB/s, 10 ms"
+            recommendation(&lagging, "Lithuania", None, false, Painter::plain()),
+            "  https://mirror.example/ubuntu/ — closest, verified yes, Lithuania, 360m behind, 1.0 MB/s, 10 ms latency"
         );
+        assert_eq!(
+            recommendation(&lagging, "Lithuania", None, true, Painter::plain()),
+            "  https://mirror.example/ubuntu/ — closest verified, Lithuania, AS unknown, 360m behind, 1.0 MB/s, 10 ms latency"
+        );
+    }
+
+    /// The default recommendation speaks the table's word for the signature and never the exact
+    /// status: a mirror whose check could not run reads `verified ?` and one whose signature was
+    /// invalid reads `verified no`, while the phrases that say *why* stay `--verbose`'s (SPEC.md
+    /// Output). Without this the default line printed the same `unverified (…)` text `Detail` does.
+    #[test]
+    fn the_default_recommendation_says_the_tables_word_never_the_proof() {
+        let unchecked = &verify::SignatureStatus::Unavailable("no gpgv in this image".into());
+        let invalid = &verify::SignatureStatus::Invalid("altered".into());
+        let line = |status: &verify::SignatureStatus, verbose: bool| {
+            recommendation(
+                &probed(MIRROR, status.clone()),
+                "Lithuania",
+                None,
+                verbose,
+                Painter::plain(),
+            )
+        };
+        assert_eq!(
+            line(unchecked, false),
+            "  https://mirror.example/ubuntu/ — freshest, verified ?, Lithuania, 0m behind, 1.0 MB/s, 10 ms latency"
+        );
+        assert_eq!(
+            line(invalid, false),
+            "  https://mirror.example/ubuntu/ — freshest, verified no, Lithuania, 0m behind, 1.0 MB/s, 10 ms latency"
+        );
+        // The cell word is the table's: the same three words, in the same order as the column.
+        assert_eq!(
+            [
+                unchecked,
+                invalid,
+                &verify::SignatureStatus::verified_for_test()
+            ]
+            .map(signature_cell),
+            ["?", "no", "yes"]
+        );
+        // Not one exact status in either default line, and both in the `--verbose` ones.
+        for (status, phrase) in [
+            (unchecked, "unverified (signature unavailable)"),
+            (invalid, "unverified (invalid signature)"),
+        ] {
+            let plain = line(status, false);
+            assert!(!plain.contains(phrase), "the proof leaked: {plain}");
+            assert!(!plain.contains("unverified"), "the proof leaked: {plain}");
+            assert!(line(status, true).contains(phrase), "{status:?}");
+        }
     }
 
     /// The rejected section is grouped: a count in the header, one line per reason, the numbers a
@@ -5347,7 +5780,8 @@ mod tests {
     }
 
     /// The header says which country won and where the answer came from; a run whose reference was
-    /// unreachable says that instead of pretending it had one.
+    /// unreachable says that instead of pretending it had one. The server's AS is `--verbose`'s, so
+    /// the default line keeps `mirrors:` and `reference:` and nothing else (SPEC.md Output).
     #[test]
     fn the_header_names_the_release_country_and_reference() {
         assert_eq!(
@@ -5367,12 +5801,20 @@ mod tests {
             security: None,
         };
         assert_eq!(
-            header_context(Some("AS12929"), "Launchpad", Some(&reference)),
+            header_context(Some("AS12929"), "Launchpad", Some(&reference), true),
             "server AS12929 · mirrors: Launchpad · reference: archive.ubuntu.com (verified)"
         );
         assert_eq!(
-            header_context(None, "mirrors.ubuntu.com (unverified)", None),
+            header_context(Some("AS12929"), "Launchpad", Some(&reference), false),
+            "mirrors: Launchpad · reference: archive.ubuntu.com (verified)"
+        );
+        assert_eq!(
+            header_context(None, "mirrors.ubuntu.com (unverified)", None, true),
             "server AS unknown · mirrors: mirrors.ubuntu.com (unverified) · reference: newest mirror date (archive.ubuntu.com unreachable)"
+        );
+        assert_eq!(
+            header_context(None, "mirrors.ubuntu.com (unverified)", None, false),
+            "mirrors: mirrors.ubuntu.com (unverified) · reference: newest mirror date (archive.ubuntu.com unreachable)"
         );
     }
 
@@ -5445,19 +5887,36 @@ mod tests {
         assert!(!plain.verbose);
     }
 
-    /// The whole `--list` block, section by section, from fixture data — the shape the human
-    /// approved. It pins the section order and the column widths together; the container matrix is
-    /// what proves a live run prints the same block.
-    #[test]
-    fn the_list_report_reads_as_one_block() {
-        let apt = TempApt::new("report");
+    /// The long redirect host every report test below uses: longer than `REDIR_HOST_MAX`, so the
+    /// default table has to cut it and `--verbose` is the only place it appears whole.
+    const LONG_HOST: &str = "a-very-long-mirror-host.example.org";
+
+    /// The whole `--list` block a run prints, from fixture data, with `verbose` threaded exactly
+    /// where `run()` threads it: one run, two reports. `the_list_report_reads_as_one_block` pins the
+    /// default one line by line; the two tests after it read the pair for what moved.
+    fn sample_report(verbose: bool, tag: &str) -> (Vec<String>, TempApt) {
+        sample_report_with(verify::SignatureStatus::verified_for_test(), verbose, tag)
+    }
+
+    /// The same block with the **recommended** mirror's signature status chosen by the caller, so a
+    /// test can make the run whose recommendation is unverified — the run a leak of the exact status
+    /// would show up in.
+    fn sample_report_with(
+        best_signature: verify::SignatureStatus,
+        verbose: bool,
+        tag: &str,
+    ) -> (Vec<String>, TempApt) {
+        let apt = TempApt::new(tag);
         apt.write(
             "sources.list.d/ubuntu.sources",
             "# noble\nTypes: deb\nURIs: http://archive.ubuntu.com/ubuntu\nSuites: noble noble-updates\nComponents: main\n\nTypes: deb\nURIs: http://security.ubuntu.com/ubuntu\nSuites: noble-security\nComponents: main\n",
         );
         let hosts = listed(&["archive.ubuntu.com", "mirror.arizona.edu"]);
         let inventory = sources::inventory(&apt.0, &hosts, false);
-        let selected = MIRROR;
+        // The spelling a probe reports: the mirror's own URL without the trailing slash, which is
+        // what the detail section keys the resolved address by.
+        let selected = "https://mirror.example/ubuntu";
+        let remote = "http://mirrors.usinternet.com/ubuntu";
         let plan = build_plan(
             &apt.0,
             &inventory,
@@ -5467,78 +5926,117 @@ mod tests {
         )
         .expect("the archive stanza is rewritable")
         .expect("one file changes");
-        let verified = verify::SignatureStatus::verified_for_test();
-        let unverified = verify::SignatureStatus::Unavailable("no gpgv in this image".into());
-        let rows = vec![
-            row(selected, 0, &verified, Some("12929 same")),
-            noted(
-                row(
-                    "http://mirrors.usinternet.com/ubuntu",
-                    0,
-                    &unverified,
-                    Some("3356 diff"),
-                ),
-                Some(778 * 60),
-                Some("mirror2.example"),
+        // One verified mirror one generation behind and one whose signature could not be checked, so
+        // the three cell values and both arms of the `verified` ink are in the same report.
+        let mut second = probed(
+            remote,
+            verify::SignatureStatus::Unavailable("no gpgv in this image".into()),
+        );
+        second.lag_secs = 6 * 3600;
+        let ranked = vec![probed(selected, best_signature), second];
+        // The chosen mirror redirects to a long host and has a `-security` lag worth printing; the
+        // other mirror did neither, so its row must end at its own cell.
+        let details = std::collections::HashMap::from([
+            (
+                selected.to_string(),
+                Detail {
+                    country: "United States".to_string(),
+                    security_date: Some(600),
+                    security_lag: Some(778 * 60),
+                    redirected_to: Some(LONG_HOST.to_string()),
+                },
             ),
-        ];
+            (
+                remote.to_string(),
+                Detail {
+                    country: "United States".to_string(),
+                    security_date: None,
+                    security_lag: None,
+                    redirected_to: None,
+                },
+            ),
+        ]);
+        let mirror_asn = std::collections::HashMap::from([
+            (
+                as_key(selected).to_string(),
+                ResolvedAs {
+                    ip: "192.0.2.10".parse().expect("a fixture address"),
+                    asn: "AS12929".to_string(),
+                    name: Some("ARIZONA, US".to_string()),
+                },
+            ),
+            (
+                as_key(remote).to_string(),
+                ResolvedAs {
+                    ip: "192.0.2.20".parse().expect("a fixture address"),
+                    asn: "AS3356".to_string(),
+                    name: None,
+                },
+            ),
+        ]);
         let rejected = vec![
             Rejected {
                 host: "mirror.lostpacket.org".into(),
                 kind: Reject::NotFound,
-                why: "answered HTTP 404".into(),
+                why: "http://mirror.lostpacket.org/ubuntu/dists/noble-updates/InRelease answered HTTP 404".into(),
             },
             Rejected {
                 host: "mirror.pit.teraswitch.com".into(),
                 kind: Reject::Stale(162 * 3600),
-                why: "stale: 162 h behind".into(),
+                why: "stale: 162 h behind the freshest date; the limit is 24 h".into(),
             },
         ];
-        let mut resolved = std::collections::HashMap::new();
-        resolved.insert(
-            selected.to_string(),
-            ResolvedAs {
-                ip: "192.0.2.10".parse().expect("a fixture address"),
-                asn: "AS12929".to_string(),
-                name: Some("ARIZONA, US".to_string()),
-            },
-        );
+        let rows = table_rows(&ranked, &details, &mirror_asn, Some("AS12929"), 5, verbose);
+        let ink = Painter::plain();
         let mut report = Report::default();
         report.line(header_identity(
             "0.1.0",
             "Ubuntu 24.04 (noble)",
             "United States",
             "--country",
-            Painter::plain(),
+            ink,
         ));
-        report.block(sources_section(&apt.0, &inventory, Painter::plain()));
-        report.block(vec![header_context(Some("AS12929"), "Launchpad", None)]);
-        let mut ranked_lines = vec![ranked_title(
-            rows.len(),
-            rows.len(),
-            rejected.len(),
-            Painter::plain(),
-        )];
-        ranked_lines.extend(ranked_rows(&rows, Painter::plain()));
-        ranked_lines.extend(as_note(&rows, None));
+        report.block(sources_section(&apt.0, &inventory, ink));
+        report.block(vec![header_context(
+            Some("AS12929"),
+            "Launchpad",
+            None,
+            verbose,
+        )]);
+        let mut ranked_lines = vec![ranked_title(rows.len(), ranked.len(), rejected.len(), ink)];
+        ranked_lines.extend(ranked_rows(&rows, ink));
+        ranked_lines.extend(as_note(&rows, None, verbose));
         report.block(ranked_lines);
+        if verbose && !rows.is_empty() {
+            report.block(detail_section(&rows, &details, &mirror_asn, ink));
+        }
         report.block(vec![
-            Painter::plain().bold("Recommendation"),
+            ink.bold("Recommendation"),
             recommendation(
-                &probed(selected, verify::SignatureStatus::verified_for_test()),
+                &ranked[0],
                 "United States",
-                Some("12929 same"),
-                Painter::plain(),
+                as_cell(&mirror_asn, Some("AS12929"), selected).as_deref(),
+                verbose,
+                ink,
             ),
         ]);
         let mut planned = vec![titled(
             "Planned change",
             "nothing is written with --list",
-            Painter::plain(),
+            ink,
         )];
-        planned.extend(plan_changes(&apt.0, &inventory, &plan, Painter::plain()));
+        planned.extend(plan_changes(&apt.0, &inventory, &plan, ink));
         report.block(planned);
-        report.block(rejected_section(&rejected, Painter::plain()));
+        report.block(rejected_lines(&rejected, verbose, ink));
+        (report.0, apt)
+    }
+
+    /// The whole `--list` block, section by section, from fixture data — the shape the human
+    /// approved, as the default report prints it. It pins the section order and the column widths
+    /// together; the container matrix is what proves a live run prints the same block.
+    #[test]
+    fn the_list_report_reads_as_one_block() {
+        let (report, apt) = sample_report(false, "report");
         let expected = vec![
             "apt-scout 0.1.0 · Ubuntu 24.04 (noble) · country: United States (--country)".to_string(),
             String::new(),
@@ -5548,33 +6046,278 @@ mod tests {
             "  sources.list.d/ubuntu.sources             skip     line 7  security.ubuntu.com — security suite is never rewritten"
                 .to_string(),
             String::new(),
-            "server AS12929 · mirrors: Launchpad · reference: newest mirror date (archive.ubuntu.com unreachable)"
+            "mirrors: Launchpad · reference: newest mirror date (archive.ubuntu.com unreachable)"
                 .to_string(),
             String::new(),
-            "Ranked — 2 of 2 usable, 2 rejected             lag = -updates age vs freshest"
+            "Ranked — 2 of 2 usable, 2 rejected             behind = -updates age vs freshest · latency = round trip · verified = InRelease signature"
                 .to_string(),
-            "   #  mirror                                         lag      speed     delay         as  sig  notes"
+            "   #  mirror                                       behind      speed   latency  verified  notes"
                 .to_string(),
-            "   1  https://mirror.example/ubuntu/                  0m   1.2 MB/s   1235 ms 12929 same  ok"
+            "   1  https://mirror.example/ubuntu                    0m   1.0 MB/s     10 ms  yes       redir:a-very-long-mir~"
                 .to_string(),
-            "   2  http://mirrors.usinternet.com/ubuntu            0m   1.2 MB/s   1235 ms  3356 diff  unavailable  sec:778m redir:mirror2.example"
+            "   2  http://mirrors.usinternet.com/ubuntu           360m   1.0 MB/s     10 ms  ?"
                 .to_string(),
             String::new(),
             "Recommendation".to_string(),
-            "  https://mirror.example/ubuntu/ — freshest verified, United States, AS 12929 same, 0m lag, 1.0 MB/s, 10 ms"
+            "  https://mirror.example/ubuntu — freshest, verified yes, United States, 0m behind, 1.0 MB/s, 10 ms latency"
                 .to_string(),
             String::new(),
             "Planned change                                 nothing is written with --list"
                 .to_string(),
             "  sources.list.d/ubuntu.sources:2".to_string(),
             "    - http://archive.ubuntu.com/ubuntu".to_string(),
-            "    + https://mirror.example/ubuntu/".to_string(),
+            "    + https://mirror.example/ubuntu".to_string(),
             String::new(),
             "Rejected — 2".to_string(),
             "  404               mirror.lostpacket.org".to_string(),
             "  stale             mirror.pit.teraswitch.com (162 h)".to_string(),
         ];
-        assert_eq!(report.0, expected);
+        assert_eq!(report, expected);
+    }
+
+    /// The default report is the decision, and this is the test that keeps it so: one assertion per
+    /// fact `SPEC.md` Output moved to `--verbose`, so a leak names itself instead of hiding in a
+    /// diff of the whole block. Each of these would fail on the report the previous release printed.
+    /// The recommended mirror's own signature is **invalid** here on purpose: it is the run in which
+    /// the default recommendation printed the exact status, so the assertion below has something to
+    /// catch instead of passing on a mirror whose status happened to read `verified`.
+    #[test]
+    fn a_default_report_carries_no_verbose_fact() {
+        let (report, _) = sample_report_with(
+            verify::SignatureStatus::Invalid("altered".into()),
+            false,
+            "default-facts",
+        );
+        let text = report.join("\n");
+
+        // Each row's AS number and its same/diff/unknown match with the server.
+        assert!(
+            !text.contains(" AS "),
+            "an AS is in the default report:\n{text}"
+        );
+        assert!(!text.contains("12929"), "an AS number is in it:\n{text}");
+        assert!(
+            !text.contains(" same"),
+            "an AS match word is in it:\n{text}"
+        );
+        assert!(
+            !text.contains(" diff"),
+            "an AS match word is in it:\n{text}"
+        );
+        assert!(
+            !text.contains("unknown"),
+            "an AS match word is in it:\n{text}"
+        );
+        // The server's AS on the context line; the line itself stays.
+        assert!(
+            !text.contains("server AS"),
+            "the server's AS is in it:\n{text}"
+        );
+        assert!(
+            text.contains("mirrors: Launchpad · reference:"),
+            "the context line lost its own fields:\n{text}"
+        );
+        // Each row's country and the address the run resolved for it.
+        assert!(
+            !text.contains("country: United States · ip:"),
+            "a per-row country is in it:\n{text}"
+        );
+        assert!(
+            !text.contains("192.0.2.10"),
+            "a resolved address is in it:\n{text}"
+        );
+        // Both pocket dates in full and the `-security` lag.
+        assert!(
+            !text.contains("UTC"),
+            "a full pocket date is in it:\n{text}"
+        );
+        assert!(
+            !text.contains("-updates:"),
+            "a pocket date line is in it:\n{text}"
+        );
+        assert!(
+            !text.contains("-security"),
+            "the -security pocket is in it:\n{text}"
+        );
+        assert!(
+            !text.contains("sec:"),
+            "the -security lag is in it:\n{text}"
+        );
+        // The exact signature status as `Detail`'s own line, instead of the table's yes/no/?.
+        assert!(
+            !text.contains("     signature:"),
+            "the detail signature line is in it:\n{text}"
+        );
+        // And nowhere else either: the recommendation the default run prints names the column and
+        // its cell, never the phrase `Detail` and a `--verbose` run use, and this run's chosen
+        // mirror is the invalid one.
+        assert!(
+            !text.contains("unverified"),
+            "the exact signature status is in the recommendation:\n{text}"
+        );
+        assert!(
+            text.contains(" — freshest, verified no, United States,"),
+            "the recommendation does not speak the table's word:\n{text}"
+        );
+        // And the row itself carries the short form: `?` for a check that could not run, which is
+        // what the unreachable-keyring row is.
+        let unchecked = report
+            .iter()
+            .find(|l| l.starts_with("   2  "))
+            .unwrap_or_else(|| panic!("no second row:\n{text}"));
+        assert!(
+            unchecked.ends_with("  ?"),
+            "the unchecked row must read ?: {unchecked}"
+        );
+        // A redirect host in full, instead of the cut form.
+        assert!(
+            text.contains("redir:a-very-long-mir~"),
+            "the cut redirect is missing:\n{text}"
+        );
+        assert!(
+            !text.contains(LONG_HOST),
+            "an uncut redirect host is in it:\n{text}"
+        );
+        // The full text of every rejection reason, instead of the grouped class and its count.
+        assert!(
+            text.contains("  404               mirror.lostpacket.org"),
+            "the grouped class is missing:\n{text}"
+        );
+        assert!(
+            !text.contains("answered HTTP 404"),
+            "a full rejection reason is in it:\n{text}"
+        );
+        assert!(
+            !text.contains("the limit is 24 h"),
+            "a full rejection reason is in it:\n{text}"
+        );
+        // The `Detail` section is the holder of all of the above, so it is not in the default report.
+        assert!(
+            !text.contains("Detail"),
+            "the Detail section is in it:\n{text}"
+        );
+    }
+
+    /// The other half of the contract: `--verbose` carries every fact the default report dropped, on
+    /// its own named line, so deleting one from the verbose path fails here by name rather than
+    /// leaving a quietly thinner proof.
+    #[test]
+    fn the_verbose_report_carries_every_moved_fact() {
+        let (report, _) = sample_report(true, "verbose-facts");
+        let text = report.join("\n");
+        // Each row's AS number and match, and the chosen mirror's in the recommendation.
+        assert!(text.contains("12929 same"), "no AS cell:\n{text}");
+        assert!(text.contains("3356 diff"), "no AS cell:\n{text}");
+        assert!(
+            text.contains(", AS 12929 same, 0m behind"),
+            "the recommendation names no AS:\n{text}"
+        );
+        // The server's AS on the context line, which keeps `mirrors:` and `reference:`.
+        assert!(
+            text.contains("server AS12929 · mirrors: Launchpad · reference:"),
+            "no server AS:\n{text}"
+        );
+        // Each row's country and the address the run resolved.
+        assert!(
+            text.contains("country: United States · ip: 192.0.2.10 · as: AS12929 (ARIZONA, US)"),
+            "no per-row country, address or AS holder:\n{text}"
+        );
+        // Both pocket dates in full and the `-security` lag.
+        assert!(
+            text.contains("-updates: 1970-01-01 00:16 UTC, 0m lag"),
+            "no -updates date:\n{text}"
+        );
+        assert!(
+            text.contains("-security: 1970-01-01 00:10 UTC, 778m lag"),
+            "no -security date and lag:\n{text}"
+        );
+        // The exact signature status.
+        assert!(
+            text.contains("signature: unverified (signature unavailable)"),
+            "no exact signature status:\n{text}"
+        );
+        assert!(
+            text.contains("signature: verified"),
+            "no exact signature status for the verified row:\n{text}"
+        );
+        // A redirect host in full.
+        assert!(
+            text.contains(&format!("redirects to {LONG_HOST}")),
+            "no uncut redirect host:\n{text}"
+        );
+        // The full text of every rejection reason.
+        assert!(
+            text.contains("answered HTTP 404"),
+            "no full rejection reason:\n{text}"
+        );
+        assert!(
+            text.contains("stale: 162 h behind the freshest date; the limit is 24 h"),
+            "no full stale reason:\n{text}"
+        );
+    }
+
+    /// `--verbose` adds to the default report instead of replacing any part of it: everything the
+    /// default says about this run that is not one of the moved facts is still there, byte for byte,
+    /// and each row keeps the same numbers in both.
+    #[test]
+    fn the_verbose_report_adds_to_the_default_one() {
+        let (default, _) = sample_report(false, "adds-default");
+        let (verbose, _) = sample_report(true, "adds-verbose");
+        for needle in [
+            "apt-scout 0.1.0 ·",
+            "  sources.list",
+            "Planned change",
+            "    - http://archive.ubuntu.com/ubuntu",
+            "    + https://mirror.example/ubuntu",
+        ] {
+            let from_default: Vec<&String> =
+                default.iter().filter(|l| l.contains(needle)).collect();
+            let from_verbose: Vec<&String> =
+                verbose.iter().filter(|l| l.contains(needle)).collect();
+            assert!(
+                !from_default.is_empty(),
+                "{needle} is missing from both reports"
+            );
+            assert_eq!(
+                from_default, from_verbose,
+                "{needle} differs between the two"
+            );
+        }
+        // The `Sources` heading names the apt root, and each fixture has its own, so it is compared by
+        // shape rather than by the directory one test happened to use.
+        for report in [&default, &verbose] {
+            assert!(
+                report.iter().any(|l| l.starts_with("Sources ")),
+                "no Sources heading: {report:?}"
+            );
+        }
+        // The same run, so each row carries the same behind, speed, latency and cell word in both:
+        // what `--verbose` adds is the AS column, not a different measurement.
+        let row_of = |report: &[String], rank: usize| {
+            report
+                .iter()
+                .find(|l| l.starts_with(&format!("   {rank}  ")))
+                .cloned()
+                .unwrap_or_else(|| panic!("no row {rank}: {report:?}"))
+        };
+        for rank in [1, 2] {
+            let a = row_of(&default, rank);
+            let b = row_of(&verbose, rank);
+            for fact in ["0m", "360m", "1.0 MB/s", "10 ms", "yes", "?"] {
+                assert_eq!(
+                    a.contains(fact),
+                    b.contains(fact),
+                    "{fact} in row {rank}:\n{a}\n{b}"
+                );
+            }
+        }
+        // The AS column is the only difference in that row: take the field out of the verbose row and
+        // it is the default row again, byte for byte.
+        assert_eq!(
+            row_of(&verbose, 1).replacen(" 12929 same", "", 1),
+            row_of(&default, 1),
+            "the AS column is the only difference between the two rows"
+        );
     }
 
     /// The AS map is keyed by `as_key`, which is the spelling the probe reports. A mirror listed
@@ -5641,9 +6384,10 @@ mod tests {
         (apt, inventory, plan)
     }
 
-    /// Every styled site in one report — the identity line, the four headings, the `sig` column, both
-    /// diff signs, a rejection reason — built with whichever painter it is given, so a colour run and
-    /// a plain run can be compared line for line (SPEC.md Output).
+    /// Every styled site in one report — the identity line, the four headings, the `verified` column,
+    /// both diff signs, a rejection reason — built with whichever painter it is given, so a colour run
+    /// and a plain run can be compared line for line (SPEC.md Output). It is a `--verbose` report, so
+    /// the styled `verified` cells and the `Detail` heading are both in it.
     fn painted_report(
         ink: Painter,
         apt: &TempApt,
@@ -5652,9 +6396,18 @@ mod tests {
     ) -> Vec<String> {
         let verified = verify::SignatureStatus::verified_for_test();
         let invalid = verify::SignatureStatus::Invalid("bad signature".into());
+        // All three `verified` cells in one report, so each ink site is here: `yes` green, `no` and
+        // `?` yellow.
+        let unavailable = verify::SignatureStatus::Unavailable("no gpgv in this image".into());
         let rows = vec![
             row(MIRROR, 0, &verified, Some("12929 same")),
             row("http://b.example/ubuntu", 600, &invalid, None),
+            row(
+                "http://c.example/ubuntu",
+                700,
+                &unavailable,
+                Some("3356 diff"),
+            ),
         ];
         let rejected = vec![Rejected {
             host: "mirror.lostpacket.org".into(),
@@ -5685,6 +6438,7 @@ mod tests {
                 &probed(MIRROR, verify::SignatureStatus::verified_for_test()),
                 "United States",
                 Some("12929 same"),
+                true,
                 ink,
             ),
         ]);
@@ -5740,10 +6494,11 @@ mod tests {
     fn a_plain_painter_returns_its_input() {
         let plain = Painter::plain();
         assert_eq!(plain.bold("Ranked"), "Ranked");
-        assert_eq!(plain.green("ok"), "ok");
+        assert_eq!(plain.green("yes"), "yes");
         assert_eq!(plain.yellow("no"), "no");
+        assert_eq!(plain.yellow("?"), "?");
         assert_eq!(plain.red("- old"), "- old");
-        assert_eq!(plain.dim("lag"), "lag");
+        assert_eq!(plain.dim("behind"), "behind");
         assert_eq!(paint(Style::Bold, "x", false), "x");
     }
 
@@ -5752,10 +6507,10 @@ mod tests {
     fn an_enabled_painter_wraps_the_text_in_one_escape() {
         let ink = Painter::new(true);
         assert_eq!(ink.bold("Section"), "\u{1b}[1mSection\u{1b}[0m");
-        assert_eq!(ink.green("ok"), "\u{1b}[32mok\u{1b}[0m");
-        assert_eq!(ink.yellow("no"), "\u{1b}[33mno\u{1b}[0m");
+        assert_eq!(ink.green("yes"), "\u{1b}[32myes\u{1b}[0m");
+        assert_eq!(ink.yellow("?"), "\u{1b}[33m?\u{1b}[0m");
         assert_eq!(ink.red("- x"), "\u{1b}[31m- x\u{1b}[0m");
-        assert_eq!(ink.dim("lag"), "\u{1b}[2mlag\u{1b}[0m");
+        assert_eq!(ink.dim("behind"), "\u{1b}[2mbehind\u{1b}[0m");
         assert_eq!(paint(Style::Dim, "x", true), "\u{1b}[2mx\u{1b}[0m");
         // A plain painter over the same text is the identity, so the two differ by the escape only.
         assert_eq!(
@@ -5807,8 +6562,8 @@ mod tests {
         assert_eq!(stripped, plain);
 
         // Site by site (SPEC.md Output): bold for the identity line, section headings and the
-        // recommended host; green `ok` and `+` lines; yellow `no`; red rejection reasons and `-`
-        // lines; dim `lag`, `speed` and `delay`.
+        // recommended host; green `yes` and `+` lines; yellow `no` and `?`; red rejection reasons and
+        // `-` lines; dim `behind`, `speed` and `latency`.
         let any = |needle: &str| coloured.iter().any(|line| line.contains(needle));
         assert!(
             coloured[0].starts_with("\u{1b}[1mapt-scout 0.1.0"),
@@ -5822,11 +6577,18 @@ mod tests {
         assert!(any("\u{1b}[1mRejected — 1\u{1b}[0m"));
         assert!(any("\u{1b}[1mPlanned change "));
         assert!(any("\u{1b}[1mhttps://mirror.example/ubuntu/\u{1b}[0m"));
-        assert!(any("\u{1b}[2m  lag\u{1b}[0m"));
+        assert!(any("\u{1b}[2mbehind\u{1b}[0m"));
         assert!(any("\u{1b}[2m     speed\u{1b}[0m"));
-        assert!(any("\u{1b}[2m    delay\u{1b}[0m"));
-        assert!(any("\u{1b}[32mok\u{1b}[0m"));
+        assert!(any("\u{1b}[2m  latency\u{1b}[0m"));
+        assert!(any("\u{1b}[32myes\u{1b}[0m"));
         assert!(any("\u{1b}[33mno\u{1b}[0m"));
+        // `?` is a yellow cell too: "could not check" is never painted like a pass.
+        assert!(
+            coloured
+                .iter()
+                .any(|line| line.contains("\u{1b}[33m?\u{1b}[0m")),
+            "no yellow ? cell: {coloured:?}"
+        );
         assert!(any("\u{1b}[31m  404"));
         assert!(any("\u{1b}[31m    - http://archive.ubuntu.com/ubuntu"));
         assert!(any("\u{1b}[32m    + https://mirror.example/ubuntu/"));
@@ -5867,26 +6629,50 @@ mod tests {
         assert!(!HELP.contains("-N, --no-color"), "{HELP}");
     }
 
-    /// The test sink: what the run would have shown, in order, with no terminal anywhere.
+    /// The test sink: what the run would have shown, in order, with no terminal anywhere. `events`
+    /// keeps all three calls in one sequence, because "was that frame drawn after the summary" is a
+    /// question about order that three separate vectors cannot answer.
     #[derive(Default)]
     struct RecordingSink {
         lines: Vec<String>,
         clears: usize,
         settled: Vec<String>,
+        events: Vec<String>,
     }
 
     impl Sink for RecordingSink {
         fn rewrite(&mut self, line: &str) {
             self.lines.push(line.to_string());
+            self.events.push(format!("rewrite:{line}"));
         }
 
         fn clear(&mut self) {
             self.clears += 1;
+            self.events.push("clear".to_string());
         }
 
         fn settle(&mut self, line: &str) {
             self.settled.push(line.to_string());
+            self.events.push(format!("settle:{line}"));
         }
+    }
+
+    /// The distinct lines a run drew, in order, with the frame cell and any repeated frame of the same
+    /// text taken out: the animation redraws one line, so "which lines did it show" is the sequence of
+    /// distinct texts whatever the frames did or how many of them a slow ticker squeezed in.
+    fn drawn(progress: &Progress<RecordingSink>) -> Vec<String> {
+        let sink = lock(&progress.sink);
+        let mut out: Vec<String> = Vec::new();
+        for line in &sink.lines {
+            let text = match line.split_once(' ') {
+                Some((_, rest)) => rest.to_string(),
+                None => line.clone(),
+            };
+            if out.last() != Some(&text) {
+                out.push(text);
+            }
+        }
+        out
     }
 
     /// The real sink's whole job: rewrite in place and erase what it leaves, so a shorter line never
@@ -5903,11 +6689,12 @@ mod tests {
         );
     }
 
-    /// A piped or logged stderr is silent: not a shorter line, not a "still working" notice, nothing
-    /// at all — and that is the same code path a terminal takes (SPEC.md Output).
+    /// A piped or logged stderr is silent: no line, no frame, no thread — nothing is started to draw
+    /// one, so the silence is structural rather than a branch inside the loop (SPEC.md Output).
     #[test]
     fn progress_writes_nothing_when_stderr_is_not_a_terminal() {
         let mut progress = Progress::new(RecordingSink::default(), false);
+        assert!(progress.ticker.is_none(), "no terminal, no animation");
         progress.load();
         progress.reference();
         progress.probe(1, 3);
@@ -5916,13 +6703,11 @@ mod tests {
         progress.ranked();
         progress.clear();
         progress.finish(4, 0);
-        assert!(progress.sink.lines.is_empty(), "{:?}", progress.sink.lines);
-        assert_eq!(progress.sink.clears, 0);
-        assert!(
-            progress.sink.settled.is_empty(),
-            "{:?}",
-            progress.sink.settled
-        );
+        let sink = lock(&progress.sink);
+        assert!(sink.events.is_empty(), "{:?}", sink.events);
+        assert!(sink.lines.is_empty(), "{:?}", sink.lines);
+        assert_eq!(sink.clears, 0);
+        assert!(sink.settled.is_empty(), "{:?}", sink.settled);
     }
 
     /// At a terminal the run names each phase it is in and how far probing got, and it ends with the one
@@ -5939,8 +6724,9 @@ mod tests {
         // A warning that lands mid-run erases the live line instead of sharing it.
         progress.clear();
         progress.finish(4, 0);
+        // The animation is joined by `finish`, so every line it drew is already in the sink.
         assert_eq!(
-            progress.sink.lines,
+            drawn(&progress),
             [
                 "loading the mirror list",
                 "verifying the reference",
@@ -5950,13 +6736,10 @@ mod tests {
                 "ranking",
             ]
         );
-        assert_eq!(progress.sink.clears, 1);
-        assert_eq!(
-            progress.sink.settled.len(),
-            1,
-            "one summary, and nothing after it"
-        );
-        let summary = &progress.sink.settled[0];
+        let sink = lock(&progress.sink);
+        assert_eq!(sink.clears, 1);
+        assert_eq!(sink.settled.len(), 1, "one summary, and nothing after it");
+        let summary = &sink.settled[0];
         let number = summary
             .strip_prefix("done — 4 usable, 0 rejected in ")
             .and_then(|rest| rest.strip_suffix(" s"))
@@ -5967,9 +6750,8 @@ mod tests {
     /// One candidate is not "1 mirrors": the line counts the way a person says it.
     #[test]
     fn a_single_candidate_is_not_plural() {
-        let mut progress = Progress::new(RecordingSink::default(), true);
-        progress.probe(1, 1);
-        assert_eq!(progress.sink.lines, ["probing 1 mirror… 1/1"]);
+        assert_eq!(probing_line(1, 1), "probing 1 mirror… 1/1");
+        assert_eq!(probing_line(1, 3), "probing 3 mirrors… 1/3");
     }
 
     /// "The candidates probed so far" (SPEC.md Output): the count comes from the probes that have
@@ -5981,7 +6763,7 @@ mod tests {
         let quick = thread::spawn(|| ());
         let mut progress = Progress::new(RecordingSink::default(), true);
         assert_eq!(await_probes(vec![slow, quick], &mut progress).len(), 2);
-        let frames = &progress.sink.lines;
+        let frames = drawn(&progress);
         // The first frame is honest: nothing has finished yet, so it does not claim one.
         assert_eq!(
             frames.first().map(String::as_str),
@@ -5998,7 +6780,10 @@ mod tests {
             })
             .collect();
         assert!(counts.len() >= 2, "{frames:?}");
-        // Each frame counts one more probe, so the line never claims a probe that is not done.
+        // Each frame counts exactly one more than the one before it, so the line never claims a probe
+        // that is not done, never stands still while a probe lands, and reaches the whole batch.
+        // Strict because `drawn` already dropped a repeated text: a count that repeated after a poll
+        // interval cannot survive it, so `<=` would only give up the claim.
         assert!(counts.windows(2).all(|w| w[0] < w[1]), "{frames:?}");
         assert_eq!(counts.last(), Some(&2));
     }
@@ -6019,9 +6804,7 @@ mod tests {
         );
         // The second pass is the one widening's batch.
         await_probes(vec![thread::spawn(|| ())], &mut progress);
-        let counts: Vec<(usize, usize)> = progress
-            .sink
-            .lines
+        let counts: Vec<(usize, usize)> = drawn(&progress)
             .iter()
             .map(|frame| {
                 let (_, counted) = frame
@@ -6040,24 +6823,24 @@ mod tests {
                 )
             })
             .collect();
-        assert_eq!(counts.first(), Some(&(0, 2)), "{:?}", progress.sink.lines);
+        assert_eq!(counts.first(), Some(&(0, 2)), "{:?}", drawn(&progress));
         assert_eq!(
             counts.last(),
             Some(&(3, 3)),
             "the union is counted to its end: {:?}",
-            progress.sink.lines
+            drawn(&progress)
         );
         assert!(
             counts
                 .windows(2)
                 .all(|w| w[0].0 <= w[1].0 && w[0].1 <= w[1].1),
             "the line never goes backwards: {:?}",
-            progress.sink.lines
+            drawn(&progress)
         );
         assert!(
             counts.iter().any(|&(_, total)| total == 3),
             "the widening pass raises the total: {:?}",
-            progress.sink.lines
+            drawn(&progress)
         );
     }
 
@@ -6068,13 +6851,278 @@ mod tests {
         let mut progress = Progress::new(RecordingSink::default(), true);
         let none: Vec<thread::JoinHandle<()>> = Vec::new();
         assert!(await_probes(none, &mut progress).is_empty());
-        assert!(progress.sink.lines.is_empty(), "{:?}", progress.sink.lines);
+        assert!(drawn(&progress).is_empty(), "{:?}", drawn(&progress));
         // The widening pass that follows counts from that zero, so its first line is still honest.
         await_probes(vec![thread::spawn(|| ())], &mut progress);
         assert_eq!(
-            progress.sink.lines.first().map(String::as_str),
+            drawn(&progress).first().map(String::as_str),
             Some("probing 1 mirror… 0/1")
         );
+    }
+
+    /// The frame is a pure function of the time a phase has been active: ten Braille cells, one every
+    /// `SPIN_INTERVAL`, and it starts over rather than sticking (SPEC.md Output).
+    #[test]
+    fn the_spinner_frame_is_a_pure_function_of_time() {
+        assert_eq!(SPIN, ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']);
+        // Every cell is one character inside the Braille block, so a frame never shifts the text it
+        // carries and a captured line is one cell plus the text.
+        assert!(SPIN.iter().all(|c| c.to_string().chars().count() == 1));
+        assert!(SPIN.iter().all(|c| ('\u{2800}'..='\u{28ff}').contains(c)));
+        assert_eq!(spinner_frame(Duration::ZERO), '⠋');
+        assert_eq!(spinner_frame(Duration::from_millis(99)), '⠋');
+        assert_eq!(spinner_frame(Duration::from_millis(100)), '⠙');
+        assert_eq!(spinner_frame(Duration::from_millis(300)), '⠸');
+        // Ten frames, then it starts over: an eleven-second phase is still moving, not stuck.
+        assert_eq!(spinner_frame(Duration::from_millis(1_000)), '⠋');
+        assert_eq!(spinner_frame(Duration::from_millis(1_100)), '⠙');
+    }
+
+    /// The one line a frame carries: the cell, a space, then the phase's own text, so the probing count
+    /// rides inside the same frame instead of becoming a second line (SPEC.md Output).
+    #[test]
+    fn the_frame_line_carries_the_probing_count() {
+        assert_eq!(
+            spinner_line(Duration::from_millis(200), &probing_line(2, 3)),
+            "⠹ probing 3 mirrors… 2/3"
+        );
+        // One line, whatever it carries: no newline, and the frame is the first cell.
+        let line = spinner_line(Duration::ZERO, "ranking");
+        assert_eq!(line, "⠋ ranking");
+        assert_eq!(line.lines().count(), 1);
+    }
+
+    /// The animation's loop with no thread and no sleep: a synthetic phase of three ticks draws four
+    /// frames, each carrying the same text, and the frames advance **because time passed** and not
+    /// because a count changed — the difference a still, count-driven line could not show.
+    #[test]
+    fn the_ticker_advances_a_frame_every_tick() {
+        let mut sink = RecordingSink::default();
+        let (ack, acked) = mpsc::sync_channel(1);
+        let script = [
+            Wake::Message(Tick::Text("probing 3 mirrors… 1/3".to_string(), ack)),
+            Wake::Timeout,
+            Wake::Timeout,
+            Wake::Timeout,
+            Wake::Message(Tick::Stop),
+        ];
+        let mut waits = script.into_iter();
+        run_ticker(&mut sink, move |_| {
+            waits.next().expect("the script ends with Stop")
+        });
+        assert_eq!(
+            sink.lines,
+            [
+                "⠋ probing 3 mirrors… 1/3",
+                "⠙ probing 3 mirrors… 1/3",
+                "⠹ probing 3 mirrors… 1/3",
+                "⠸ probing 3 mirrors… 1/3",
+            ]
+        );
+        // The text never changed, and the four lines are four different frames: that is the whole fix.
+        assert_eq!(
+            sink.lines
+                .iter()
+                .filter_map(|l| l.chars().next())
+                .collect::<Vec<char>>(),
+            SPIN[..4].to_vec()
+        );
+        // The draw was acknowledged only after it happened.
+        assert_eq!(acked.try_recv(), Ok(()));
+    }
+
+    /// The frame is a pure function of the time **this** phase has been active (SPEC.md Output), so a
+    /// phase starts on the first cell however long the run has been going, while a count change under
+    /// the same phase leaves the clock where it was. Without the reset each phase's first frame would
+    /// be a function of the whole run's elapsed time instead.
+    #[test]
+    fn a_new_phase_starts_the_frame_over_and_a_count_does_not() {
+        let mut sink = RecordingSink::default();
+        let script = [
+            Wake::Message(Tick::Phase(probing_line(1, 3), {
+                let (ack, _) = mpsc::sync_channel(1);
+                ack
+            })),
+            Wake::Timeout,
+            Wake::Timeout,
+            // The same phase, one more probe finished: the clock keeps running.
+            Wake::Message(Tick::Text(probing_line(2, 3), {
+                let (ack, _) = mpsc::sync_channel(1);
+                ack
+            })),
+            Wake::Timeout,
+            // A new phase: the clock starts over, so its first frame is the first cell.
+            Wake::Message(Tick::Phase("ranking".to_string(), {
+                let (ack, _) = mpsc::sync_channel(1);
+                ack
+            })),
+            Wake::Timeout,
+            Wake::Message(Tick::Stop),
+        ];
+        let mut waits = script.into_iter();
+        run_ticker(&mut sink, move |_| {
+            waits.next().expect("the script ends with Stop")
+        });
+        assert_eq!(
+            sink.lines,
+            [
+                "⠋ probing 3 mirrors… 1/3",
+                "⠙ probing 3 mirrors… 1/3",
+                "⠹ probing 3 mirrors… 1/3",
+                // The count changed and the cell did not: the phase's clock kept running.
+                "⠹ probing 3 mirrors… 2/3",
+                "⠸ probing 3 mirrors… 2/3",
+                // A new phase opens on the first cell, whatever the run had already drawn.
+                "⠋ ranking",
+                "⠙ ranking",
+            ]
+        );
+    }
+
+    /// A warning keeps its own line: `hide` erases the live line and acknowledges the erase, so nothing
+    /// the animation drew can sit over the warning, and the next phase starts a fresh line
+    /// (SPEC.md Output).
+    #[test]
+    fn the_ticker_hides_the_line_before_a_warning_and_resumes() {
+        let mut sink = RecordingSink::default();
+        let (shown, drawn_ack) = mpsc::sync_channel(1);
+        let (hidden, hidden_ack) = mpsc::sync_channel(1);
+        let script = [
+            Wake::Message(Tick::Text("verifying the reference".to_string(), shown)),
+            Wake::Message(Tick::Hide(hidden)),
+            Wake::Message(Tick::Text("ranking".to_string(), {
+                let (ack, _) = mpsc::sync_channel(1);
+                ack
+            })),
+            Wake::Message(Tick::Stop),
+        ];
+        let mut waits = script.into_iter();
+        run_ticker(&mut sink, move |_| {
+            waits.next().expect("the script ends with Stop")
+        });
+        assert_eq!(sink.events.len(), 3, "{:?}", sink.events);
+        assert_eq!(sink.events[0], "rewrite:⠋ verifying the reference");
+        assert_eq!(sink.events[1], "clear");
+        // The line comes back with the next phase, so the animation resumes instead of stopping.
+        assert!(sink.events[2].ends_with("ranking"), "{:?}", sink.events);
+        // Both acknowledgements were sent, which is what makes "the line is gone" a fact.
+        assert_eq!(drawn_ack.try_recv(), Ok(()));
+        assert_eq!(hidden_ack.try_recv(), Ok(()));
+    }
+
+    /// The run's own `clear` reaches the animation, so a warning mid-run erases the live line instead
+    /// of sharing it, and the animation draws again for the phase that follows.
+    #[test]
+    fn progress_hands_the_live_line_back_before_a_warning() {
+        let mut progress = Progress::new(RecordingSink::default(), true);
+        progress.load();
+        progress.clear();
+        progress.ranked();
+        progress.finish(1, 0);
+        let sink = lock(&progress.sink);
+        let at = sink
+            .events
+            .iter()
+            .position(|e| e == "clear")
+            .unwrap_or_else(|| panic!("the clear never reached the sink: {:?}", sink.events));
+        assert_eq!(sink.clears, 1);
+        assert!(
+            sink.events[at - 1].ends_with("loading the mirror list"),
+            "the cleared line was not the phase on screen: {:?}",
+            sink.events
+        );
+        assert!(
+            sink.events[at + 1].ends_with("ranking"),
+            "the animation did not resume: {:?}",
+            sink.events
+        );
+    }
+
+    /// The animation never outlives the summary: it is joined before the `done` line is written, so no
+    /// frame can land on the summary or on the report's first line (SPEC.md Output).
+    #[test]
+    fn progress_stops_its_ticker_before_the_done_line() {
+        let mut progress = Progress::new(RecordingSink::default(), true);
+        progress.load();
+        progress.ranked();
+        progress.finish(4, 0);
+        let sink = lock(&progress.sink);
+        let settled = sink
+            .events
+            .iter()
+            .position(|e| e.starts_with("settle:"))
+            .unwrap_or_else(|| panic!("no summary: {:?}", sink.events));
+        assert_eq!(
+            settled,
+            sink.events.len() - 1,
+            "a frame was drawn after the summary: {:?}",
+            sink.events
+        );
+        assert!(
+            sink.events[settled].starts_with("settle:done — 4 usable, 0 rejected in "),
+            "{:?}",
+            sink.events
+        );
+    }
+
+    /// `stop` joins: once it returns the animation cannot draw again, which is what makes an early
+    /// `return Err` in `run()` safe — the progress owns the animation and its `Drop` stops it.
+    #[test]
+    fn stopping_the_animation_joins_it() {
+        let sink = Arc::new(Mutex::new(RecordingSink::default()));
+        let mut ticker = Ticker::start(Arc::clone(&sink));
+        ticker.text("ranking".to_string());
+        ticker.hide();
+        let drawn_before = lock(&sink).events.len();
+        assert!(drawn_before >= 2, "{:?}", lock(&sink).events);
+        ticker.stop();
+        assert!(ticker.handle.is_none(), "the thread was not joined");
+        // A message after the join has nobody to draw it: the thread has ended.
+        ticker.text("probing 3 mirrors… 3/3".to_string());
+        assert_eq!(lock(&sink).events.len(), drawn_before);
+    }
+
+    /// An early exit stops and joins the animation **before** it prints: the line is erased, no
+    /// `done` line follows a run with no count, and nothing can draw a frame over the report that
+    /// prints next (SPEC.md Output). Hiding the line and printing while the thread still lived was the
+    /// earlier shape, and it left the report's first line at the mercy of a frame.
+    #[test]
+    fn an_early_stop_joins_the_animation_before_the_report() {
+        let mut progress = Progress::new(RecordingSink::default(), true);
+        progress.load();
+        progress.stop();
+        let stopped = lock(&progress.sink).events.clone();
+        assert_eq!(
+            stopped.last().map(String::as_str),
+            Some("clear"),
+            "the live line was not the last thing drawn: {stopped:?}"
+        );
+        assert_eq!(
+            stopped.iter().filter(|e| *e == "clear").count(),
+            1,
+            "the one erase came from the stop: {stopped:?}"
+        );
+        assert!(
+            progress.ticker.as_ref().is_some_and(|t| t.handle.is_none()),
+            "the animation outlived the stop"
+        );
+        assert!(
+            lock(&progress.sink).settled.is_empty(),
+            "an early stop has no count, so it prints no summary"
+        );
+        // A phase named after the join draws nothing: there is no thread left to draw it.
+        progress.load();
+        progress.stop();
+        assert_eq!(lock(&progress.sink).events, stopped);
+    }
+
+    /// A piped run has no animation to stop, and stopping one is neither an error nor a line.
+    #[test]
+    fn stopping_a_piped_run_writes_nothing() {
+        let mut progress = Progress::new(RecordingSink::default(), false);
+        progress.stop();
+        let sink = lock(&progress.sink);
+        assert!(sink.events.is_empty(), "{:?}", sink.events);
     }
 
     /// The one line that survives, with one decimal place, as SPEC.md Output spells it.
