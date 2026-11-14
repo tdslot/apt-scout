@@ -72,8 +72,10 @@ chmod 0755 "$stage"
 install -d "$stage/DEBIAN" "$stage/usr/bin" "$stage/usr/share/doc/apt-scout"
 install -m 0755 "$binary" "$stage/usr/bin/apt-scout"
 install -m 0644 README.md "$stage/usr/share/doc/apt-scout/README.md"
-# Debian Policy 12.5 makes /usr/share/doc/<pkg>/copyright mandatory. The licence texts stay in the
-# source tree, so this file names the licence and where those texts are instead of copying them.
+# Debian Policy 12.5 makes /usr/share/doc/<pkg>/copyright mandatory, and requires the licence text
+# itself except for the licences Debian already ships under /usr/share/common-licenses. MIT is not
+# one of those, so its text is copied verbatim out of the file the licence ships as; Apache-2.0 is,
+# so that half refers to the common-licenses copy instead of duplicating it into the package.
 copyright=$stage/usr/share/doc/apt-scout/copyright
 cat > "$copyright" <<'EOF'
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
@@ -83,15 +85,45 @@ Source: https://github.com/tdslot/apt-scout
 Files: *
 Copyright: 2025 tdslot
 License: MIT or Apache-2.0
- apt-scout is licensed under either of MIT or Apache-2.0, at your option. The full
- licence texts are the files LICENSE-MIT and LICENSE-APACHE in the source tree at the
- Source above; this package does not carry copies of them. The copyright notice is the
- one at the top of LICENSE-MIT, and the crate manifest declares no separate holder.
+
+License: MIT
+EOF
+# One leading space marks a DEP-5 continuation line and " ." marks a blank one. The text is read
+# from LICENSE-MIT, so the packaged copy and the repository copy cannot drift apart.
+[ -s LICENSE-MIT ] || die "LICENSE-MIT is missing; the copyright file has to carry its text"
+sed -e 's/^$/./' -e 's/^/ /' LICENSE-MIT >> "$copyright"
+cat >> "$copyright" <<'EOF'
+
+License: Apache-2.0
+ On Debian systems the full text of the Apache License, version 2.0 is in
+ /usr/share/common-licenses/Apache-2.0.
 
 Comment: /usr/bin/apt-scout is a static binary built by the Rust toolchain against musl, so it
  has no libc6 dependency; when it runs it uses gpgv and ubuntu-keyring from the system.
 EOF
 chmod 0644 "$copyright"
+# Debian Policy 12.7: a package that installs /usr/share/doc/apt-scout must install a changelog
+# there. It is generated from the version this build resolved, so the repo keeps no second copy,
+# and "gzip -n" keeps the file name and timestamp out of the archive. The name is changelog.gz and
+# not changelog.Debian.gz because the version carries no Debian revision, which makes dpkg treat
+# this as a native package; that is the changelog name Policy gives a native package.
+changelog=$stage/usr/share/doc/apt-scout/changelog.gz
+if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then
+  # The reproducible-build convention: with it set the entry is dated from that epoch instead of
+  # from the build clock, so the changelog text is the same on every build. GNU date and BSD date
+  # spell "an epoch" differently.
+  stamp=$(date -u -R -d "@$SOURCE_DATE_EPOCH" 2>/dev/null || date -u -R -r "$SOURCE_DATE_EPOCH")
+else
+  stamp=$(date -u -R)
+fi
+{
+  printf 'apt-scout (%s) unstable; urgency=medium\n' "$version"
+  printf '\n'
+  printf '  * Static musl build; runs against the system gpgv and ubuntu-keyring.\n'
+  printf '\n'
+  printf ' -- %s  %s\n' "$maintainer" "$stamp"
+} | gzip -9n > "$changelog"
+chmod 0644 "$changelog"
 # The man page lands in a parallel change; package it when it is there and never fail without it.
 if [ -f man/apt-scout.1 ]; then
   install -d "$stage/usr/share/man/man1"
@@ -152,6 +184,20 @@ fields=$(printf '%s\n' "$info" | awk '/^ *(Package|Version|Architecture|Maintain
 # Each field is reported, not just some of them: a filter that matches nothing must not pass as a check.
 for field in Package Version Architecture Maintainer Installed-Size Depends Section Priority; do
   printf '%s\n' "$fields" | grep -q "^$field: " || die "dpkg-deb -I did not report $field for $name"
+done
+# Policy requires the two files this package generates (12.5 copyright, 12.7 changelog) and the
+# README beside them, so the archive listing is checked for all three rather than assumed.
+if command -v dpkg-deb >/dev/null 2>&1; then
+  contents=$(dpkg-deb -c "$out/$name")
+else
+  contents=$(docker run --rm --platform linux/amd64 -v "$out":/out:ro ubuntu:24.04 dpkg-deb -c "/out/$name")
+fi
+[ -n "$contents" ] || die "dpkg-deb -c did not list the contents of $name"
+for path in ./usr/share/doc/apt-scout/copyright \
+            ./usr/share/doc/apt-scout/changelog.gz \
+            ./usr/share/doc/apt-scout/README.md; do
+  printf '%s\n' "$contents" | awk '{ print $NF }' | grep -qxF "$path" \
+    || die "dpkg-deb -c does not list $path in $name"
 done
 
 mkdir -p dist
