@@ -6683,9 +6683,11 @@ mod tests {
             })
             .collect();
         assert!(counts.len() >= 2, "{frames:?}");
-        // Each frame counts at least the one before it, so the line never claims a probe that is not
-        // done, and it reaches the whole batch.
-        assert!(counts.windows(2).all(|w| w[0] <= w[1]), "{frames:?}");
+        // Each frame counts exactly one more than the one before it, so the line never claims a probe
+        // that is not done, never stands still while a probe lands, and reaches the whole batch.
+        // Strict because `drawn` already dropped a repeated text: a count that repeated after a poll
+        // interval cannot survive it, so `<=` would only give up the claim.
+        assert!(counts.windows(2).all(|w| w[0] < w[1]), "{frames:?}");
         assert_eq!(counts.last(), Some(&2));
     }
 
