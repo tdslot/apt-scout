@@ -6,9 +6,10 @@ use std::path::{Path, PathBuf};
 
 use crate::digest::sha256;
 use crate::fresh::Probed;
-// `manifest` names `plan::Target` and this module names `manifest::BackupId`: one module cycle, so
-// neither type is copied into the other.
+// `manifest` names `plan::Target`, this module names `manifest::BackupId` and `restore` names
+// `Plan`: module cycles, so no type is copied into another module to break one.
 use crate::manifest::BackupId;
+use crate::restore::ValidatedBackup;
 use crate::verify::VerifiedDate;
 
 const MAX_NAME_BYTES: usize = 64;
@@ -43,8 +44,10 @@ pub enum Effect {
 /// What authorizes this plan to be written.
 ///
 /// Two forms and never both: a mirror plan is authorized by the probe that verified its URI, a
-/// restore plan by the backup its bytes were re-derived from. Only [`Plan::for_apply`] and
-/// [`Plan::for_restore`] mint one, so what authorizes a write cannot be supplied by a caller.
+/// restore plan by a backup `restore::build` read and re-derived. Each arm's token exists in one
+/// module only — [`VerifiedDate`] in the verifier, [`ValidatedBackup`] in the restore reader — so a
+/// caller cannot mint an authority out of a URI, a date or a [`BackupId`], and a restore cannot be
+/// authorized by a backup nothing has read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Authority {
     Mirror { uri: String, proof: VerifiedDate },
@@ -168,12 +171,19 @@ impl Plan {
 
     /// A plan re-derived from a backup: authorized by that backup, carrying no mirror.
     ///
+    /// The parameter is the validated backup, not its id: [`ValidatedBackup`] is constructible in
+    /// `restore` alone, so a restore authority cannot be minted by a caller that never read the
+    /// manifest, the copies and the disk. It is the same gate `for_apply` puts on its proof.
+    ///
     /// `platform: None` is what keeps a restore from creating anything: the create rules below
     /// need `Some(PopOs)`, so a restore writes only what the backup already describes.
-    pub fn for_restore(backup: &BackupId, writes: Vec<PlannedWrite>) -> Result<Plan, PlanError> {
+    pub fn for_restore(
+        backup: &ValidatedBackup,
+        writes: Vec<PlannedWrite>,
+    ) -> Result<Plan, PlanError> {
         let plan = Plan {
             authority: Authority::Restore {
-                backup: backup.clone(),
+                backup: backup.id().clone(),
             },
             platform: None,
             writes,
@@ -351,7 +361,7 @@ mod tests {
 
     fn restore(writes: Vec<PlannedWrite>) -> Result<Plan, PlanError> {
         let id = crate::manifest::BackupId::parse("20261112T203045Z").unwrap();
-        Plan::for_restore(&id, writes)
+        Plan::for_restore(&crate::restore::validated_backup_for_test(id), writes)
     }
 
     fn bad(writes: Vec<PlannedWrite>) -> Option<PlanError> {
@@ -424,9 +434,14 @@ mod tests {
     fn a_restore_plan_is_authorized_by_its_backup_not_a_mirror() {
         let id = crate::manifest::BackupId::parse("20261112T203045Z").unwrap();
         let writes = vec![w(LIST, Effect::Replace, old()), removable()];
-        let rebuilt = restore(writes).unwrap();
+        let rebuilt = Plan::for_restore(&crate::restore::validated_backup_for_test(id.clone()), writes)
+            .unwrap();
         assert_eq!(rebuilt.authority(), &Authority::Restore { backup: id });
         assert!(!matches!(rebuilt.authority(), Authority::Mirror { .. }));
+        // A bare `BackupId` is not a restore authority: `for_restore` takes the token only
+        // `restore::build` can mint, so no module can skip the manifest and the disk, and the
+        // signature below is what makes that unrepresentable rather than discouraged.
+        //
         // A mirror plan is authorized the other way round, and it is the only form carrying a URI.
         let proof_needed = Plan::for_apply(&probe("https://a.example/ubuntu", RFC_A), Platform::PopOs, vec![]);
         assert_eq!(proof_needed, Err(PlanError::WriteCount(0)));

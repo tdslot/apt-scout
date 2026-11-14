@@ -2243,19 +2243,25 @@ fn run() -> Result<u8, (u8, String)> {
                 apply::BACKUP_ROOT,
                 outcome.backup_id.as_str()
             );
-            let written: Vec<String> = outcome
-                .written
+            let touched: Vec<String> = outcome
+                .touched
                 .iter()
-                .map(|target| format!("{}/{}", apply::APT_DIR, target.relative().display()))
+                .map(|t| {
+                    let path = format!("{}/{}", apply::APT_DIR, t.target.relative().display());
+                    match t.effect {
+                        plan::Effect::Remove => format!("removed {path}"),
+                        plan::Effect::Create | plan::Effect::Replace => format!("wrote {path}"),
+                    }
+                })
                 .collect();
-            for path in &written {
-                println!("wrote {path}");
+            for line in &touched {
+                println!("{line}");
             }
             match plan.authority() {
                 plan::Authority::Mirror { uri, .. } => println!(
                     "\nchanged {}: every eligible official archive URI in those files now points at \
                      {uri}.\nNext: run 'apt update' to refresh the package lists.",
-                    written.join(", ")
+                    touched.join(", ")
                 ),
                 // a restore plan has no mirror URI; D11b prints its own block
                 plan::Authority::Restore { .. } => {}

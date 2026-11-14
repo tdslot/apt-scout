@@ -21,6 +21,32 @@ use crate::digest::sha256;
 use crate::manifest::{self, Action, BackupId, ManifestEntry};
 use crate::plan::{Effect, Plan, PlannedWrite};
 
+/// A backup this module has read and re-derived, and the only thing that authorizes a restore.
+///
+/// The witness a restore needs, in the shape a mirror's proof already has: the field is private to
+/// this module, so the token cannot be built from a bare [`BackupId`] that nobody read, and
+/// [`Plan::for_restore`] cannot be reached from a caller that skipped the manifest, the copies and
+/// the disk. `build` is the one production producer, and `build_as` the one place it is built.
+pub struct ValidatedBackup {
+    id: BackupId,
+}
+
+impl ValidatedBackup {
+    /// The backup the token was minted for: the id a restore plan carries and a run reports.
+    pub fn id(&self) -> &BackupId {
+        &self.id
+    }
+}
+
+/// A token for a test outside this module, built the one way `build_as` builds one.
+///
+/// Test-only, so a shipped build has exactly one producer: the alternative is a public constructor,
+/// which is the hole this type exists to close.
+#[cfg(test)]
+pub(crate) fn validated_backup_for_test(id: BackupId) -> ValidatedBackup {
+    ValidatedBackup { id }
+}
+
 /// The manifest's fixed name inside a backup, and the only thing that makes a directory a backup.
 const MANIFEST: &str = "MANIFEST";
 
@@ -74,7 +100,7 @@ fn build_as(
         ));
     }
     let writes = derive(&dir, apt_root, manifest.entries(), owner_uid, owner_gid)?;
-    Plan::for_restore(&id, writes).map_err(ApplyError::Plan)
+    Plan::for_restore(&ValidatedBackup { id }, writes).map_err(ApplyError::Plan)
 }
 
 /// Refuse a backup file apt-scout did not write, naming the path and the fact that failed.
@@ -173,14 +199,27 @@ fn newest_id(root: &Path) -> Result<BackupId, ApplyError> {
 /// Read the manifest, insisting on G1's facts twice: before the open and on the handle.
 ///
 /// The `lstat` check refuses a symlink, which `open` would otherwise follow; the handle check proves
-/// the inode that was actually opened carries the same facts, so a swap between the two is refused
-/// as well. Only then is a byte of the content read.
+/// the inode that was actually opened carries the same facts; and the identity check proves it is
+/// the *same* inode, so two files that both carry the facts cannot be swapped between the two
+/// reads. Only then is a byte of the content read.
 fn read_manifest(path: &Path, owner_uid: u32, owner_gid: u32) -> Result<String, ApplyError> {
-    let link = fs::symlink_metadata(path).map_err(|e| refusal(path, e.to_string()))?;
+    let link = match fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        // Its own sentence rather than the OS error: a directory with no manifest is not a
+        // half-written backup to retry, it is not a backup of anything.
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(refusal(
+                path,
+                "the backup holds no manifest, so this restore cannot tell what it holds",
+            ));
+        }
+        Err(e) => return Err(refusal(path, e.to_string())),
+    };
     check_manifest_meta(path, &link, owner_uid, owner_gid)?;
     let file = File::open(path).map_err(|e| refusal(path, e.to_string()))?;
     let meta = file.metadata().map_err(|e| refusal(path, e.to_string()))?;
     check_manifest_meta(path, &meta, owner_uid, owner_gid)?;
+    check_same_inode(path, &link, &meta)?;
 
     let mut bytes = Vec::new();
     let mut limited = file.take(manifest::MAX_TOTAL_BYTES as u64 + 1);
@@ -232,6 +271,22 @@ fn check_manifest_meta(
         return Err(refusal(
             path,
             format!("its mode is {mode:#o}, not {FILE_MODE:#o}"),
+        ));
+    }
+    Ok(())
+}
+
+/// Prove the opened handle is the file the `lstat` named, not a second one of the same shape.
+///
+/// `check_manifest_meta` states what the opened inode *is*; it cannot state that it is the inode the
+/// check before the open described, and two root-owned 0600 files swap cleanly under that rule
+/// alone. The writer compares dev/ino for the same reason (`apply::read_state`), and the manifest is
+/// the one file whose content decides what root writes.
+fn check_same_inode(path: &Path, link: &Metadata, opened: &Metadata) -> Result<(), ApplyError> {
+    if link.dev() != opened.dev() || link.ino() != opened.ino() {
+        return Err(refusal(
+            path,
+            "the device or inode changed between the check and the open",
         ));
     }
     Ok(())
@@ -496,6 +551,34 @@ mod tests {
         assert!(text.contains("Nothing was written to /etc/apt"), "{text}");
     }
 
+    /// The restore authority is minted where the backup is read and nowhere else.
+    ///
+    /// `Plan::for_restore` takes the token rather than a `BackupId` so a caller cannot skip the
+    /// manifest, the copies and the disk; that is a compile-time claim only while one module can
+    /// write `ValidatedBackup { .. }`, so a second producer anywhere in `src/` is the hole reopened.
+    #[test]
+    fn the_restore_authority_is_minted_only_in_the_restore_reader() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut checked = 0;
+        for entry in fs::read_dir(&src).expect("the crate's source directory") {
+            let path = entry.expect("a source file").path();
+            if path.extension().is_none_or(|ext| ext != "rs") || path == src.join("restore.rs") {
+                continue;
+            }
+            let text = fs::read_to_string(&path).expect("a source file is readable UTF-8");
+            assert!(
+                !text.contains("ValidatedBackup {"),
+                "{} mints a restore authority; only src/restore.rs may (D10b)",
+                path.display()
+            );
+            checked += 1;
+        }
+        assert!(
+            checked >= 5,
+            "expected the crate's modules, checked {checked}"
+        );
+    }
+
     /// Criterion 1: nothing is parsed until the backup root and the chosen directory are G1's shape.
     #[test]
     fn build_refuses_a_hostile_backup_root() {
@@ -543,6 +626,57 @@ mod tests {
         let file = root.path().join("backups-file");
         fs::write(&file, b"not a directory\n").expect("file");
         expect_refusal(build_as(&file, &apt, uid, gid), "it is not a directory");
+    }
+
+    /// A backup root of the right shape that holds no backup at all is refused rather than read as
+    /// one: a directory a run created and then failed inside is not a backup of nothing.
+    #[test]
+    fn build_refuses_a_backup_root_that_holds_no_backup() {
+        let root = TempRoot::new("empty-root");
+        let (uid, gid) = root.owner();
+        let backups = root.backups();
+        // The root is G1's shape and empty, so only the empty listing can refuse this.
+        assert!(
+            fs::read_dir(&backups).expect("the root is readable").next().is_none(),
+            "the fixture root is empty"
+        );
+        // The fixture `/etc/apt` is never created: reaching `derive` at all would answer with a
+        // missing path instead of the root's own refusal.
+        let apt = root.path().join("apt-absent");
+        let err = build_as(&backups, &apt, uid, gid).expect_err("an empty root is refused");
+        assert!(matches!(err, ApplyError::Restore { .. }), "{err}");
+        let text = err.to_string();
+        assert!(text.contains("there is no backup to restore"), "{text}");
+        assert!(text.contains(&backups.display().to_string()), "{text}");
+        assert!(text.contains("Nothing was written to /etc/apt"), "{text}");
+        assert!(!apt.exists(), "nothing under /etc/apt was looked at");
+    }
+
+    /// A backup directory of the right shape with no `MANIFEST` in it is refused where the reader
+    /// looks for the manifest, and says what is missing instead of forwarding an OS error.
+    ///
+    /// This is the shape a run interrupted between its copies and its manifest leaves behind, and
+    /// the sentence is the reader's own, so deleting that branch turns the assertion red.
+    #[test]
+    fn build_refuses_a_backup_directory_without_a_manifest() {
+        let root = TempRoot::new("no-manifest");
+        let (uid, gid) = root.owner();
+        let backups = root.backups();
+        let dir = backup_dir(&backups, ID);
+        // The copies are there, so the directory is otherwise a backup; only the manifest is not.
+        write_copy(&dir, LIST, OLD, 0o644);
+        let manifest_path = dir.join(MANIFEST);
+        assert!(!manifest_path.exists(), "the fixture holds no manifest");
+        // The fixture `/etc/apt` is never created: the refusal precedes any target it names.
+        let apt = root.path().join("apt-absent");
+        let err =
+            build_as(&backups, &apt, uid, gid).expect_err("a backup with no manifest is refused");
+        assert!(matches!(err, ApplyError::Restore { .. }), "{err}");
+        let text = err.to_string();
+        assert!(text.contains(&manifest_path.display().to_string()), "{text}");
+        assert!(text.contains("holds no manifest"), "{text}");
+        assert!(text.contains("Nothing was written to /etc/apt"), "{text}");
+        assert!(!apt.exists(), "nothing under /etc/apt was opened");
     }
 
     /// Criterion 2: the manifest is refused on its own facts, before a byte of it is parsed.
@@ -596,6 +730,33 @@ mod tests {
         let other = backup_dir(&backups, NEWER);
         write_manifest(&other, ID, std::slice::from_ref(&record));
         expect_refusal(build_as(&backups, &apt, uid, gid), "it names backup");
+    }
+
+    /// The manifest's identity, not only its five facts: a swap between two files that both carry
+    /// mode 0600 and the run's ownership is refused, which is the check the writer's own read
+    /// applies to every target.
+    ///
+    /// The swap itself cannot be raced in a test — it needs a third process between the `lstat` and
+    /// the open — so the comparison is driven directly, with the metadata of two real files.
+    #[test]
+    fn a_manifest_swapped_between_the_check_and_the_open_is_refused() {
+        let root = TempRoot::new("manifest-swap");
+        let dir = backup_dir(&root.backups(), ID);
+        let path = write_manifest(&dir, ID, &[]);
+        let other = dir.join("other-manifest");
+        fs::write(&other, b"apt-scout-backup 1\n").expect("bytes");
+        fs::set_permissions(&other, fs::Permissions::from_mode(FILE_MODE)).expect("mode");
+
+        let link = fs::symlink_metadata(&path).expect("metadata");
+        let opened = fs::metadata(&path).expect("metadata");
+        check_same_inode(&path, &link, &opened).expect("the same file carries the same identity");
+
+        let swapped = fs::metadata(&other).expect("metadata");
+        let err = check_same_inode(&path, &link, &swapped).expect_err("a swap is refused");
+        assert!(matches!(err, ApplyError::Restore { .. }), "{err}");
+        let text = err.to_string();
+        assert!(text.contains("device or inode"), "{text}");
+        assert!(text.contains(&path.display().to_string()), "{text}");
     }
 
     /// Criterion 3: a target outside the closed enumeration is refused before any `/etc/apt` path is
@@ -787,7 +948,7 @@ mod tests {
             original: None,
             effect: Effect::Create,
         }];
-        let err = Plan::for_restore(&BackupId::parse(ID).expect("id"), created)
+        let err = Plan::for_restore(&validated_backup_for_test(BackupId::parse(ID).expect("id")), created)
             .expect_err("a restore plan may not create");
         assert!(matches!(err, crate::plan::PlanError::CreateNewOnList), "{err}");
     }

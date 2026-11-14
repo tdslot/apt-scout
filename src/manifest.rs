@@ -74,7 +74,11 @@ impl BackupId {
     }
 
     /// Exactly 16 bytes, `T` and `Z` where they belong, digits elsewhere, plausible ranges.
-    pub fn parse(s: &str) -> Result<BackupId, ManifestError> {
+    ///
+    /// Crate-visible on purpose: an id is not a capability. What authorizes a restore is the
+    /// validated backup `restore::build` mints ([`crate::restore::ValidatedBackup`]), so no caller
+    /// outside this crate is given the raw spelling to build one from.
+    pub(crate) fn parse(s: &str) -> Result<BackupId, ManifestError> {
         let bad = || ManifestError::BadId(s.to_string());
         let b = s.as_bytes();
         if b.len() != 16 || b[8] != b'T' || b[15] != b'Z' {
