@@ -72,9 +72,69 @@ A non-root run never writes. It prints the recommendation and one line, `sudo ap
 
 ## What the output means
 
+The report is one block, printed once when the probing and the ranking are done:
+
+- the identity line — `apt-scout <version> · Ubuntu <release> (<codename>) · country: <name> (<source>)`;
+- `Sources`, the directory scanned, then one line per source file with `rewrite` or `skip`, the line number, the host and, when skipped, the reason;
+- the context line, `mirrors:` naming the list source and `reference:` naming the freshness baseline;
+- `Ranked`, with the legend and the table;
+- `Detail`, in a `--verbose` run only: the facts behind each row;
+- `Recommendation`, the chosen mirror with its reason;
+- `Planned change`, the diff a write would make, or the note that nothing is written;
+- `Rejected`, only when something was rejected: each class of reason with its count and the hosts.
+
+The table's columns are named for what they measure:
+
+| Column | Meaning |
+| --- | --- |
+| `behind` | How far the mirror's `<codename>-updates` package lists trail the freshest date the run knows, in minutes; `0m` means up to date. It is freshness, never network latency, and the 24-hour limit is applied to this number. |
+| `speed` | Throughput measured on a 1 MiB range request, in MB/s. |
+| `latency` | Round trip to the first byte of the mirror's `-updates` request; it is never freshness. |
+| `verified` | The `-updates` `InRelease` signature: `yes` when `/usr/bin/gpgv` accepted it with the Ubuntu archive keyring, `no` when the file was readable but unsigned, altered or signed by an unknown key, `?` when the check could not run at all. Only `yes` may authorize a write. |
+| `notes` | `redir:<host>` when the mirror answers with a redirect to another host; a host that does not fit is cut and ends in `~`. The column is left out when no shown row has a note. |
+
+The default report is the decision and `--verbose` is the proof: `-v` adds each row's AS number and its `same`/`diff`/`unknown` match with the server, the server's AS on the context line, each row's country and resolved address, both pocket dates in full with the `-security` lag, the exact signature status, the redirect host uncut, and the full text of every rejection reason — and it changes no decision, no ordering and no byte written.
+
+While it works, a run shows one line on stderr, rewritten in place and only when stderr is a terminal: `loading the mirror list`, `verifying the reference`, `probing <n> mirrors… <done>/<total>`, `ranking`, then a summary such as `done — 4 usable, 0 rejected in 3.1 s`. The report itself is never split by it.
+
+Colour is display-only and terminal-only: it appears when stdout is a terminal and neither `NO_COLOR` (any value, the empty one included) nor `--no-color` is set. A captured run prints the same words without the escapes.
+
+A write ends with its own short block: `backup:` the directory it created, `wrote` each file it replaced, and a `changed …` line naming the next step, `apt update`.
+
 ## Options
 
+| Short | Long | Meaning |
+| --- | --- | --- |
+| `-c` | `--country <CC>` | Two-letter country code; always wins over detection. |
+| `-a` | `--any` | Ignore the country: rank the mirrors the list names for every country together. Needs no country, so it also satisfies `--no-geo`. |
+| `-n` | `--no-geo` | No geolocation and no AS lookups; requires `--country` or `--any`. |
+| `-s` | `--https-only` | Consider only `https` mirrors. |
+| `-t` | `--top <N>` | Rows to show; default 5, and the value must be positive. |
+| `-l` | `--list` | The table and the change a write would make, and never a write. |
+| `-y` | `--yes` | Skip the one confirmation before a write. |
+| `-v` | `--verbose` | The proof behind every row, and the full text of every rejection reason. |
+| | `--no-color` | No colour, whatever the terminal is. The one flag without a short form. |
+| `-h` | `--help` | The built-in summary of the flags, the table and the exit codes. |
+
+Short flags are never bundled: `-lyc NO` is an unknown option. `-r` and `-R` are reserved for `--restore` and `--refresh`; `--restore`, `--refresh` and `--tui` are not implemented and are rejected as unknown options, which is exit 2.
+
 ## Modes and exit codes
+
+The uid decides whether a run writes; no flag makes it write and no answer to the prompt can make it write.
+
+| Command | uid | Writes apt sources | Exit |
+| --- | --- | --- | --- |
+| `apt-scout` | non-root | No: the table, the recommendation and the `sudo apt-scout …` line. | 3 |
+| `sudo apt-scout` | root | Yes: the same run, one confirmation (`--yes` skips it), then the write. | 0 |
+| `apt-scout --list` | any | No, whatever the uid: the table and the planned change. | 0 |
+
+| Status | Meaning |
+| --- | --- |
+| 0 | Success, including `--list`, and a root run that found the sources already pointing at the best mirror. |
+| 1 | Refusal or failure: no mirror passed the freshness and reachability checks, no source URI can be rewritten, a backup or a write failed. Nothing was written. |
+| 2 | Usage error: an unknown option, a country code that is not two letters or that Launchpad does not list, `--no-geo` without `--country` or `--any`, a `--top` that is not positive. Nothing was probed. |
+| 3 | This run would write and this uid may not. The `sudo` line is on stdout. |
+| 4 | Unsupported distribution or architecture, or a release that has left `archive.ubuntu.com`. Nothing was written. |
 
 ## Backups
 
