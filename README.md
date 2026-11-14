@@ -4,7 +4,7 @@ Find a fresh, fast Ubuntu archive mirror and point apt at it. `apt-scout` does w
 
 ## What it is
 
-A run reads `/etc/apt/sources.list` and the regular `*.list` and `*.sources` files under `/etc/apt/sources.list.d/`, and changes only the URI token of a line whose host and path the mirror list names. It asks once, copies every file it will replace into a backup, and then writes atomically. It never runs `apt update`, never touches `security.ubuntu.com`, a PPA, a third-party repository, `ports.ubuntu.com` or a `mirror://` line, and it does not work on Debian.
+A run reads `/etc/apt/sources.list` and the regular `*.list` and `*.sources` files under `/etc/apt/sources.list.d/`, and changes only the URI token of a line whose host and path the mirror list names. It asks once, copies every file it will replace into a backup, and then replaces each file atomically, one at a time, keeping its mode and owner. It never runs `apt update`, never touches `security.ubuntu.com`, a PPA, a third-party repository, `ports.ubuntu.com` or a `mirror://` line, and it does not work on Debian.
 
 ## Requirements
 
@@ -161,7 +161,7 @@ Repeat for each file the manifest lists. `--restore` is not implemented yet — 
 
 Country detection contacts Canonical geoip, `ifconfig.co`, `ipinfo.io` and the Cloudflare trace in that order until the country, the public IP and the AS are found. Team Cymru DNS provides the AS lookups, for the server and for candidate mirror hosts. Those services, and the configured DNS resolver, can observe the server's public IP, and the DNS queries carry mirror IP addresses during AS ranking. The mirror list comes from Launchpad over `https` or from `mirrors.ubuntu.com` over `http`; the reference release and any `http` candidate are fetched without TLS, which is what the signature check is for. Proxies are ignored, so the environment cannot route a request through one. The signature check runs `/usr/bin/gpgv` with a cleared environment and a private, empty homedir, so no user GnuPG configuration can influence the answer.
 
-`--no-geo --country CC`, or `--no-geo --any`, skips geolocation and the AS queries, so no third party learns the server's address; the mirror list itself still needs the network. Nothing else is uploaded and no telemetry is collected. The local reads are the apt sources, `/etc/os-release`, `/etc/resolv.conf`, the Ubuntu archive keyring, and the two programs invoked at fixed paths, `/usr/bin/dpkg` and `/usr/bin/gpgv`.
+`--no-geo --country CC`, or `--no-geo --any`, skips this run's geolocation and AS lookups, so no geolocation or AS provider learns the server's address; the mirror list itself still needs the network. Nothing else is uploaded and no telemetry is collected. The local reads are the apt sources, `/etc/os-release`, `/etc/resolv.conf`, the Ubuntu archive keyring, and the two programs invoked at fixed paths, `/usr/bin/dpkg` and `/usr/bin/gpgv`.
 
 ## Troubleshooting
 
