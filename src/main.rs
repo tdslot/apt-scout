@@ -1219,6 +1219,35 @@ fn plan_changes(
     out
 }
 
+/// The body of the `Planned change` section for a plan that will be written: the URI pairs, the
+/// backup directory the write creates, the alternatives, and — when this run may write — the files it
+/// leaves alone. `backup` is `None` for a `--list` run, which creates no backup directory; `skipped`
+/// is empty when the plan refused nothing.
+fn planned_change_lines(
+    root: &Path,
+    inventory: &sources::Inventory,
+    plan: &plan::Plan,
+    backup: Option<&manifest::BackupId>,
+    skipped: &[String],
+    ink: Painter,
+) -> Vec<String> {
+    let mut out = plan_changes(root, inventory, plan, ink);
+    if let Some(id) = backup {
+        out.push(format!(
+            "  backup: {}/{} (every replaced file is copied there, mode 0700, before the first write)",
+            apply::BACKUP_ROOT,
+            id.as_str()
+        ));
+        out.push("  alternatives: none (extra mirrors as comments are a TUI option)".to_string());
+        // The confirmation lists what the write leaves alone, too: the user is confirming the whole
+        // change, not only the files that move.
+        for reason in skipped {
+            out.push(format!("  keep as is  {reason}"));
+        }
+    }
+    out
+}
+
 fn run() -> Result<u8, (u8, String)> {
     let args = parse_args().map_err(|e| (2, e))?;
     // SPEC.md Output: colour is decided once, at startup, from the three inputs that all have to
@@ -1541,28 +1570,14 @@ fn run() -> Result<u8, (u8, String)> {
         ) {
             Ok(change) => match change.plan {
                 Some(plan) => {
-                    planned.extend(plan_changes(
+                    planned.extend(planned_change_lines(
                         Path::new(apply::APT_DIR),
                         &apt_sources,
                         &plan,
+                        write_timing.as_ref().map(|(_, id)| id),
+                        &change.skipped,
                         ink,
                     ));
-                    if let Some((_, id)) = &write_timing {
-                        planned.push(format!(
-                            "  backup: {}/{} (every replaced file is copied there, mode 0700, before the first write)",
-                            apply::BACKUP_ROOT,
-                            id.as_str()
-                        ));
-                        planned.push(
-                            "  alternatives: none (extra mirrors as comments are a TUI option)"
-                                .to_string(),
-                        );
-                        // The confirmation lists what the write leaves alone, too: the user is
-                        // confirming the whole change, not only the files that move.
-                        for reason in &change.skipped {
-                            planned.push(format!("  keep as is  {reason}"));
-                        }
-                    }
                     pending = Some(plan);
                 }
                 None => planned.push(format!(
