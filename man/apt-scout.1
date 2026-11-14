@@ -1,14 +1,8 @@
-\" Groff 1.23 (Ubuntu 24.04, 26.04) has an.tmac re-assert .ad \*[AD] inside .TP/.IP
-\" bodies, which silently re-justifies the text; .ds AD l is the only way to hold
-\" left alignment there. The .ll/.lt requests below cover 1.22 (20.04, 22.04).
-.ds AD l
+\" 78 columns, not the terminal width: the page must read on an 80-column console
+\" whatever terminal it is rendered in. Set before .TH so the header line is held too.
 .nr LL 78n
 .nr LT 78n
 .TH APT\-SCOUT 1 "" "apt-scout 0.1.0" "User Commands"
-.nh
-.ad l
-.nr LL 78n
-.nr LT 78n
 .SH NAME
 apt\-scout \- find a fresh, fast Ubuntu archive mirror and point apt at it
 .SH SYNOPSIS
