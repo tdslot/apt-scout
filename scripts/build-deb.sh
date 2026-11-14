@@ -12,31 +12,98 @@ usage() {
   echo "Writes dist/apt-scout_<version>_amd64.deb from target/docker/apt-scout-plain."
   echo "That binary comes from scripts/docker-test.sh --build-only; this script never builds it."
   echo "Builds with dpkg-deb on the host, or in an ubuntu:24.04 container when the host has none."
+  echo
+  echo "  --self-test  check the Cargo.toml readers against a scratch manifest and exit"
 }
 
 die() { echo "error: $*" >&2; exit 1; }
 
-# Every packaging field lives in one place: Cargo.toml. They are read, never repeated below, so a
-# change to [package.metadata.deb] reaches the .deb this script builds.
-metadata() { sed -n "s/^$1 = \"\(.*\)\"\$/\1/p" Cargo.toml | head -n 1; }
+# One key out of one Cargo manifest section, and nothing else. A section-blind reader (a plain `sed`
+# over the whole file) returns the first match anywhere, so a key that also exists in [package]
+# silently wins over the one under [package.metadata.deb]. Each reader below names its section and
+# is anchored to that section's header; keep them apart, because the version genuinely lives in
+# [package] while the packaging fields live in [package.metadata.deb].
+manifest=Cargo.toml
+section_field() {
+  awk -v section="[$1]" -v key="$2" '
+    /^[ \t]*\[/ {
+      header = $0
+      gsub(/^[ \t]+|[ \t]+$/, "", header)
+      inside = (header == section)
+      next
+    }
+    !inside { next }
+    {
+      line = $0
+      gsub(/^[ \t]+|[ \t]+$/, "", line)
+      eq = index(line, "=")
+      if (eq < 2) next
+      name = substr(line, 1, eq - 1)
+      gsub(/[ \t]+$/, "", name)
+      if (name != key) next
+      value = substr(line, eq + 1)
+      gsub(/^[ \t]+|[ \t]+$/, "", value)
+      if (value !~ /^"[^"]*"$/) exit
+      gsub(/^"|"$/, "", value)
+      print value
+      exit
+    }
+  ' "$manifest"
+}
+# The crate's own fields: everything dpkg-deb does not need but the build reads.
+package_field() { section_field package "$1"; }
+# The fields dpkg-deb requires, declared one place: [package.metadata.deb] in Cargo.toml.
+deb_field() { section_field package.metadata.deb "$1"; }
 # A field dpkg-deb requires and the manifest must supply: its absence stops the build, it never
 # falls back to a default here.
 meta_required() {
   local value
-  value=$(metadata "$1")
+  value=$(deb_field "$1")
   [ -n "$value" ] || die "cannot read [package.metadata.deb] $1 from Cargo.toml"
   printf '%s\n' "$value"
 }
 
+# The reader contract, checked against a manifest built to break it: a key in the wrong section is
+# never the answer, whichever direction it comes from. Run with --self-test.
+self_test() {
+  local dir bad=0
+  dir=$(mktemp -d "${TMPDIR:-/tmp}/apt-scout-metadata.XXXXXX") || die "cannot create a scratch directory"
+  manifest=$dir/Cargo.toml
+  cat > "$manifest" <<'EOF'
+[package]
+name = "apt-scout"
+version = "0.1.0"
+description = "from the package table"
+maintainer = "shadow in package <shadow@example.invalid>"
+
+[package.metadata.deb]
+maintainer = "real <real@example.invalid>"
+section = "admin"
+version = "9.9.9"
+EOF
+  check() {
+    if [ "$2" = "$3" ]; then echo "PASS $1"; else echo "FAIL $1: expected '$2', got '$3'"; bad=1; fi
+  }
+  check "package_field version ignores the metadata.deb copy" 0.1.0 "$(package_field version)"
+  check "deb_field version is the metadata.deb one" 9.9.9 "$(deb_field version)"
+  check "deb_field maintainer ignores the [package] copy" "real <real@example.invalid>" "$(deb_field maintainer)"
+  check "package_field maintainer is [package]'s own" "shadow in package <shadow@example.invalid>" "$(package_field maintainer)"
+  check "package_field description is [package]'s own" "from the package table" "$(package_field description)"
+  check "a key in neither section reads empty" "" "$(deb_field depends)"
+  rm -rf "$dir"
+  [ "$bad" = 0 ] || die "the metadata readers do not separate [package] from [package.metadata.deb]"
+}
+
 case ${1:-} in
   -h|--help) usage; exit 0 ;;
+  --self-test) self_test; exit 0 ;;
   -*) echo "unknown option '$1'; try --help" >&2; exit 2 ;;
 esac
 if [ "$#" -gt 1 ]; then echo "too many arguments; try --help" >&2; exit 2; fi
 
 version=${1:-}
 if [ -z "$version" ]; then
-  version=$(metadata version)
+  version=$(package_field version)
   [ -n "$version" ] || die "cannot read the version from Cargo.toml; pass it as the first argument"
 fi
 # Debian's version syntax, refused here instead of by dpkg-deb: a version starts with a digit (a tag
@@ -54,7 +121,7 @@ maintainer=$(meta_required maintainer)
 depends=$(meta_required depends)
 section=$(meta_required section)
 priority=$(meta_required priority)
-synopsis=$(metadata description)
+synopsis=$(package_field description)
 [ -n "$synopsis" ] || die "cannot read the description from Cargo.toml"
 
 binary=target/docker/apt-scout-plain
