@@ -1,7 +1,6 @@
-#![cfg_attr(not(test), allow(dead_code))] // the CLI reaches this reader in D11b
 //! Re-derive a plan from the newest backup. The manifest is the source of truth, not a list.
 //!
-//! Nothing here is reachable from a CLI path yet, and nothing here trusts a disk: the backup root,
+//! The CLI reaches this reader with `--restore`, and nothing here trusts a disk: the backup root,
 //! the directory, the `MANIFEST` and every copy it names are checked against `docs/threat-model.md`
 //! §8 G1 (a root-owned regular file in mode 0600, never a symlink, in a root-owned 0700 directory)
 //! before a byte of the manifest is parsed, and then every record is re-derived against the copy it
@@ -112,16 +111,14 @@ fn build_as(
 /// root's, so a non-root run is refused before the backup is opened. The writer's second argument is
 /// a mirror's freshness baseline, and a restore has no mirror: what authorizes its write is the
 /// backup `build_as` just re-derived, so this path passes `None` and never derives anything else to
-/// pass. `now` names the backup this restore makes before it writes, the same way the mirror path
-/// names its own. Both roots bind the read only, because `apply::apply` is the one production writer
-/// and it writes to the crate's fixed `/etc/apt` and `/var/backups/apt-scout`: that asymmetry is why
-/// a test reaches this path through `run_as` with `apply::run_for_test`.
-pub fn run(backup_root: &Path, apt_root: &Path) -> Result<Outcome, ApplyError> {
+/// pass. `now_secs` names the backup this restore makes before it writes, and the CLI takes it once
+/// so the directory its confirmation names is the one the writer creates, the same way the mirror
+/// path names its own. Both roots bind the read only, because `apply::apply` is the one production
+/// writer and it writes to the crate's fixed `/etc/apt` and `/var/backups/apt-scout`: that asymmetry
+/// is why a test reaches this path through `run_as` with `apply::run_for_test`.
+pub fn run(backup_root: &Path, apt_root: &Path, now_secs: u64) -> Result<Outcome, ApplyError> {
     apply::require_root()?;
-    // The clock is the mirror path's, so the two cannot drift; its refusal is typed for `main`, so
-    // it is mapped into this module's error instead of the idiom being spelled a second time.
-    let now = crate::now_secs().map_err(|(_, reason)| refusal(backup_root, reason))?;
-    run_as(backup_root, apt_root, now, 0, 0, apply::apply)
+    run_as(backup_root, apt_root, now_secs, 0, 0, apply::apply)
 }
 
 /// The one restore path, with the clock, the run's owner and the writer as parameters.
@@ -1101,7 +1098,10 @@ mod tests {
 
         // The root entry point refuses a non-root run before the backup is opened, like `build`.
         if uid != 0 {
-            assert!(matches!(run(&backups, &apt), Err(ApplyError::NotRoot)));
+            assert!(matches!(
+                run(&backups, &apt, 1_794_441_600),
+                Err(ApplyError::NotRoot)
+            ));
         }
     }
 }

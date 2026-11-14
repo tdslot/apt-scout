@@ -48,6 +48,8 @@ struct Args {
     verbose: bool,
     /// `--no-color`: no escapes in the report, whatever the terminal is (SPEC.md Output).
     no_color: bool,
+    /// `--restore`: put the newest backup back instead of applying a mirror.
+    restore: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -65,23 +67,41 @@ fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args, Strin
         yes: false,
         verbose: false,
         no_color: false,
+        restore: false,
     };
+    // The first flag of the mirror pipeline this run was given, spelled as the user typed it. A
+    // restore sets none of them, so the two can never be in one run (SPEC.md CLI).
+    let mut pipeline: Option<String> = None;
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
         // Each short alias is the same arm as its long form, and the value-taking ones name the
         // spelling the user typed in their error, so a message never points at a flag they did not
-        // write. Only these aliases exist; `-r` and `-R` stay reserved for flags that are not
-        // implemented yet, and bundling (`-lyc NO`) stays an unknown option.
+        // write. Only these aliases exist; `-R` stays reserved for a flag that is not implemented
+        // yet, and bundling (`-lyc NO`) stays an unknown option.
         match arg.as_str() {
-            "--list" | "-l" => a.list = true,
+            "--list" | "-l" => {
+                a.list = true;
+                note_pipeline(&mut pipeline, &arg);
+            }
+            "--restore" | "-r" => a.restore = true,
             "--yes" | "-y" => a.yes = true,
-            "--https-only" | "-s" => a.https_only = true,
-            "--no-geo" | "-n" => a.no_geo = true,
-            "--any" | "-a" => a.any = true,
+            "--https-only" | "-s" => {
+                a.https_only = true;
+                note_pipeline(&mut pipeline, &arg);
+            }
+            "--no-geo" | "-n" => {
+                a.no_geo = true;
+                note_pipeline(&mut pipeline, &arg);
+            }
+            "--any" | "-a" => {
+                a.any = true;
+                note_pipeline(&mut pipeline, &arg);
+            }
             "--verbose" | "-v" => a.verbose = true,
             // The one implemented flag without a short form, so `-N` stays an unknown option.
             "--no-color" => a.no_color = true,
             "--country" | "-c" => {
+                note_pipeline(&mut pipeline, &arg);
                 let cc = it.next().ok_or(format!(
                     "{arg} needs a two-letter country code, for example {arg} LT"
                 ))?;
@@ -94,6 +114,7 @@ fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args, Strin
                 a.country = Some(cc);
             }
             "--top" | "-t" => {
+                note_pipeline(&mut pipeline, &arg);
                 let n = it
                     .next()
                     .ok_or(format!("{arg} needs a number, for example {arg} 5"))?;
@@ -110,7 +131,32 @@ fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args, Strin
             other => return Err(format!("unknown option '{other}'; try --help")),
         }
     }
+    // A restore and a mirror flag are one usage error, checked once here so the answer does not
+    // depend on which of the two the user typed first.
+    if a.restore
+        && let Some(flag) = pipeline
+    {
+        return Err(restore_conflict(&flag));
+    }
     Ok(a)
+}
+
+/// Remember the first pipeline flag a run was given, spelled the way it was typed: the one a
+/// restore's usage error names.
+fn note_pipeline(slot: &mut Option<String>, flag: &str) {
+    if slot.is_none() {
+        *slot = Some(flag.to_string());
+    }
+}
+
+/// The usage error a restore and a flag of the mirror pipeline make together. A restore replaces
+/// the source of the rewrite, so there is no mirror to look up, rank or plan with (SPEC.md CLI).
+fn restore_conflict(flag: &str) -> String {
+    format!(
+        "{flag} cannot be combined with --restore: a restore reads the newest backup and never \
+         probes, ranks or rewrites. Run 'sudo apt-scout --restore', adding --yes to skip the \
+         confirmation."
+    )
 }
 
 /// `-h` and `--help` are one request, kept out of the flag match so both spellings print the same
@@ -143,6 +189,11 @@ MODE
                       root:      back up, confirm, rewrite the apt sources
   -l, --list          ranked table and planned change only; never writes
   -y, --yes           skip the one confirmation
+
+RESTORE
+  -r, --restore       put the newest backup back; root only
+                      non-root: prints sudo apt-scout --restore and exits 3
+                      not with the discovery flags or --list
 
 TABLE
   behind    how far this mirror's -updates package lists trail the freshest date the run
@@ -185,10 +236,19 @@ enum Mode {
     Recommend,
     /// A root run that writes; `confirm` is false when `--yes` was given.
     Write { confirm: bool },
+    /// `--restore`: the newest backup instead of a mirror, re-derived and written by the one
+    /// writer; `confirm` is false in a non-root run and when `--yes` was given.
+    Restore { confirm: bool },
 }
 
-fn decide(list: bool, root: bool, yes: bool) -> Mode {
-    if list {
+fn decide(restore: bool, list: bool, root: bool, yes: bool) -> Mode {
+    if restore {
+        // A restore never reaches the mirror pipeline, so `--list` cannot narrow it and the uid is
+        // the only thing that decides whether it writes (SPEC.md CLI).
+        Mode::Restore {
+            confirm: root && !yes,
+        }
+    } else if list {
         Mode::List
     } else if !root {
         Mode::Recommend
@@ -200,6 +260,12 @@ fn decide(list: bool, root: bool, yes: bool) -> Mode {
 /// The line a non-root run prints: the same command under `sudo`, rebuilt from the parsed flags so
 /// no argument of the run reaches it as an opaque string.
 fn sudo_command(args: &Args) -> String {
+    // A restore's line is exactly this whatever else the run was given: the backup and the write
+    // are the whole command, and a copied line that carried a shortened or widened run would be a
+    // different command than the one it repeats (SPEC.md CLI).
+    if args.restore {
+        return "sudo apt-scout --restore".to_string();
+    }
     let mut line = String::from("sudo apt-scout");
     if let Some(country) = &args.country {
         line.push_str(&format!(" --country {country}"));
@@ -546,11 +612,12 @@ fn validate_preflight(args: &Args, arch: &str) -> Result<(), (u8, String)> {
 }
 
 /// What the operator can do when no apt source URI is eligible. A host the loaded mirror list does
-/// not name is the usual cause, and the fix is to put the URIs back by hand until `--restore` ships
-/// (D10), so the report and the write error carry the same sentence instead of drifting apart.
+/// not name is the usual cause, and the fix is either to put the URIs back by hand or to put the
+/// newest backup back with `--restore`; the report and the write error carry the same sentence
+/// instead of drifting apart.
 fn no_eligible_hint(list_source: &str) -> String {
     format!(
-        "The sources here point at a host the mirror list from {list_source} does not name, so nothing here can be replaced: set those URIs back to archive.ubuntu.com and run again (--restore arrives with D10)."
+        "The sources here point at a host the mirror list from {list_source} does not name, so nothing here can be replaced: set those URIs back to archive.ubuntu.com, or put the newest backup back with 'sudo apt-scout --restore', and run again."
     )
 }
 
@@ -568,7 +635,7 @@ fn no_eligible_uri(mode: Mode, args: &Args, list_source: &str) -> Result<u8, (u8
             );
             Ok(3)
         }
-        Mode::Write { .. } => Err((
+        Mode::Write { .. } | Mode::Restore { .. } => Err((
             1,
             format!(
                 "no official Ubuntu apt source URI can be changed, so the write has nothing to do. Nothing was written. {}. Run with --list to see every file that was inspected.",
@@ -1822,6 +1889,16 @@ fn run() -> Result<u8, (u8, String)> {
         args.no_color,
         no_color_from_env(),
     ));
+    // The uid decides whether this run may write (SPEC.md CLI). `require_root` is the writer's own
+    // check, so the decision and the writer can never disagree about what root is.
+    let root = apply::require_root().is_ok();
+    let mode = decide(args.restore, args.list, root, args.yes);
+    // `--restore` replaces the source of the rewrite: the newest backup instead of the mirror
+    // pipeline. It reaches no distribution, no geolocation and no network, so it branches here,
+    // before anything the mirror run would do (SPEC.md CLI).
+    if let Mode::Restore { confirm } = mode {
+        return run_restore(&args, ink, root, confirm);
+    }
     let (d, source) = distro::detect().map_err(|e| (1, e))?;
     if !d.is_ubuntu_family() {
         return Err((
@@ -1838,9 +1915,6 @@ fn run() -> Result<u8, (u8, String)> {
     })?;
     let arch = architecture()?;
     validate_preflight(&args, &arch)?;
-    // The uid decides whether this run may write (SPEC.md CLI). `require_root` is the writer's own
-    // check, so the decision and the writer can never disagree about what root is.
-    let mode = decide(args.list, apply::require_root().is_ok(), args.yes);
     let net = Net::new();
     // Geolocation is optional (SPEC.md, Resilience): failures are reported and the run continues.
     let mut geo = geo::Geo::default();
@@ -2287,7 +2361,150 @@ fn run() -> Result<u8, (u8, String)> {
             }
             Ok(0)
         }
+        // `--restore` returned before the mirror pipeline started; it can never reach this match.
+        Mode::Restore { .. } => Err((
+            1,
+            "a restore does not build a mirror report, so this is a bug in apt-scout; nothing was written."
+                .to_string(),
+        )),
     }
+}
+
+/// The restore mode, from the parsed flags and the uid: the one line for a non-root run, then — as
+/// root — re-derive the newest backup, confirm once unless `--yes`, restore it and report.
+///
+/// The plan is built here for the confirmation and built once more inside `restore::run`, which
+/// re-reads the backup and hands its own plan to the writer: the prompt is a safety rail, not a
+/// control, and the second derivation re-checks every record it is about to write, so a backup that
+/// changed after the prompt is refused or re-derived, never written unchecked.
+fn run_restore(args: &Args, ink: Painter, root: bool, ask: bool) -> Result<u8, (u8, String)> {
+    if !root {
+        // SPEC.md CLI: a non-root restore prints the one line and exits 3 before the backup is
+        // opened. Nothing below this point has read a byte of it.
+        println!("{}", sudo_command(args));
+        return Ok(3);
+    }
+    let backup_root = Path::new(apply::BACKUP_ROOT);
+    let apt_root = Path::new(apply::APT_DIR);
+    // The id this restore creates is fixed before the confirmation, so the prompt and the write
+    // name the same directory, exactly as the mirror path names its own backup.
+    let now = now_secs()?;
+    let plan = restore::build(backup_root, apt_root).map_err(|e| (e.exit_code(), e.to_string()))?;
+    let plan::Authority::Restore { backup } = plan.authority() else {
+        return Err((
+            1,
+            "the restore plan is authorized by no backup, so nothing was written. This is a bug in apt-scout; re-run it."
+                .to_string(),
+        ));
+    };
+    let created = manifest::BackupId::from_secs(now).map_err(|e| {
+        (
+            1,
+            format!("cannot name the backup directory for {now}: {e}. Nothing was written."),
+        )
+    })?;
+    if ask {
+        for line in restore_confirm_lines(backup, &plan, &created) {
+            println!("{line}");
+        }
+        match confirm(
+            &mut io::stdin().lock(),
+            &format!("\n{} ", ink.bold("Restore this backup? [y/N]")),
+        )? {
+            Answer::Yes => {}
+            // A no is the user's decision, not a failure: the run did what it was told and there
+            // is a backup id to show for it, so it exits 0. The write path refuses a no instead,
+            // because there the write is the whole point of the run.
+            Answer::No => {
+                println!("Nothing was written: the backup is still the newest one.");
+                return Ok(0);
+            }
+        }
+    }
+    let outcome =
+        restore::run(backup_root, apt_root, now).map_err(|e| (e.exit_code(), e.to_string()))?;
+    let mut report = Report::default();
+    report.line(ink.bold("Restore"));
+    report.block(restore_lines(backup, &plan, &outcome, args.verbose));
+    report.print();
+    Ok(0)
+}
+
+/// What the confirmation names before a restore writes anything: the backup it reads, the files it
+/// writes or removes, and the backup it creates for what it replaces.
+fn restore_confirm_lines(
+    restored: &manifest::BackupId,
+    plan: &plan::Plan,
+    created: &manifest::BackupId,
+) -> Vec<String> {
+    let mut lines = vec![format!("Restore backup {}", restored.as_str())];
+    for write in plan.writes() {
+        let path = format!("{}/{}", apply::APT_DIR, write.target.relative().display());
+        let verb = match write.effect {
+            plan::Effect::Remove => "remove",
+            plan::Effect::Create | plan::Effect::Replace => "write",
+        };
+        lines.push(format!("  {verb} {path}"));
+    }
+    lines.push(format!(
+        "  copies: {}/{}",
+        apply::BACKUP_ROOT,
+        created.as_str()
+    ));
+    lines
+}
+
+/// The one block a finished restore prints: the backup it put back, the files it wrote and removed,
+/// and where it copied what it replaced. `--verbose` adds the digest, mode and owner the writer
+/// already holds for each target, and nothing here is a mirror report's heading or a second style.
+fn restore_lines(
+    restored: &manifest::BackupId,
+    plan: &plan::Plan,
+    outcome: &apply::Outcome,
+    verbose: bool,
+) -> Vec<String> {
+    let mut lines = vec![format!("  backup: {}", restored.as_str())];
+    for touched in &outcome.touched {
+        let path = format!("{}/{}", apply::APT_DIR, touched.target.relative().display());
+        let verb = match touched.effect {
+            plan::Effect::Remove => "removed",
+            plan::Effect::Create | plan::Effect::Replace => "wrote",
+        };
+        lines.push(format!("  {verb} {path}"));
+        if !verbose {
+            continue;
+        }
+        // The detail is the plan's, because the same write set is what the writer was handed; a
+        // target the writer changed that the plan does not name cannot happen (the plan is the
+        // write set) and prints only the line above.
+        let Some(write) = plan.writes().iter().find(|w| w.target == touched.target) else {
+            continue;
+        };
+        if !matches!(touched.effect, plan::Effect::Remove) {
+            lines.push(format!(
+                "    now sha256:{} mode {:04o} owner {}:{}",
+                digest::hex(&write.digest),
+                write.original.as_ref().map_or(0, |s| s.mode),
+                write.original.as_ref().map_or(0, |s| s.uid),
+                write.original.as_ref().map_or(0, |s| s.gid),
+            ));
+        }
+        if let Some(original) = &write.original {
+            lines.push(format!(
+                "    was sha256:{} mode {:04o} owner {}:{}",
+                digest::hex(&digest::sha256(&original.bytes)),
+                original.mode,
+                original.uid,
+                original.gid,
+            ));
+        }
+    }
+    lines.push(format!(
+        "  copies: {}/{}",
+        apply::BACKUP_ROOT,
+        outcome.backup_id.as_str()
+    ));
+    lines
 }
 
 /// `dpkg --print-architecture`; only amd64 and i386 have mirror choice (SPEC.md Scope). The path is
@@ -3135,6 +3352,7 @@ mod tests {
             (&["--https-only"][..], &["-s"][..]),
             (&["--verbose"][..], &["-v"][..]),
             (&["--any"][..], &["-a"][..]),
+            (&["--restore"][..], &["-r"][..]),
         ] {
             assert_eq!(parse(short), parse(long), "{short:?} must be {long:?}");
         }
@@ -3148,6 +3366,19 @@ mod tests {
             sudo_command(&parse(&["-a", "-c", "DE"])),
             "sudo apt-scout --country DE --any"
         );
+        // A restore's line is exactly the long form, whatever else the run was given: the backup
+        // and the write are the whole command, and `-r` is spelled out for a reader copying it.
+        for argv in [
+            &["-r"][..],
+            &["--restore", "--yes"][..],
+            &["-r", "-v", "--no-color"][..],
+        ] {
+            assert_eq!(
+                sudo_command(&parse(argv)),
+                "sudo apt-scout --restore",
+                "{argv:?}"
+            );
+        }
     }
 
     /// `-h` and `--help` are one request: both spellings print the same text and exit 0, and that
@@ -3169,6 +3400,7 @@ mod tests {
             ("--verbose", "-v"),
             ("--list", "-l"),
             ("--yes", "-y"),
+            ("--restore", "-r"),
         ] {
             let pair = format!("{short}, {long}");
             assert!(
@@ -3179,10 +3411,10 @@ mod tests {
     }
 
     /// One alias and one value per argument, never a bundle: `-lyc NO` stays an unknown option. The
-    /// reserved shorts stay unknown too, so `--restore` and `--refresh` can still claim them.
+    /// one reserved short stays unknown too, so `--refresh` can still claim it.
     #[test]
     fn unknown_and_bundled_short_options_are_refused() {
-        for argv in [&["-lyc", "NO"][..], &["-ly"][..], &["-r"][..], &["-R"][..]] {
+        for argv in [&["-lyc", "NO"][..], &["-ly"][..], &["-R"][..]] {
             let err = parse_args_from(argv.iter().copied().map(str::to_string))
                 .expect_err(&format!("{argv:?} must be refused"));
             assert_eq!(
@@ -4546,15 +4778,35 @@ mod tests {
     #[test]
     fn the_uid_and_the_flags_decide_whether_the_run_writes() {
         // `--list` never writes, whatever the uid, and exits 0 (SPEC.md CLI table).
-        assert_eq!(decide(true, false, false), Mode::List);
-        assert_eq!(decide(true, true, false), Mode::List);
-        assert_eq!(decide(true, true, true), Mode::List);
+        assert_eq!(decide(false, true, false, false), Mode::List);
+        assert_eq!(decide(false, true, true, false), Mode::List);
+        assert_eq!(decide(false, true, true, true), Mode::List);
         // A non-root run recommends and exits 3, with or without --yes.
-        assert_eq!(decide(false, false, false), Mode::Recommend);
-        assert_eq!(decide(false, false, true), Mode::Recommend);
+        assert_eq!(decide(false, false, false, false), Mode::Recommend);
+        assert_eq!(decide(false, false, false, true), Mode::Recommend);
         // A root run writes, and asks once unless --yes skipped the prompt.
-        assert_eq!(decide(false, true, false), Mode::Write { confirm: true });
-        assert_eq!(decide(false, true, true), Mode::Write { confirm: false });
+        assert_eq!(
+            decide(false, false, true, false),
+            Mode::Write { confirm: true }
+        );
+        assert_eq!(
+            decide(false, false, true, true),
+            Mode::Write { confirm: false }
+        );
+        // `--restore` is its own mode whatever the other flags say; a non-root run has nothing to
+        // confirm, and a root run confirms once unless --yes.
+        assert_eq!(
+            decide(true, false, false, false),
+            Mode::Restore { confirm: false }
+        );
+        assert_eq!(
+            decide(true, false, true, false),
+            Mode::Restore { confirm: true }
+        );
+        assert_eq!(
+            decide(true, false, true, true),
+            Mode::Restore { confirm: false }
+        );
     }
 
     #[test]
@@ -4583,6 +4835,152 @@ mod tests {
         assert_eq!(
             sudo_command(&flags),
             "sudo apt-scout --country LT --no-geo --top 3 --https-only --no-color"
+        );
+    }
+
+    /// `--restore` is a mode of its own and a run may not combine it with a flag the mirror
+    /// pipeline runs on: a restore never probes, ranks or rewrites, so the pair is a usage error
+    /// that names the flag the user typed and the command that does work.
+    #[test]
+    fn restore_parses_and_refuses_every_mirror_flag() {
+        let parse = |argv: &[&str]| parse_args_from(argv.iter().copied().map(str::to_string));
+        for argv in [&["--restore"][..], &["-r"][..]] {
+            let args = parse(argv).unwrap_or_else(|e| panic!("{argv:?} must parse: {e}"));
+            assert!(args.restore, "{argv:?}");
+            assert_eq!(
+                decide(args.restore, args.list, false, args.yes),
+                Mode::Restore { confirm: false },
+                "{argv:?}"
+            );
+        }
+        // Both orders, and every short spelling, so the error can never depend on which flag came
+        // first or on how it was written.
+        for (argv, flag) in [
+            (&["--restore", "--country", "LT"][..], "--country"),
+            (&["-c", "LT", "--restore"][..], "-c"),
+            (&["--restore", "--any"][..], "--any"),
+            (&["-a", "-r"][..], "-a"),
+            (&["--restore", "--top", "3"][..], "--top"),
+            // An explicit default is still the flag the user typed.
+            (&["--top", "5", "-r"][..], "--top"),
+            (&["--restore", "--https-only"][..], "--https-only"),
+            (&["-s", "-r"][..], "-s"),
+            (&["--restore", "--list"][..], "--list"),
+            (&["-l", "-r"][..], "-l"),
+            (&["--restore", "--no-geo"][..], "--no-geo"),
+            (&["-n", "-r"][..], "-n"),
+        ] {
+            let err = parse(argv).expect_err(&format!("{argv:?} must be a usage error"));
+            assert!(err.contains(flag), "{argv:?}: {err}");
+            assert!(
+                err.contains("cannot be combined with --restore"),
+                "{argv:?}: {err}"
+            );
+            assert!(err.contains("sudo apt-scout --restore"), "{argv:?}: {err}");
+        }
+        // `--yes` is the unattended form, and the display flags are display only, so a restore
+        // accepts all three.
+        let args =
+            parse(&["--restore", "--yes", "--verbose", "--no-color"]).expect("restore flags");
+        assert!(args.restore && args.yes && args.verbose && args.no_color);
+    }
+
+    /// The restore prints its own block, not the mirror report's: the backup it put back, the
+    /// files it wrote and removed, and where it copied what it replaced. `--verbose` adds the
+    /// digest, mode and owner the writer already holds; the default block carries no digest.
+    #[test]
+    fn a_restore_block_names_the_backup_the_files_and_the_copies() {
+        let original = plan::FileState {
+            dev: 1,
+            ino: 2,
+            mode: 0o644,
+            uid: 0,
+            gid: 0,
+            bytes: b"deb http://archive.ubuntu.com/ubuntu noble main\n".to_vec(),
+        };
+        let new_bytes = b"Types: deb\nURIs: http://archive.ubuntu.com/ubuntu\n".to_vec();
+        let replaced =
+            plan::Target::SourcesListD(plan::SourceName::parse("ubuntu.sources").unwrap());
+        let removed =
+            plan::Target::SourcesListD(plan::SourceName::parse("system-security.sources").unwrap());
+        let writes = vec![
+            plan::PlannedWrite {
+                target: replaced.clone(),
+                digest: digest::sha256(&new_bytes),
+                new_bytes,
+                original: Some(original.clone()),
+                effect: plan::Effect::Replace,
+            },
+            plan::PlannedWrite {
+                target: removed.clone(),
+                digest: digest::sha256(&[]),
+                new_bytes: Vec::new(),
+                original: Some(original.clone()),
+                effect: plan::Effect::Remove,
+            },
+        ];
+        let restored = manifest::BackupId::parse("20261112T000000Z").expect("id");
+        let created = manifest::BackupId::parse("20261113T101500Z").expect("id");
+        let plan = plan::Plan::for_restore(
+            &restore::validated_backup_for_test(restored.clone()),
+            writes,
+        )
+        .expect("a restore plan");
+        assert_eq!(
+            restore_confirm_lines(&restored, &plan, &created),
+            [
+                "Restore backup 20261112T000000Z".to_string(),
+                "  write /etc/apt/sources.list.d/ubuntu.sources".to_string(),
+                "  remove /etc/apt/sources.list.d/system-security.sources".to_string(),
+                "  copies: /var/backups/apt-scout/20261113T101500Z".to_string(),
+            ]
+        );
+        let outcome = apply::Outcome {
+            backup_id: created,
+            touched: vec![
+                apply::Touched {
+                    target: replaced,
+                    effect: plan::Effect::Replace,
+                },
+                apply::Touched {
+                    target: removed,
+                    effect: plan::Effect::Remove,
+                },
+            ],
+        };
+        let plain = restore_lines(&restored, &plan, &outcome, false);
+        assert_eq!(
+            plain,
+            [
+                "  backup: 20261112T000000Z".to_string(),
+                "  wrote /etc/apt/sources.list.d/ubuntu.sources".to_string(),
+                "  removed /etc/apt/sources.list.d/system-security.sources".to_string(),
+                "  copies: /var/backups/apt-scout/20261113T101500Z".to_string(),
+            ]
+        );
+        assert!(!plain.iter().any(|line| line.contains("sha256")));
+        let verbose = restore_lines(&restored, &plan, &outcome, true);
+        let was = format!(
+            "    was sha256:{} mode 0644 owner 0:0",
+            digest::hex(&digest::sha256(&original.bytes))
+        );
+        assert_eq!(
+            verbose.iter().filter(|line| *line == &was).count(),
+            2,
+            "{verbose:#?}"
+        );
+        let now = format!(
+            "    now sha256:{} mode 0644 owner 0:0",
+            digest::hex(&plan.writes()[0].digest)
+        );
+        assert!(verbose.contains(&now), "{verbose:#?}");
+        // A removal has no new content, so it carries the old state only.
+        assert_eq!(
+            verbose
+                .iter()
+                .filter(|line| line.starts_with("    now "))
+                .count(),
+            1
         );
     }
 
@@ -4811,8 +5209,8 @@ mod tests {
             "{msg}"
         );
         assert!(msg.contains("Nothing was written"), "{msg}");
-        // The refusal says what to do: name the host as the problem and point at the URIs to set
-        // back, with `--restore` explicitly still to come (D10).
+        // The refusal says what to do: name the host as the problem and point at the two ways back
+        // that exist now, the URIs by hand and the newest backup through `--restore`.
         assert!(
             msg.contains("set those URIs back to archive.ubuntu.com"),
             "{msg}"
