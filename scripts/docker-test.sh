@@ -328,7 +328,7 @@ fi
 
 # W5 (S1) Offline: the non-root half of S1. `setpriv` drops to uid 1000 inside the root container,
 #   because the pin needs root and uid 1000 cannot write /etc/apt. A missing `setpriv` fails the
-#   case loudly: skipping the only non-root case here would leave S1 half-unproven.
+#   case loudly: skipping one of the non-root cases here would leave S1 half-unproven.
 rc=0; got=$(wcase ubuntu:24.04 \
   "$FIX_DEB822; command -v setpriv >/dev/null || { echo WPIN setpriv missing; exit 1; }" \
   "setpriv --reuid=1000 --regid=1000 --clear-groups /apt-scout __write-harness apply" 2>&1) || rc=$?
@@ -811,6 +811,120 @@ elif printf '%s\n' "$run2_out" | grep -qF 'country: Lithuania (--country, not a 
   pass "W26 --any -> country not a constraint, $outside of the ranked hosts outside Lithuania's own set, no widening note"
 else
   fail "W26 --any -> outside=$outside lt-hosts=$lt_hosts: $(printf '%s\n' "$run2_out" | head -14)"
+fi
+
+# W27–W31 are restore: the flag the user can type, against a backup a real write made. The backup
+# every case restores is the harness's fixed `20261112T000000Z`, and `apply-pop` seeds it offline
+# with the one creation (`system-security.sources`) and one replacement (`ubuntu.sources`) a restore
+# has to undo. The restore's own backup is named from the container's clock, so a case never spells
+# it; it only checks that the directory the block names exists under /var/backups/apt-scout.
+
+# W27 (S10) Offline: the positive restore. A root write seeds the backup; `--restore --yes` puts the
+#   original bytes back — the whole /etc/apt snapshot and the pinned digest are identical to the
+#   pre-write state — removes the file the write created, and names the backup it read, both files
+#   and where it copied what it replaced. The heading is the restore's own, never the mirror
+#   report's, so a run that printed a `Ranked` or `Recommendation` section would fail here.
+rc=0; got=$(WCASE_DIGESTS=/etc/apt/sources.list.d/ubuntu.sources wcase ubuntu:24.04 "$FIX_DEB822" \
+  "/apt-scout __write-harness apply-pop >/dev/null 2>&1 && /apt-scout --restore --yes" 2>&1) || rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s\n' "$got" | grep -qx 'rc=0' \
+  && printf '%s\n' "$got" | grep -qxF 'Restore' \
+  && printf '%s\n' "$got" | grep -qxF '  backup: 20261112T000000Z' \
+  && printf '%s\n' "$got" | grep -qxF '  wrote /etc/apt/sources.list.d/ubuntu.sources' \
+  && printf '%s\n' "$got" | grep -qxF '  removed /etc/apt/sources.list.d/system-security.sources' \
+  && printf '%s\n' "$got" | grep -qE '^  copies: /var/backups/apt-scout/[0-9]{8}T[0-9]{6}Z$' \
+  && ! printf '%s\n' "$got" | grep -qE '^(Ranked|Recommendation|Planned change)$' \
+  && [[ "$got" == *"same=yes"* ]] && [[ "$got" == *"digests=unchanged"* ]] \
+  && [[ "$got" == *"backups=yes"* ]]; then
+  pass "W27 restore -> original bytes and mode back, created file removed, backup named"
+else
+  fail "W27 restore -> exit $rc: $(echo "$got" | head -14)"
+fi
+
+# W28 (S10) Offline: a second restore is refused. The first restore records the file it removed as a
+#   replacement with a copy beside it, so the newest backup describes a target that is no longer on
+#   disk; `restore::build` refuses that record-versus-disk disagreement whole rather than guessing,
+#   writes nothing (the snapshot and the digest are unchanged) and starts no third backup.
+rc=0; got=$(WCASE_DIGESTS=/etc/apt/sources.list.d/ubuntu.sources wcase ubuntu:24.04 "$FIX_DEB822" \
+  "/apt-scout __write-harness apply-pop >/dev/null 2>&1 || echo SEED_FAILED
+rc1=0; /apt-scout --restore --yes >/dev/null 2>&1 || rc1=\$?
+echo first-rc=\$rc1
+rc2=0; /apt-scout --restore --yes >/tmp/second 2>&1 || rc2=\$?
+echo second-rc=\$rc2
+echo backups-count=\$(find /var/backups/apt-scout -mindepth 1 -maxdepth 1 -type d | wc -l)
+cat /tmp/second" 2>&1) || rc=$?
+if [ "$rc" -eq 0 ] && printf '%s\n' "$got" | grep -qx 'first-rc=0' \
+  && printf '%s\n' "$got" | grep -qx 'second-rc=1' \
+  && printf '%s\n' "$got" | grep -qx 'backups-count=2' \
+  && [[ "$got" == *"it is not on disk"* ]] && [[ "$got" == *"same=yes"* ]] \
+  && [[ "$got" == *"digests=unchanged"* ]]; then
+  pass "W28 second restore -> refused (exit 1), nothing written, no third backup"
+else
+  fail "W28 second restore -> exit $rc: $(echo "$got" | head -14)"
+fi
+
+# W29 (S1, the restore half) Offline, plain binary: a non-root restore prints only the one line and
+#   exits 3, whatever else the run was given (`-r --yes` included, which still prints the long form)
+#   and before the backup is opened. The container holds no /var/backups/apt-scout at all, so a run
+#   that read the backup would have to fail on it instead of exiting 3; the digests prove the rest.
+rc=0; got=$(run none ubuntu:24.04 sh -c "$FIX_DEB822
+command -v setpriv >/dev/null || { echo WPIN setpriv missing; exit 1; }
+find /etc/apt -type f | sort | xargs -r sha256sum > /tmp/before
+out=\$(setpriv --reuid=1000 --regid=1000 --clear-groups /apt-scout --restore 2>&1); rc=\$?
+echo rc=\$rc
+echo lines=\$(printf '%s\n' \"\$out\" | wc -l)
+printf 'line:%s\n' \"\$out\"
+out2=\$(setpriv --reuid=1000 --regid=1000 --clear-groups /apt-scout -r --yes 2>&1); rc2=\$?
+echo rc2=\$rc2
+printf 'line2:%s\n' \"\$out2\"
+find /etc/apt -type f | sort | xargs -r sha256sum > /tmp/after
+cmp -s /tmp/before /tmp/after && echo same=yes || echo same=no
+[ -e /var/backups/apt-scout ] && echo backups=yes || echo backups=no" 2>&1) || rc=$?
+if [[ "$got" == *"WPIN setpriv missing"* ]]; then
+  fail "W29 non-root restore -> ubuntu:24.04 ships no setpriv, so the case could not run"
+elif [ "$rc" -eq 0 ] && printf '%s\n' "$got" | grep -qx 'rc=3' \
+  && printf '%s\n' "$got" | grep -qx 'rc2=3' \
+  && printf '%s\n' "$got" | grep -qx 'lines=1' \
+  && printf '%s\n' "$got" | grep -qxF 'line:sudo apt-scout --restore' \
+  && printf '%s\n' "$got" | grep -qxF 'line2:sudo apt-scout --restore' \
+  && [[ "$got" == *"same=yes"* ]] && [[ "$got" == *"backups=no"* ]]; then
+  pass "W29 non-root restore -> exactly sudo apt-scout --restore, exit 3, no backup opened"
+else
+  fail "W29 non-root restore -> exit $rc: $(echo "$got" | head -10)"
+fi
+
+# W30 (S10) Offline: the backup itself is tampered with — one byte appended to the copy the
+#   manifest names — so the digest the record carries is not the digest of the copy. The restore is
+#   refused before the first write: exit 1, the copy named, /etc/apt exactly as the seed left it.
+rc=0; got=$(wcase ubuntu:24.04 "$FIX_DEB822
+/apt-scout __write-harness apply-pop >/dev/null 2>&1 || echo SEED_FAILED
+printf 'tampered\n' >> /var/backups/apt-scout/20261112T000000Z/sources.list.d/ubuntu.sources" \
+  "/apt-scout --restore --yes" 2>&1) || rc=$?
+if [ "$rc" -eq 0 ] && printf '%s\n' "$got" | grep -qx 'rc=1' \
+  && [[ "$got" == *"its digest is not the digest the manifest records"* ]] \
+  && [[ "$got" == *"same=yes"* ]] && [[ "$got" == *"backups=yes"* ]]; then
+  pass "W30 tampered backup copy -> refused by the digest rule, exit 1, /etc/apt untouched"
+else
+  fail "W30 tampered backup copy -> exit $rc: $(echo "$got" | head -10)"
+fi
+
+# W31 (S10) Offline: the target is replaced behind the backup's back — the file the manifest names
+#   is a symlink to a canary outside /etc/apt — so the restore cannot describe a regular file and
+#   refuses by name. The canary's digest is compared, so a restore that followed the link and wrote
+#   through it would show as digests=changed.
+rc=0; got=$(WCASE_DIGESTS=/tmp/canary wcase ubuntu:24.04 "$FIX_DEB822
+/apt-scout __write-harness apply-pop >/dev/null 2>&1 || echo SEED_FAILED
+printf 'canary-v1\n' > /tmp/canary
+rm -f /etc/apt/sources.list.d/ubuntu.sources
+ln -s /tmp/canary /etc/apt/sources.list.d/ubuntu.sources" \
+  "/apt-scout --restore --yes" 2>&1) || rc=$?
+if [ "$rc" -eq 0 ] && printf '%s\n' "$got" | grep -qx 'rc=1' \
+  && [[ "$got" == *"refusing /etc/apt/sources.list.d/ubuntu.sources: it is a symlink"* ]] \
+  && [[ "$got" == *"same=yes"* ]] && [[ "$got" == *"digests=unchanged"* ]] \
+  && [[ "$got" == *"$canary  /tmp/canary"* ]]; then
+  pass "W31 target replaced behind the backup's back -> refused by name, canary and /etc/apt identical"
+else
+  fail "W31 target replaced behind the backup's back -> exit $rc: $(echo "$got" | head -10)"
 fi
 
 exit $status
