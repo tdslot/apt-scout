@@ -15,7 +15,7 @@ mod probe;
 pub mod sources;
 mod verify;
 
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::ExitCode;
@@ -42,6 +42,8 @@ struct Args {
     yes: bool,
     /// `--verbose`: per-mirror detail and each rejection's full reason.
     verbose: bool,
+    /// `--no-color`: no escapes in the report, whatever the terminal is (SPEC.md Output).
+    no_color: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -57,6 +59,7 @@ fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args, Strin
         list: false,
         yes: false,
         verbose: false,
+        no_color: false,
     };
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
@@ -70,6 +73,8 @@ fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args, Strin
             "--https-only" | "-s" => a.https_only = true,
             "--no-geo" | "-n" => a.no_geo = true,
             "--verbose" | "-v" => a.verbose = true,
+            // The one implemented flag without a short form, so `-N` stays an unknown option.
+            "--no-color" => a.no_color = true,
             "--country" | "-c" => {
                 let cc = it.next().ok_or(format!(
                     "{arg} needs a two-letter country code, for example {arg} LT"
@@ -136,6 +141,12 @@ TABLE
   sig reads ok only for a verified -updates InRelease; only ok may authorize a write.
   notes reads sec:<n>m for a -security lag and redir:<host> for a redirect to another host;
   a host that does not fit is cut and ends in ~; --verbose prints it in full.
+
+DISPLAY
+  --no-color          no colour in the report, even on a terminal
+  colour and the progress line are terminal-only: colour paints stdout when it is a
+  terminal and NO_COLOR is unset, and progress rewrites one line on stderr when that
+  is a terminal. A pipe gets neither, so a captured run prints the plain words.
 
 EXIT CODES
   0 success    1 refusal or failure    2 usage    3 not root
@@ -574,10 +585,108 @@ impl Report {
     }
 }
 
+/// The inks the report uses: the whole vocabulary of SPEC.md Output, so no render site can invent a
+/// sixth one. Display only — a decision, a comparison, an ordering, a path, a written byte and an
+/// exit code never read it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Style {
+    Bold,
+    Green,
+    Yellow,
+    Red,
+    Dim,
+}
+
+impl Style {
+    /// The SGR parameter that turns this ink on; `paint` always closes it with a reset.
+    fn code(self) -> &'static str {
+        match self {
+            Style::Bold => "1",
+            Style::Green => "32",
+            Style::Yellow => "33",
+            Style::Red => "31",
+            Style::Dim => "2",
+        }
+    }
+}
+
+/// SPEC.md Output: colour appears only when all three inputs agree — stdout is a terminal, `--no-color`
+/// was not given, and `NO_COLOR` is unset. Pure, so a test proves every combination without owning a
+/// terminal.
+fn colour_enabled(stdout_is_terminal: bool, no_color_flag: bool, no_color_set: bool) -> bool {
+    stdout_is_terminal && !no_color_flag && !no_color_set
+}
+
+/// The one environment read colour makes. `var_os`, because SPEC.md Output counts `NO_COLOR` as set
+/// whatever its value is, the empty one included, and a non-UTF-8 value is still a value. It reaches
+/// no decision, no path, no written byte and no exit code.
+fn no_color_from_env() -> bool {
+    std::env::var_os("NO_COLOR").is_some()
+}
+
+/// `text` in `style`, or `text` unchanged when colour is off. The only place an escape sequence is
+/// made, so a plain run prints exactly the bytes a colour run prints minus the escapes (SPEC.md
+/// Output). Pure.
+fn paint(style: Style, text: &str, enabled: bool) -> String {
+    if !enabled {
+        return text.to_string();
+    }
+    format!("\x1b[{}m{text}\x1b[0m", style.code())
+}
+
+/// The style set one run paints its report with, threaded into every render site. The plain one
+/// returns its input, so a render function needs no branch of its own and the plain text cannot
+/// drift from the coloured one. A styled cell is always painted **after** it is padded: `{:<44.44}`
+/// counts bytes, so painting first would break every column.
+#[derive(Clone, Copy)]
+struct Painter {
+    colour: bool,
+}
+
+impl Painter {
+    fn new(colour: bool) -> Self {
+        Painter { colour }
+    }
+
+    /// What a piped run and every test use: no escapes, ever.
+    #[cfg(test)]
+    fn plain() -> Self {
+        Painter { colour: false }
+    }
+
+    fn bold(&self, text: &str) -> String {
+        paint(Style::Bold, text, self.colour)
+    }
+
+    fn green(&self, text: &str) -> String {
+        paint(Style::Green, text, self.colour)
+    }
+
+    fn yellow(&self, text: &str) -> String {
+        paint(Style::Yellow, text, self.colour)
+    }
+
+    fn red(&self, text: &str) -> String {
+        paint(Style::Red, text, self.colour)
+    }
+
+    fn dim(&self, text: &str) -> String {
+        paint(Style::Dim, text, self.colour)
+    }
+}
+
 /// The run's identity: version, release and the country the run used, with the source of the
 /// country, because `--country` is an override and the line says which one won (SPEC.md CLI).
-fn header_identity(version: &str, distro: &str, country: &str, origin: &str) -> String {
-    format!("apt-scout {version} · {distro} · country: {country} ({origin})")
+fn header_identity(
+    version: &str,
+    distro: &str,
+    country: &str,
+    origin: &str,
+    ink: Painter,
+) -> String {
+    ink.bold(&format!(
+        "apt-scout {version} · {distro} · country: {country} ({origin})"
+    ))
 }
 
 /// The facts about where the answer came from: server AS, mirror list source, freshness reference.
@@ -600,12 +709,13 @@ fn header_context(
 }
 
 /// A section title with an annotation on the right, so a heading can state the rule it follows
-/// without a sentence underneath the table.
-fn titled(left: &str, right: &str) -> String {
+/// without a sentence underneath the table. The heading is bold, and painted after its padding so the
+/// annotation stays in its column.
+fn titled(left: &str, right: &str, ink: Painter) -> String {
     if right.is_empty() {
-        left.to_string()
+        ink.bold(left)
     } else {
-        format!("{left:<45}  {right}")
+        format!("{}  {right}", ink.bold(&format!("{left:<45}")))
     }
 }
 
@@ -622,10 +732,11 @@ fn as_note(rows: &[Row], reason: Option<&str>) -> Option<String> {
 }
 
 /// `Ranked — 5 of 12 usable, 7 rejected`: how much of the ranking is shown, and what did not make it.
-fn ranked_title(shown: usize, usable: usize, rejected: usize) -> String {
+fn ranked_title(shown: usize, usable: usize, rejected: usize, ink: Painter) -> String {
     titled(
         &format!("Ranked — {shown} of {usable} usable, {rejected} rejected"),
         "lag = -updates age vs freshest",
+        ink,
     )
 }
 
@@ -661,7 +772,7 @@ const CUT_MARKER: char = '~';
 /// column is left out entirely when no row has AS data, so it can never read as "every mirror is
 /// unknown"; the notes column is left out when no shown row has a note, so a plain table gains no
 /// empty column.
-fn ranked_rows(rows: &[Row]) -> Vec<String> {
+fn ranked_rows(rows: &[Row], ink: Painter) -> Vec<String> {
     // Both facts SPEC step 9 asks for, in one cell: the ASN the lookup answered and whether it is
     // the server's. A fixed printed width would either cut a 6-digit ASN or waste columns on a
     // 4-digit one, so the column is as wide as the widest cell it holds.
@@ -674,10 +785,14 @@ fn ranked_rows(rows: &[Row]) -> Vec<String> {
     let notes: Vec<Option<String>> = rows.iter().map(note_cell).collect();
     let with_notes = notes.iter().any(Option::is_some);
     let mut out = Vec::new();
-    let mut head = format!(
-        "  {:>2}  {:<44} {:>5} {:>10} {:>9}",
-        "#", "mirror", "lag", "speed", "delay"
-    );
+    // Each heading word is padded first and dimmed second: the width format counts bytes, so a
+    // dimmed word would lose its padding and shift every column under it.
+    let mut head = format!("  {:>2}  {:<44} ", "#", "mirror");
+    head.push_str(&ink.dim(&format!("{:>5}", "lag")));
+    head.push(' ');
+    head.push_str(&ink.dim(&format!("{:>10}", "speed")));
+    head.push(' ');
+    head.push_str(&ink.dim(&format!("{:>9}", "delay")));
     if let Some(width) = as_width {
         head.push_str(&format!(" {:>width$}", "as"));
     }
@@ -699,7 +814,7 @@ fn ranked_rows(rows: &[Row]) -> Vec<String> {
             let cell = row.as_cell.as_deref().unwrap_or("unknown");
             line.push_str(&format!(" {cell:>width$}"));
         }
-        line.push_str(&format!("  {}", signature_cell(row.signature)));
+        line.push_str(&format!("  {}", signature_cell_painted(row.signature, ink)));
         if let Some(note) = &notes[i] {
             line.push_str(&format!("  {note}"));
         }
@@ -794,10 +909,15 @@ fn table_rows<'a>(
 /// The recommendation and the facts behind it: host, country, AS, speed, lag and signature status
 /// (SPEC.md CLI), in one line so nothing repeats the table. The AS cell is the table's own, so the
 /// ASN the tie-break used is named here too instead of the bare match word.
-fn recommendation(best: &fresh::Probed, country: &str, as_cell: Option<&str>) -> String {
+fn recommendation(
+    best: &fresh::Probed,
+    country: &str,
+    as_cell: Option<&str>,
+    ink: Painter,
+) -> String {
     format!(
         "  {} — {} {}, {}, AS {}, {}m lag, {:.1} MB/s, {} ms",
-        best.url,
+        ink.bold(&best.url),
         if best.lag_secs == 0 {
             "freshest"
         } else {
@@ -870,7 +990,7 @@ fn rejection(error: &probe::ProbeError) -> Reject {
 /// `Rejected — 7` and one line per reason with the hosts and their numbers (SPEC step 8: every
 /// rejected mirror with the reason it was rejected). Sorted by reason, so two runs that saw the
 /// same answers print the same section.
-fn rejected_section(rejected: &[Rejected]) -> Vec<String> {
+fn rejected_section(rejected: &[Rejected], ink: Painter) -> Vec<String> {
     let mut groups: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
     for r in rejected {
@@ -880,27 +1000,34 @@ fn rejected_section(rejected: &[Rejected]) -> Vec<String> {
         };
         groups.entry(r.kind.label()).or_default().push(item);
     }
-    let mut out = vec![format!("Rejected — {}", rejected.len())];
+    let mut out = vec![ink.bold(&format!("Rejected — {}", rejected.len()))];
     for (label, items) in groups {
-        out.push(format!("  {label:<17} {}", items.join(", ")));
+        out.push(ink.red(&format!("  {label:<17} {}", items.join(", "))));
     }
     out
 }
 
 /// `--verbose` says why for each mirror on its own line, instead of grouping.
-fn rejected_detail(rejected: &[Rejected]) -> Vec<String> {
-    let mut out = vec![format!("Rejected — {}", rejected.len())];
+fn rejected_detail(rejected: &[Rejected], ink: Painter) -> Vec<String> {
+    let mut out = vec![ink.bold(&format!("Rejected — {}", rejected.len()))];
     for r in rejected {
-        out.push(format!("  {:<40} {:<17} {}", r.host, r.kind.label(), r.why));
+        out.push(ink.red(&format!(
+            "  {:<40} {:<17} {}",
+            r.host,
+            r.kind.label(),
+            r.why
+        )));
     }
     out
 }
 
-fn rejected_lines(rejected: &[Rejected], verbose: bool) -> Vec<String> {
+/// The `Rejected` section, or nothing at all: a run that rejected nobody prints no heading and no
+/// `0` count (SPEC.md Output). `Report::block` skips an empty section, so the caller needs no case.
+fn rejected_lines(rejected: &[Rejected], verbose: bool, ink: Painter) -> Vec<String> {
     if verbose {
-        rejected_detail(rejected)
+        rejected_detail(rejected, ink)
     } else {
-        rejected_section(rejected)
+        rejected_section(rejected, ink)
     }
 }
 
@@ -917,8 +1044,9 @@ fn detail_section(
     rows: &[Row],
     details: &std::collections::HashMap<String, Detail>,
     resolved: &std::collections::HashMap<String, ResolvedAs>,
+    ink: Painter,
 ) -> Vec<String> {
-    let mut out = vec!["Detail".to_string()];
+    let mut out = vec![ink.bold("Detail")];
     for (i, row) in rows.iter().enumerate() {
         out.push(format!("  {}  {}", i + 1, row.url));
         let detail = details.get(row.url);
@@ -984,8 +1112,8 @@ fn utc_stamp(secs: i64) -> String {
 /// skip, with the reason (SPEC.md Apply: report each inspected file and each skipped entry). One
 /// line per file and per URI, so the section is a list, not a paragraph. Paths are relative to the
 /// apt root named in the title, which keeps the list narrow and unambiguous.
-fn sources_section(root: &Path, inventory: &sources::Inventory) -> Vec<String> {
-    let mut out = vec![titled("Sources", &root.display().to_string())];
+fn sources_section(root: &Path, inventory: &sources::Inventory, ink: Painter) -> Vec<String> {
+    let mut out = vec![titled("Sources", &root.display().to_string(), ink)];
     if inventory.files.is_empty() {
         out.push("  no apt source files found".to_string());
     }
@@ -1052,14 +1180,19 @@ fn skip_reason(entry: &sources::Entry) -> String {
 /// The change a write would make, per target: the old URI and the new one. URI pairs rather than
 /// file lines, because the one thing that changes is the URI, and a long `sources.list` diff buries
 /// it (SPEC.md Apply: the old URI and the new one, the files it will change).
-fn plan_changes(root: &Path, inventory: &sources::Inventory, plan: &plan::Plan) -> Vec<String> {
+fn plan_changes(
+    root: &Path,
+    inventory: &sources::Inventory,
+    plan: &plan::Plan,
+    ink: Painter,
+) -> Vec<String> {
     let mut out = Vec::new();
     for write in plan.writes() {
         let relative = write.target.relative().display().to_string();
         if write.create_new {
             out.push(format!("  {relative}  (new file, mode 0600)"));
             for line in String::from_utf8_lossy(&write.new_bytes).lines() {
-                out.push(format!("    + {line}"));
+                out.push(ink.green(&format!("    + {line}")));
             }
             continue;
         }
@@ -1070,8 +1203,8 @@ fn plan_changes(root: &Path, inventory: &sources::Inventory, plan: &plan::Plan) 
                 for (uri, rewritable) in entry.uris.iter().zip(&entry.rewritable) {
                     if *rewritable {
                         out.push(format!("  {relative}:{}", entry.line));
-                        out.push(format!("    - {uri}"));
-                        out.push(format!("    + {}", plan.selected_uri()));
+                        out.push(ink.red(&format!("    - {uri}")));
+                        out.push(ink.green(&format!("    + {}", plan.selected_uri())));
                         shown = true;
                     }
                 }
@@ -1088,6 +1221,14 @@ fn plan_changes(root: &Path, inventory: &sources::Inventory, plan: &plan::Plan) 
 
 fn run() -> Result<u8, (u8, String)> {
     let args = parse_args().map_err(|e| (2, e))?;
+    // SPEC.md Output: colour is decided once, at startup, from the three inputs that all have to
+    // agree. Nothing below re-reads a terminal or an environment variable, so a report cannot be
+    // half painted.
+    let ink = Painter::new(colour_enabled(
+        io::stdout().is_terminal(),
+        args.no_color,
+        no_color_from_env(),
+    ));
     let (d, source) = distro::detect().map_err(|e| (1, e))?;
     if !d.is_ubuntu_family() {
         return Err((
@@ -1175,8 +1316,13 @@ fn run() -> Result<u8, (u8, String)> {
         &distro_label,
         country_name,
         country_origin,
+        ink,
     ));
-    report.block(sources_section(Path::new(apply::APT_DIR), &apt_sources));
+    report.block(sources_section(
+        Path::new(apply::APT_DIR),
+        &apt_sources,
+        ink,
+    ));
     if !apt_sources.has_rewritable_uri() {
         report.line(
             "No official Ubuntu apt source URI can be changed; stopping before mirror probes."
@@ -1333,24 +1479,24 @@ fn run() -> Result<u8, (u8, String)> {
         list_source,
         reference.as_ref(),
     )]);
-    let mut ranked_lines = vec![ranked_title(rows.len(), ranked.len(), rejected.len())];
-    ranked_lines.extend(ranked_rows(&rows));
+    let mut ranked_lines = vec![ranked_title(rows.len(), ranked.len(), rejected.len(), ink)];
+    ranked_lines.extend(ranked_rows(&rows, ink));
     // A run with no AS data says why under the table, once, instead of printing a column of
     // `unknown` that implies the lookup happened (SPEC step 9).
     ranked_lines.extend(as_note(&rows, as_error.as_deref()));
     report.block(ranked_lines);
     if args.verbose && !rows.is_empty() {
-        report.block(detail_section(&rows, &details, &mirror_asn));
+        report.block(detail_section(&rows, &details, &mirror_asn, ink));
     }
     let Some(best) = ranked.first() else {
-        report.block(rejected_lines(&rejected, args.verbose));
+        report.block(rejected_lines(&rejected, args.verbose, ink));
         report.print();
         return Err(no_fresh_mirror());
     };
     let best_cell = as_cell(&mirror_asn, server_asn.as_deref(), &best.url);
     report.block(vec![
-        "Recommendation".to_string(),
-        recommendation(best, country_name, best_cell.as_deref()),
+        ink.bold("Recommendation"),
+        recommendation(best, country_name, best_cell.as_deref(), ink),
     ]);
 
     let platform = if d.id == "pop" {
@@ -1384,6 +1530,7 @@ fn run() -> Result<u8, (u8, String)> {
             } else {
                 "written only after the confirmation"
             },
+            ink,
         )];
         match build_plan(
             Path::new(apply::APT_DIR),
@@ -1394,7 +1541,12 @@ fn run() -> Result<u8, (u8, String)> {
         ) {
             Ok(change) => match change.plan {
                 Some(plan) => {
-                    planned.extend(plan_changes(Path::new(apply::APT_DIR), &apt_sources, &plan));
+                    planned.extend(plan_changes(
+                        Path::new(apply::APT_DIR),
+                        &apt_sources,
+                        &plan,
+                        ink,
+                    ));
                     if let Some((_, id)) = &write_timing {
                         planned.push(format!(
                             "  backup: {}/{} (every replaced file is copied there, mode 0700, before the first write)",
@@ -1427,7 +1579,7 @@ fn run() -> Result<u8, (u8, String)> {
         }
         report.block(planned);
     }
-    report.block(rejected_lines(&rejected, args.verbose));
+    report.block(rejected_lines(&rejected, args.verbose, ink));
     report.print();
 
     match mode {
@@ -1454,7 +1606,10 @@ fn run() -> Result<u8, (u8, String)> {
                 ));
             };
             if confirm {
-                confirm_write(&mut io::stdin().lock(), "\nApply this change? [y/N] ")?;
+                confirm_write(
+                    &mut io::stdin().lock(),
+                    &format!("\n{} ", ink.bold("Apply this change? [y/N]")),
+                )?;
             }
             let outcome = apply::apply(&plan, trusted_baseline.as_ref(), now)
                 .map_err(|e| (e.exit_code(), e.to_string()))?;
@@ -1511,6 +1666,18 @@ fn signature_cell(status: &verify::SignatureStatus) -> &'static str {
         verify::SignatureStatus::Verified(_) => "ok",
         verify::SignatureStatus::Invalid(_) => "no",
         verify::SignatureStatus::Unavailable(_) => "unavailable",
+    }
+}
+
+/// The `sig` column in its ink: `ok` green, `no` and `unavailable` yellow (SPEC.md Output). The cell
+/// names itself; the ink repeats it for a reader who scans the column.
+fn signature_cell_painted(status: &verify::SignatureStatus, ink: Painter) -> String {
+    let cell = signature_cell(status);
+    match status {
+        verify::SignatureStatus::Verified(_) => ink.green(cell),
+        verify::SignatureStatus::Invalid(_) | verify::SignatureStatus::Unavailable(_) => {
+            ink.yellow(cell)
+        }
     }
 }
 
@@ -2895,7 +3062,7 @@ mod tests {
         // The change the confirmation and --list show: the old URI and the new one per target,
         // and nothing else.
         assert_eq!(
-            plan_changes(&apt.0, &inventory, &plan),
+            plan_changes(&apt.0, &inventory, &plan, Painter::plain()),
             [
                 "  sources.list:1",
                 "    - http://archive.ubuntu.com/ubuntu",
@@ -3009,10 +3176,13 @@ mod tests {
     #[test]
     fn the_ranked_table_renders_the_as_column_only_with_as_data() {
         let ok = verify::SignatureStatus::verified_for_test();
-        let without = ranked_rows(&[
-            row("http://a.example/ubuntu", 0, &ok, None),
-            row("http://b.example/ubuntu", 600, &ok, None),
-        ]);
+        let without = ranked_rows(
+            &[
+                row("http://a.example/ubuntu", 0, &ok, None),
+                row("http://b.example/ubuntu", 600, &ok, None),
+            ],
+            Painter::plain(),
+        );
         assert_eq!(
             without,
             [
@@ -3024,10 +3194,13 @@ mod tests {
                     .to_string(),
             ]
         );
-        let with = ranked_rows(&[
-            row("http://a.example/ubuntu", 0, &ok, Some("12929 same")),
-            row("http://b.example/ubuntu", 0, &ok, None),
-        ]);
+        let with = ranked_rows(
+            &[
+                row("http://a.example/ubuntu", 0, &ok, Some("12929 same")),
+                row("http://b.example/ubuntu", 0, &ok, None),
+            ],
+            Painter::plain(),
+        );
         assert_eq!(
             with,
             [
@@ -3046,7 +3219,10 @@ mod tests {
     #[test]
     fn the_notes_column_carries_each_fact_and_only_when_present() {
         let ok = verify::SignatureStatus::verified_for_test();
-        let plain = ranked_rows(&[row("http://a.example/ubuntu", 0, &ok, None)]);
+        let plain = ranked_rows(
+            &[row("http://a.example/ubuntu", 0, &ok, None)],
+            Painter::plain(),
+        );
         assert_eq!(
             plain[0],
             "   #  mirror                                         lag      speed     delay  sig"
@@ -3057,11 +3233,14 @@ mod tests {
         );
 
         // A `-security` lag is informational only (it never rejects), but it is shown.
-        let lagging = ranked_rows(&[noted(
-            row("http://a.example/ubuntu", 0, &ok, None),
-            Some(778 * 60),
-            None,
-        )]);
+        let lagging = ranked_rows(
+            &[noted(
+                row("http://a.example/ubuntu", 0, &ok, None),
+                Some(778 * 60),
+                None,
+            )],
+            Painter::plain(),
+        );
         assert_eq!(
             lagging[0],
             "   #  mirror                                         lag      speed     delay  sig  notes"
@@ -3072,31 +3251,40 @@ mod tests {
         );
 
         // A mirror that redirects to another host says which one, by default.
-        let redirected = ranked_rows(&[noted(
-            row("http://a.example/ubuntu", 0, &ok, None),
-            None,
-            Some("mirror2.example"),
-        )]);
+        let redirected = ranked_rows(
+            &[noted(
+                row("http://a.example/ubuntu", 0, &ok, None),
+                None,
+                Some("mirror2.example"),
+            )],
+            Painter::plain(),
+        );
         assert_eq!(
             redirected[1],
             "   1  http://a.example/ubuntu                         0m   1.2 MB/s   1235 ms  ok  redir:mirror2.example"
         );
 
         // Both facts, one row; a zero lag is not one of them.
-        let both = ranked_rows(&[noted(
-            row("http://a.example/ubuntu", 0, &ok, None),
-            Some(60),
-            Some("mirror2.example"),
-        )]);
+        let both = ranked_rows(
+            &[noted(
+                row("http://a.example/ubuntu", 0, &ok, None),
+                Some(60),
+                Some("mirror2.example"),
+            )],
+            Painter::plain(),
+        );
         assert_eq!(
             both[1],
             "   1  http://a.example/ubuntu                         0m   1.2 MB/s   1235 ms  ok  sec:1m redir:mirror2.example"
         );
-        let zero = ranked_rows(&[noted(
-            row("http://a.example/ubuntu", 0, &ok, None),
-            Some(0),
-            None,
-        )]);
+        let zero = ranked_rows(
+            &[noted(
+                row("http://a.example/ubuntu", 0, &ok, None),
+                Some(0),
+                None,
+            )],
+            Painter::plain(),
+        );
         assert!(!zero[0].contains("notes") && !zero[1].contains("sec:"));
     }
 
@@ -3160,7 +3348,12 @@ mod tests {
                 redirected_to: Some(long.to_string()),
             },
         );
-        let verbose = detail_section(&[cell], &details, &std::collections::HashMap::new());
+        let verbose = detail_section(
+            &[cell],
+            &details,
+            &std::collections::HashMap::new(),
+            Painter::plain(),
+        );
         assert!(
             verbose
                 .iter()
@@ -3244,7 +3437,10 @@ mod tests {
             same_as: false,
             signature: outcome.updates_signature.clone(),
         }];
-        ranked_rows(&table_rows(&ranked, &details, &no_as, None, 5))
+        ranked_rows(
+            &table_rows(&ranked, &details, &no_as, None, 5),
+            Painter::plain(),
+        )
     }
 
     /// The table's `notes` cell is filled from the run's own probe result, not from a `Row` a test
@@ -3324,7 +3520,7 @@ mod tests {
         let url = "http://lt.archive.ubuntu.com/ubuntu";
         let longest_note = "a-very-long-mirror-host.example.org";
         let width = |rows: &[Row]| {
-            ranked_rows(rows)
+            ranked_rows(rows, Painter::plain())
                 .iter()
                 .map(|line| line.chars().count())
                 .max()
@@ -3359,7 +3555,7 @@ mod tests {
     #[test]
     fn the_ranked_title_counts_what_is_shown() {
         assert_eq!(
-            ranked_title(3, 12, 7),
+            ranked_title(3, 12, 7, Painter::plain()),
             "Ranked — 3 of 12 usable, 7 rejected            lag = -updates age vs freshest"
         );
     }
@@ -3394,14 +3590,14 @@ mod tests {
     fn the_recommendation_carries_country_as_lag_speed_and_signature() {
         let best = probed(MIRROR, verify::SignatureStatus::verified_for_test());
         assert_eq!(
-            recommendation(&best, "Lithuania", Some("12929 same")),
+            recommendation(&best, "Lithuania", Some("12929 same"), Painter::plain()),
             "  https://mirror.example/ubuntu/ — freshest verified, Lithuania, AS 12929 same, 0m lag, 1.0 MB/s, 10 ms"
         );
         // A mirror one generation behind says so instead of claiming to be the freshest.
         let mut lagging = best;
         lagging.lag_secs = 6 * 3600;
         assert_eq!(
-            recommendation(&lagging, "Lithuania", None),
+            recommendation(&lagging, "Lithuania", None, Painter::plain()),
             "  https://mirror.example/ubuntu/ — closest verified, Lithuania, AS unknown, 360m lag, 1.0 MB/s, 10 ms"
         );
     }
@@ -3442,7 +3638,7 @@ mod tests {
             },
         ];
         assert_eq!(
-            rejected_section(&rejected),
+            rejected_section(&rejected, Painter::plain()),
             [
                 "Rejected — 5",
                 "  404               mirror.b.example, mirror.a.example",
@@ -3452,7 +3648,7 @@ mod tests {
             ]
         );
         // --verbose trades the groups for each mirror's own line and its full reason.
-        let verbose = rejected_detail(&rejected);
+        let verbose = rejected_detail(&rejected, Painter::plain());
         assert_eq!(verbose.len(), rejected.len() + 1);
         assert!(
             verbose.iter().any(|l| l.contains("mirror.a.example")
@@ -3613,7 +3809,7 @@ mod tests {
             },
         ];
         let inventory = sources::inventory(&apt.0, &hosts, false);
-        let lines = sources_section(&apt.0, &inventory);
+        let lines = sources_section(&apt.0, &inventory, Painter::plain());
         // The title names the root, so the list itself carries only paths relative to it.
         assert!(lines[0].starts_with("Sources"), "{lines:?}");
         assert_eq!(
@@ -3639,7 +3835,8 @@ mod tests {
                 "0.1.0",
                 "Ubuntu 24.04 (noble)",
                 "United States",
-                "--country"
+                "--country",
+                Painter::plain(),
             ),
             "apt-scout 0.1.0 · Ubuntu 24.04 (noble) · country: United States (--country)"
         );
@@ -3685,7 +3882,7 @@ mod tests {
             },
         );
         assert_eq!(
-            detail_section(&rows, &details, &resolved),
+            detail_section(&rows, &details, &resolved, Painter::plain()),
             [
                 "Detail",
                 "  1  http://a.example/ubuntu",
@@ -3700,7 +3897,8 @@ mod tests {
             detail_section(
                 &rows,
                 &std::collections::HashMap::new(),
-                &std::collections::HashMap::new()
+                &std::collections::HashMap::new(),
+                Painter::plain(),
             ),
             [
                 "Detail",
@@ -3792,25 +3990,36 @@ mod tests {
             "Ubuntu 24.04 (noble)",
             "United States",
             "--country",
+            Painter::plain(),
         ));
-        report.block(sources_section(&apt.0, &inventory));
+        report.block(sources_section(&apt.0, &inventory, Painter::plain()));
         report.block(vec![header_context(Some("AS12929"), "Launchpad", None)]);
-        let mut ranked_lines = vec![ranked_title(rows.len(), rows.len(), rejected.len())];
-        ranked_lines.extend(ranked_rows(&rows));
+        let mut ranked_lines = vec![ranked_title(
+            rows.len(),
+            rows.len(),
+            rejected.len(),
+            Painter::plain(),
+        )];
+        ranked_lines.extend(ranked_rows(&rows, Painter::plain()));
         ranked_lines.extend(as_note(&rows, None));
         report.block(ranked_lines);
         report.block(vec![
-            "Recommendation".to_string(),
+            Painter::plain().bold("Recommendation"),
             recommendation(
                 &probed(selected, verify::SignatureStatus::verified_for_test()),
                 "United States",
                 Some("12929 same"),
+                Painter::plain(),
             ),
         ]);
-        let mut planned = vec![titled("Planned change", "nothing is written with --list")];
-        planned.extend(plan_changes(&apt.0, &inventory, &plan));
+        let mut planned = vec![titled(
+            "Planned change",
+            "nothing is written with --list",
+            Painter::plain(),
+        )];
+        planned.extend(plan_changes(&apt.0, &inventory, &plan, Painter::plain()));
         report.block(planned);
-        report.block(rejected_section(&rejected));
+        report.block(rejected_section(&rejected, Painter::plain()));
         let expected = vec![
             "apt-scout 0.1.0 · Ubuntu 24.04 (noble) · country: United States (--country)".to_string(),
             String::new(),
@@ -3889,5 +4098,241 @@ mod tests {
             as_cell(&resolved, None, "http://a.example/ubuntu"),
             Some("64500 unknown".to_string())
         );
+    }
+
+    /// An apt root, its inventory and the plan a write would make, so a report test can print the
+    /// `Planned change` section without going near a real `/etc/apt`.
+    fn sample_plan(tag: &str) -> (TempApt, sources::Inventory, plan::Plan) {
+        let apt = TempApt::new(tag);
+        apt.write(
+            "sources.list.d/ubuntu.sources",
+            "# noble\nTypes: deb\nURIs: http://archive.ubuntu.com/ubuntu\nSuites: noble noble-updates\nComponents: main\n\nTypes: deb\nURIs: http://security.ubuntu.com/ubuntu\nSuites: noble-security\nComponents: main\n",
+        );
+        let hosts = listed(&["archive.ubuntu.com", "mirror.example"]);
+        let inventory = sources::inventory(&apt.0, &hosts, false);
+        let plan = build_plan(
+            &apt.0,
+            &inventory,
+            &hosts,
+            &probed(MIRROR, verify::SignatureStatus::verified_for_test()),
+            plan::Platform::Ubuntu,
+        )
+        .expect("the archive stanza is rewritable")
+        .plan
+        .expect("one file changes");
+        (apt, inventory, plan)
+    }
+
+    /// Every styled site in one report — the identity line, the four headings, the `sig` column, both
+    /// diff signs, a rejection reason — built with whichever painter it is given, so a colour run and
+    /// a plain run can be compared line for line (SPEC.md Output).
+    fn painted_report(
+        ink: Painter,
+        apt: &TempApt,
+        inventory: &sources::Inventory,
+        plan: &plan::Plan,
+    ) -> Vec<String> {
+        let verified = verify::SignatureStatus::verified_for_test();
+        let invalid = verify::SignatureStatus::Invalid("bad signature".into());
+        let rows = vec![
+            row(MIRROR, 0, &verified, Some("12929 same")),
+            row("http://b.example/ubuntu", 600, &invalid, None),
+        ];
+        let rejected = vec![Rejected {
+            host: "mirror.lostpacket.org".into(),
+            kind: Reject::NotFound,
+            why: "answered HTTP 404".into(),
+        }];
+        let mut report = Report::default();
+        report.line(header_identity(
+            "0.1.0",
+            "Ubuntu 24.04 (noble)",
+            "United States",
+            "--country",
+            ink,
+        ));
+        report.block(sources_section(&apt.0, inventory, ink));
+        let mut ranked_lines = vec![ranked_title(rows.len(), rows.len(), rejected.len(), ink)];
+        ranked_lines.extend(ranked_rows(&rows, ink));
+        report.block(ranked_lines);
+        report.block(detail_section(
+            &rows,
+            &Default::default(),
+            &Default::default(),
+            ink,
+        ));
+        report.block(vec![
+            ink.bold("Recommendation"),
+            recommendation(
+                &probed(MIRROR, verify::SignatureStatus::verified_for_test()),
+                "United States",
+                Some("12929 same"),
+                ink,
+            ),
+        ]);
+        report.block(plan_changes(&apt.0, inventory, plan, ink));
+        report.block(rejected_lines(&rejected, false, ink));
+        report.0
+    }
+
+    /// `\x1b[…m` removed. `paint` writes nothing else, so scanning for the closing `m` is exact,
+    /// and a colour run must differ from the plain one by nothing else.
+    fn strip_escapes(line: &str) -> String {
+        let mut out = String::with_capacity(line.len());
+        let mut rest = line;
+        while let Some(at) = rest.find('\u{1b}') {
+            out.push_str(&rest[..at]);
+            let after = &rest[at + 1..];
+            let end = after.find('m').expect("paint closes every escape with 'm'");
+            rest = &after[end + 1..];
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// SPEC.md Output: colour appears only when the three inputs agree. One lone `false` is enough to
+    /// turn it off, and no pair of them turns it back on.
+    #[test]
+    fn colour_needs_all_three_conditions() {
+        assert!(colour_enabled(true, false, false));
+        assert!(!colour_enabled(false, false, false));
+        assert!(!colour_enabled(true, true, false));
+        assert!(!colour_enabled(true, false, true));
+        assert!(!colour_enabled(true, true, true));
+        assert!(!colour_enabled(false, true, false));
+        assert!(!colour_enabled(false, false, true));
+        assert!(!colour_enabled(false, true, true));
+    }
+
+    /// A plain painter returns its input, whatever the ink: this is what makes the plain bytes the
+    /// coloured bytes minus the escapes, without a branch in any render site.
+    #[test]
+    fn a_plain_painter_returns_its_input() {
+        let plain = Painter::plain();
+        assert_eq!(plain.bold("Ranked"), "Ranked");
+        assert_eq!(plain.green("ok"), "ok");
+        assert_eq!(plain.yellow("no"), "no");
+        assert_eq!(plain.red("- old"), "- old");
+        assert_eq!(plain.dim("lag"), "lag");
+        assert_eq!(paint(Style::Bold, "x", false), "x");
+    }
+
+    /// The ink table, and that `paint` is the only function that makes an escape.
+    #[test]
+    fn an_enabled_painter_wraps_the_text_in_one_escape() {
+        let ink = Painter::new(true);
+        assert_eq!(ink.bold("Section"), "\u{1b}[1mSection\u{1b}[0m");
+        assert_eq!(ink.green("ok"), "\u{1b}[32mok\u{1b}[0m");
+        assert_eq!(ink.yellow("no"), "\u{1b}[33mno\u{1b}[0m");
+        assert_eq!(ink.red("- x"), "\u{1b}[31m- x\u{1b}[0m");
+        assert_eq!(ink.dim("lag"), "\u{1b}[2mlag\u{1b}[0m");
+        assert_eq!(paint(Style::Dim, "x", true), "\u{1b}[2mx\u{1b}[0m");
+        // A plain painter over the same text is the identity, so the two differ by the escape only.
+        assert_eq!(
+            strip_escapes(&ink.bold("Section")),
+            Painter::plain().bold("Section")
+        );
+    }
+
+    /// The three ways colour is off (SPEC.md Output): stdout is not a terminal — a pipe, a file, the
+    /// container matrix — `--no-color`, and `NO_COLOR` set to any value, the empty one included.
+    /// Each one alone is enough, and each one must leave the report byte for byte as the plain one.
+    #[test]
+    fn a_report_with_colour_off_is_the_plain_report_byte_for_byte() {
+        let (apt, inventory, plan) = sample_plan("colour-off");
+        let plain = painted_report(Painter::plain(), &apt, &inventory, &plan);
+        for (stdout_is_terminal, no_color_flag, no_color_set) in [
+            (false, false, false),
+            (true, true, false),
+            (true, false, true),
+        ] {
+            let ink = Painter::new(colour_enabled(
+                stdout_is_terminal,
+                no_color_flag,
+                no_color_set,
+            ));
+            assert_eq!(
+                painted_report(ink, &apt, &inventory, &plan),
+                plain,
+                "stdout a terminal: {stdout_is_terminal}, --no-color: {no_color_flag}, NO_COLOR set: {no_color_set}"
+            );
+        }
+        // What a capture sees: no escape sequence at all, which is what the container matrix greps.
+        assert!(
+            !plain.iter().any(|line| line.contains('\u{1b}')),
+            "{plain:?}"
+        );
+    }
+
+    /// The same report painted: every other byte identical, and each SPEC.md Output site carries the
+    /// ink it names. Column width is part of the comparison, so painting a cell before padding it
+    /// would fail here.
+    #[test]
+    fn a_coloured_report_differs_from_the_plain_one_only_by_escapes() {
+        let (apt, inventory, plan) = sample_plan("colour-escapes");
+        let plain = painted_report(Painter::plain(), &apt, &inventory, &plan);
+        let coloured = painted_report(Painter::new(true), &apt, &inventory, &plan);
+        assert_ne!(coloured, plain, "something must be painted");
+        let stripped: Vec<String> = coloured.iter().map(|line| strip_escapes(line)).collect();
+        assert_eq!(stripped, plain);
+
+        // Site by site (SPEC.md Output): bold for the identity line, section headings and the
+        // recommended host; green `ok` and `+` lines; yellow `no`; red rejection reasons and `-`
+        // lines; dim `lag`, `speed` and `delay`.
+        let any = |needle: &str| coloured.iter().any(|line| line.contains(needle));
+        assert!(
+            coloured[0].starts_with("\u{1b}[1mapt-scout 0.1.0"),
+            "{}",
+            coloured[0]
+        );
+        assert!(any("\u{1b}[1mSources "));
+        assert!(any("\u{1b}[1mRanked — "));
+        assert!(any("\u{1b}[1mDetail\u{1b}[0m"));
+        assert!(any("\u{1b}[1mRecommendation\u{1b}[0m"));
+        assert!(any("\u{1b}[1mRejected — 1\u{1b}[0m"));
+        assert!(any("\u{1b}[1mhttps://mirror.example/ubuntu/\u{1b}[0m"));
+        assert!(any("\u{1b}[2m  lag\u{1b}[0m"));
+        assert!(any("\u{1b}[2m     speed\u{1b}[0m"));
+        assert!(any("\u{1b}[2m    delay\u{1b}[0m"));
+        assert!(any("\u{1b}[32mok\u{1b}[0m"));
+        assert!(any("\u{1b}[33mno\u{1b}[0m"));
+        assert!(any("\u{1b}[31m  404"));
+        assert!(any("\u{1b}[31m    - http://archive.ubuntu.com/ubuntu"));
+        assert!(any("\u{1b}[32m    + https://mirror.example/ubuntu/"));
+    }
+
+    /// `--no-color` is a flag of its own and has no short form, so no one can bundle or guess it
+    /// (SPEC.md CLI: the one implemented flag without one).
+    #[test]
+    fn no_color_parses_and_has_no_short_form() {
+        let args =
+            parse_args_from(["--no-color"].map(str::to_string)).expect("--no-color is a flag");
+        assert!(args.no_color);
+        assert!(
+            !parse_args_from(std::iter::empty::<String>())
+                .expect("no flags")
+                .no_color
+        );
+        // `-N` and every other guess stay an unknown option, and one that exits 2.
+        for argv in ["-N", "-C", "-x"] {
+            let err = parse_args_from([argv].map(str::to_string))
+                .expect_err(&format!("{argv} must be refused"));
+            assert_eq!(err, format!("unknown option '{argv}'; try --help"));
+        }
+    }
+
+    /// `--help` stays in sync with what the run does: the flag is listed, and the help says colour and
+    /// the progress line are for a terminal only, because that is the difference a user sees between
+    /// a run here and the same run in a pipe.
+    #[test]
+    fn the_help_lists_no_color_and_says_display_is_terminal_only() {
+        assert!(HELP.contains("--no-color"), "{HELP}");
+        assert!(
+            HELP.contains("colour and the progress line are terminal-only"),
+            "{HELP}"
+        );
+        assert!(HELP.contains("NO_COLOR is unset"), "{HELP}");
+        // The flag has no short form, so the help must not invent one beside it.
+        assert!(!HELP.contains("-N, --no-color"), "{HELP}");
     }
 }
