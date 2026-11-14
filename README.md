@@ -23,7 +23,7 @@ sudo apt install ./apt-scout_<version>_amd64.deb
 
 It installs `/usr/bin/apt-scout` and the manual page at `/usr/share/man/man1/apt-scout.1`, so `man apt-scout` resolves, and it pulls in `gpgv` and `ubuntu-keyring`.
 
-One `.deb` serves every supported release. The binary is linked against musl, so it has no `libc6` dependency and no glibc ABI to match, and `gpgv` and `ubuntu-keyring` keep the same names and paths from 20.04 to 26.04. The split is by architecture (`amd64` today, `arm64` later), never by release: the Docker matrix over `ubuntu:20.04` through `ubuntu:26.04` is the compatibility evidence — one build, one digest, the same cases green in each image.
+One `.deb` serves every supported release. The binary is linked against musl, so it has no `libc6` dependency and no glibc ABI to match, and `gpgv` and `ubuntu-keyring` keep the same names and paths from 20.04 to 26.04. The split is by architecture (`amd64` today, `arm64` later), never by release: the Docker matrix over `ubuntu:20.04` through `ubuntu:26.04` is the compatibility evidence — two builds, two digests, the same pair green in each image.
 
 The release tarball holds the binary, the two licences and this file:
 
@@ -43,7 +43,7 @@ scripts/docker-test.sh --build-only       # target/docker/apt-scout-plain, stati
 scripts/build-deb.sh                      # dist/apt-scout_<version>_amd64.deb
 ```
 
-`scripts/build-deb.sh` stages that static binary, this README and, when `man/apt-scout.1` exists, the manual page, then builds the archive with `dpkg-deb` — on the host, or in an `ubuntu:24.04` container when the host has no `dpkg-deb`. It reads the version, the maintainer and the synopsis from `Cargo.toml` unless you pass a version as its argument, and it needs Docker for the container path a Mac has to use. The published release is packaged instead by `.github/workflows/release.yml` with `cargo deb` from the same `[package.metadata.deb]` metadata: two builders for one layout, kept in step by hand, and `ROADMAP.md` tracks the difference.
+`scripts/build-deb.sh` stages that static binary, this README and, when `man/apt-scout.1` exists, the manual page, then builds the archive with `dpkg-deb` — on the host, or in an `ubuntu:24.04` container when the host has no `dpkg-deb`. It reads the version, the maintainer, the synopsis and the dependencies from `Cargo.toml` unless you pass a version as its argument, carries the MIT licence text in `usr/share/doc/apt-scout/copyright`, generates a `changelog.gz` from that version, and needs Docker for the container path a Mac has to use. The published release is packaged instead by `.github/workflows/release.yml` with `cargo deb` from the same `[package.metadata.deb]` metadata: two builders for one layout, kept in step by hand, and `ROADMAP.md` tracks the difference.
 
 ## Quick start
 
@@ -77,10 +77,8 @@ The report is one block, printed once when the probing and the ranking are done:
 - the identity line — `apt-scout <version> · Ubuntu <release> (<codename>) · country: <name> (<source>)`;
 - `Sources`, the directory scanned, then one line per source file with `rewrite` or `skip`, the line number, the host and, when skipped, the reason;
 - the context line, `mirrors:` naming the list source and `reference:` naming the freshness baseline;
-- `Ranked`, with the legend and the table;
-- `Detail`, in a `--verbose` run only: the facts behind each row;
-- `Recommendation`, the chosen mirror with its reason;
-- `Planned change`, the diff a write would make, or the note that nothing is written;
+- `Ranked`, with the legend and the table, and `Detail` in a `--verbose` run only: the facts behind each row;
+- `Recommendation`, the chosen mirror with its reason, then `Planned change`, the diff a write would make or the note that nothing is written;
 - `Rejected`, only when something was rejected: each class of reason with its count and the hosts.
 
 The table's columns are named for what they measure:
@@ -97,9 +95,7 @@ The default report is the decision and `--verbose` is the proof: `-v` adds each 
 
 While it works, a run shows one line on stderr, rewritten in place and only when stderr is a terminal: `loading the mirror list`, `verifying the reference`, `probing <n> mirrors… <done>/<total>`, `ranking`, then a summary such as `done — 4 usable, 0 rejected in 3.1 s`. The report itself is never split by it.
 
-Colour is display-only and terminal-only: it appears when stdout is a terminal and neither `NO_COLOR` (any value, the empty one included) nor `--no-color` is set. A captured run prints the same words without the escapes.
-
-A write ends with its own short block: `backup:` the directory it created, `wrote` each file it replaced, and a `changed …` line naming the next step, `apt update`.
+Colour is display-only and terminal-only: it appears when stdout is a terminal and neither `NO_COLOR` (any value, the empty one included) nor `--no-color` is set, so a captured run prints the same words without the escapes. A write ends with its own short block: `backup:` the directory it created, `wrote` each file it replaced, and a `changed …` line naming the next step, `apt update`.
 
 ## Options
 
@@ -138,23 +134,52 @@ The uid decides whether a run writes; no flag makes it write and no answer to th
 
 ## Backups
 
+<<<<<<< HEAD
 `man apt-scout` documents every option and mode, the report, the files it touches and the rules a write follows; the `.deb` installs that page at `/usr/share/man/man1/apt-scout.1`.
+=======
+Every file a write replaces is copied first into `/var/backups/apt-scout/<id>/`, where `<id>` is the UTC timestamp of the run as `YYYYMMDDTHHMMSSZ`. The directory is created mode 0700 and verified to be a real directory, owned by root and not a symlink; each copied file keeps its own mode, its owner and its path relative to `/etc/apt/`, so `/etc/apt/sources.list` is at `<id>/sources.list` and `/etc/apt/sources.list.d/ubuntu.sources` is at `<id>/sources.list.d/ubuntu.sources`. If any copy fails, nothing is written.
+
+`MANIFEST` in the same directory records what the run did. It is created exclusively, mode 0600 and owned by root, so a run neither appends to an older manifest nor overwrites one:
+
+```
+apt-scout-backup 1
+id 20261112T203045Z
+files 1
+file sources.list replace <64 hex digits> 420 0 0
+end 1
+```
+
+One line per file: its path under `/etc/apt/`, `replace` or `create`, the SHA-256 of the bytes, the mode in decimal (`420` is 0644), the uid and the gid. Both the uid and the gid are 0: a backup is only ever written by root, for files root owns.
+
+To restore by hand, copy the file back from the backup directory, as root, so the owner and the mode survive:
+
+```sh
+sudo cp -p /var/backups/apt-scout/<id>/sources.list /etc/apt/sources.list
+sudo apt update
+```
+
+Repeat for each file the manifest lists. `--restore` is not implemented yet — the flag is rejected as an unknown option, so the copy above is the whole restore path today.
+>>>>>>> bd7703a (docs: close the README with backups, privacy and troubleshooting)
 
 ## Network and privacy
 
+Country detection contacts Canonical geoip, `ifconfig.co`, `ipinfo.io` and the Cloudflare trace in that order until the country, the public IP and the AS are found. Team Cymru DNS provides the AS lookups, for the server and for candidate mirror hosts. Those services, and the configured DNS resolver, can observe the server's public IP, and the DNS queries carry mirror IP addresses during AS ranking. The mirror list comes from Launchpad over `https` or from `mirrors.ubuntu.com` over `http`; the reference release and any `http` candidate are fetched without TLS, which is what the signature check is for. Proxies are ignored, so the environment cannot route a request through one. The signature check runs `/usr/bin/gpgv` with a cleared environment and a private, empty homedir, so no user GnuPG configuration can influence the answer.
+
+`--no-geo --country CC`, or `--no-geo --any`, skips geolocation and the AS queries, so no third party learns the server's address; the mirror list itself still needs the network. Nothing else is uploaded and no telemetry is collected. The local reads are the apt sources, `/etc/os-release`, `/etc/resolv.conf`, the Ubuntu archive keyring, and the two programs invoked at fixed paths, `/usr/bin/dpkg` and `/usr/bin/gpgv`.
+
 ## Troubleshooting
+
+| What you see | What it means | What to do |
+| --- | --- | --- |
+| `no mirror passed the freshness and reachability checks` (exit 1) | Every candidate was stale, unreachable, answered non-200, or carried no usable `InRelease` date. | Run with `-v` for each rejection in full, and try `--any`, which ranks every country's mirrors from the start. |
+| `No official Ubuntu apt source URI can be changed` (exit 1, or 3 for a non-root run) | No file holds a URI whose host and path the mirror list names: the sources are a PPA, a third-party repository, `mirror://`, or a host the list does not name. | `--list` prints every file with the reason it was skipped. Point the URIs back at `archive.ubuntu.com` and run again. Changing `--country` is safe: eligibility follows every country's Launchpad entries, so a mirror this tool wrote stays replaceable. |
+| Every `verified` cell reads `?` | `gpgv` or the Ubuntu archive keyring is missing or unusable, so the check cannot run. | `sudo apt install gpgv ubuntu-keyring`. Ranking works meanwhile, but a write is refused while no `yes` exists. |
+| `man apt-scout` prints "This system has been minimized…" | A container image ships a 320-byte stub at `/usr/bin/man` and keeps the real reader at `/usr/bin/man.REAL`. | Run `/usr/bin/man.REAL apt-scout`, which is the same page and the same file. |
+| `answered 404: <codename> is no longer on archive.ubuntu.com` (exit 4) | The release has moved to `old-releases.ubuntu.com`, which has no mirrors to choose from. | Nothing to fix on this host: no mirror can serve that release, so the run stops before probing. |
 
 ## Documentation
 
-## Packaging
-
-```sh
-scripts/docker-test.sh --build-only   # leaves the static binary at target/docker/apt-scout-plain
-./scripts/build-deb.sh                # writes dist/apt-scout_<version>_amd64.deb
-```
-
-`build-deb.sh` reads the version from `Cargo.toml` unless you pass one, packages the static binary with its README, a `copyright` file carrying the MIT licence text, a `changelog.gz` generated from that version, and the man page when `man/apt-scout.1` exists, then checks the result with `dpkg-deb -I` and `dpkg-deb -c`. It uses `dpkg-deb` when the host has it and otherwise builds in an `ubuntu:24.04` container, so a Mac needs Docker. The package's maintainer, its `gpgv` and `ubuntu-keyring` dependencies, its section and its priority are read from `[package.metadata.deb]` in `Cargo.toml`, so that block stays the one place they are declared; a missing one stops the build. The output is one file, `dist/apt-scout_<version>_amd64.deb`. `scripts/build-deb.sh --self-test` checks the Cargo.toml readers without packaging anything.
-
-One package covers every supported Ubuntu release rather than one per release: the binary is linked against musl, so it has no `libc6` dependency and no glibc ABI to match, and `gpgv` and `ubuntu-keyring` keep the same names and paths from 20.04 to 26.04. The split is by architecture (`amd64` today, `arm64` later), never by release. The Docker matrix is the compatibility evidence, and it is as wide as this: two cases run on every supported release - the offline release-codename detection and the live ranked-table run that needs the network - on 20.04, 22.04, 24.04 and 26.04; the legacy-layout refusal runs on 22.04 and the Debian refusal on `debian:12`; every other case runs on the pinned 24.04 image. The script makes two builds and reports two digests, the plain binary mounted in the read-only cases and the harness binary in the write cases, and the same pair runs in every image.
-
+<<<<<<< HEAD
 ## License
+
+MIT OR Apache-2.0
