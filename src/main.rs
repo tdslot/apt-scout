@@ -125,7 +125,7 @@ fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args, Strin
                     .ok_or(format!("{arg} '{n}' is not a positive number"))?;
             }
             arg if version_requested(arg) => {
-                println!("{}", version_line());
+                println!("{VERSION_LINE}");
                 std::process::exit(0);
             }
             arg if help_requested(arg) => {
@@ -177,10 +177,9 @@ fn version_requested(arg: &str) -> bool {
 }
 
 /// The one line `--version` prints. The version is the crate's own, so it cannot drift from
-/// `Cargo.toml` and needs no second place to be bumped (SPEC.md CLI).
-fn version_line() -> String {
-    format!("apt-scout {}", env!("CARGO_PKG_VERSION"))
-}
+/// `Cargo.toml` and needs no second place to be bumped (SPEC.md CLI). A constant, like `HELP`: the
+/// line is built at compile time, so there is nothing to allocate at the one place that prints it.
+const VERSION_LINE: &str = concat!("apt-scout ", env!("CARGO_PKG_VERSION"));
 
 /// `--help`, once: the flags (long form first, the short alias beside it), what a run does with
 /// them, the exit codes and one example each. The rule that used to repeat under every table lives
@@ -645,6 +644,18 @@ fn no_eligible_hint(list_source: &str) -> String {
 /// the run tells them to do next fails with permission denied (SPEC.md Output).
 fn next_step_hint() -> &'static str {
     "Next: run 'sudo apt update' to refresh the package lists."
+}
+
+/// The closing block a finished mirror write prints: the `changed …` sentence and the next step, as
+/// the one string the write path hands to `println!`. Separated from that `println!` so a unit test
+/// holds the site that prints the hint and not only the hint on its own: a test of the sentence
+/// alone cannot tell whether the line a write ends with still carries it (SPEC.md Output).
+fn write_closing_block(touched: &[String], uri: &str) -> String {
+    format!(
+        "\nchanged {}: every eligible official archive URI in those files now points at {uri}.\n{}",
+        touched.join(", "),
+        next_step_hint()
+    )
 }
 
 /// No apt source file holds an official Ubuntu archive URI, so the run stops before probing. SPEC.md
@@ -2378,12 +2389,9 @@ fn run() -> Result<u8, (u8, String)> {
                 println!("{line}");
             }
             match plan.authority() {
-                plan::Authority::Mirror { uri, .. } => println!(
-                    "\nchanged {}: every eligible official archive URI in those files now points at \
-                     {uri}.\n{}",
-                    touched.join(", "),
-                    next_step_hint()
-                ),
+                plan::Authority::Mirror { uri, .. } => {
+                    println!("{}", write_closing_block(&touched, uri))
+                }
                 // A restore plan has no mirror URI: `run_restore` prints its own block and never
                 // reaches this match with a restore plan.
                 plan::Authority::Restore { .. } => {}
@@ -3467,7 +3475,7 @@ mod tests {
         assert!(!version_requested("--versions"));
         assert!(!version_requested("-vV"));
 
-        let line = version_line();
+        let line = VERSION_LINE;
         assert_eq!(
             line,
             format!("apt-scout {}", env!("CARGO_PKG_VERSION")),
@@ -5302,14 +5310,18 @@ mod tests {
 
     /// The last line a write prints names a command the reader can run from the shell they are back
     /// in. The write was made by a root run started as `sudo apt-scout …`, which has exited, so a
-    /// bare `apt update` fails with permission denied where they stand.
+    /// bare `apt update` fails with permission denied where they stand. The block is the one `run`
+    /// prints, so the hint cannot fall out of the line it belongs to without this failing.
     #[test]
     fn the_next_step_after_a_write_names_a_command_an_unprivileged_shell_can_run() {
-        let hint = next_step_hint();
-        assert!(hint.contains("'sudo apt update'"), "{hint}");
+        let touched = ["/etc/apt/sources.list".to_string()];
+        let block = write_closing_block(&touched, "http://mirror.example/ubuntu/");
+        assert!(block.ends_with(next_step_hint()), "{block}");
+        assert!(block.contains("'sudo apt update'"), "{block}");
         // A command without its own `sudo` is the defect this line is written not to have.
-        assert!(!hint.contains("run 'apt update'"), "{hint}");
-        assert!(!hint.contains('\n'), "the hint stays one line: {hint}");
+        assert!(!block.contains("run 'apt update'"), "{block}");
+        // One hint, one line, whatever the `changed …` sentence above it says.
+        assert_eq!(next_step_hint().lines().count(), 1, "{block}");
     }
 
     #[test]
