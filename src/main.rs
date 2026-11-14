@@ -747,6 +747,10 @@ struct Progress<S: Sink> {
     sink: S,
     enabled: bool,
     started: Instant,
+    /// How many probes this run has finished. Pass 1 and the one widening of SPEC step 4 both count
+    /// into it, because both probe the run's one candidate set: a count that restarted would show a
+    /// viewer `30/30` and then `0/30` for the same set.
+    probed: usize,
 }
 
 impl<S: Sink> Progress<S> {
@@ -756,6 +760,7 @@ impl<S: Sink> Progress<S> {
             sink,
             enabled,
             started: Instant::now(),
+            probed: 0,
         }
     }
 
@@ -774,8 +779,10 @@ impl<S: Sink> Progress<S> {
         self.show("verifying the reference".to_string());
     }
 
-    /// The candidates probed **so far** (SPEC.md Output): `done` is how many probes have finished,
-    /// which `await_probes` reads from the probes themselves rather than from the joins.
+    /// The candidates probed **so far** (SPEC.md Output): `done` is how many probes the whole run has
+    /// finished and `total` how many it has to probe, which `await_probes` reads from the probes
+    /// themselves rather than from the joins. Both grow when the one widening adds candidates, so the
+    /// line never runs backwards.
     fn probe(&mut self, done: usize, total: usize) {
         let noun = if total == 1 { "mirror" } else { "mirrors" };
         self.show(format!("probing {total} {noun}… {done}/{total}"));
@@ -817,22 +824,31 @@ fn await_probes<T, S: Sink>(
     handles: Vec<thread::JoinHandle<T>>,
     progress: &mut Progress<S>,
 ) -> Vec<thread::Result<T>> {
-    let total = handles.len();
+    // `n/m` counts the candidates probed so far in the run, not in this batch: the one widening adds
+    // to the same candidate set, so the second pass continues at `30/60` instead of restarting at
+    // `0/30` after the viewer already saw `30/30` (SPEC.md Output).
+    let batch = handles.len();
+    let done_before = progress.probed;
+    let total = done_before + batch;
     // The line goes up before the first wait, so the probing phase is visible from its first
-    // millisecond instead of after the first probe comes back.
-    progress.probe(0, total);
+    // millisecond instead of after the first probe comes back. An empty candidate set has nothing
+    // to count and shows no line at all.
+    if total > 0 {
+        progress.probe(done_before, total);
+    }
     let mut shown = 0;
     loop {
         let done = handles.iter().filter(|h| h.is_finished()).count();
         if done != shown {
-            progress.probe(done, total);
+            progress.probe(done_before + done, total);
             shown = done;
         }
-        if done == total {
+        if done == batch {
             break;
         }
         thread::sleep(PROBE_POLL);
     }
+    progress.probed = total;
     handles.into_iter().map(|h| h.join()).collect()
 }
 
@@ -5870,6 +5886,80 @@ mod tests {
         // Each frame counts one more probe, so the line never claims a probe that is not done.
         assert!(counts.windows(2).all(|w| w[0] < w[1]), "{frames:?}");
         assert_eq!(counts.last(), Some(&2));
+    }
+
+    /// The one widening probes more candidates into the same set, so the line continues the count:
+    /// a viewer who saw `2/2` is never shown `0/1` next (SPEC.md Output: `n/m` is the candidates
+    /// probed **so far** in the run).
+    #[test]
+    fn the_probe_count_continues_into_the_widening_pass() {
+        let mut progress = Progress::new(RecordingSink::default(), true);
+        assert_eq!(
+            await_probes(
+                vec![thread::spawn(|| ()), thread::spawn(|| ())],
+                &mut progress
+            )
+            .len(),
+            2
+        );
+        // The second pass is the one widening's batch.
+        await_probes(vec![thread::spawn(|| ())], &mut progress);
+        let counts: Vec<(usize, usize)> = progress
+            .sink
+            .lines
+            .iter()
+            .map(|frame| {
+                let (_, counted) = frame
+                    .split_once('…')
+                    .unwrap_or_else(|| panic!("not a counting frame: {frame}"));
+                let (done, total) = counted
+                    .trim()
+                    .split_once('/')
+                    .unwrap_or_else(|| panic!("not a counting frame: {frame}"));
+                (
+                    done.parse()
+                        .unwrap_or_else(|_| panic!("not a frame: {frame}")),
+                    total
+                        .parse()
+                        .unwrap_or_else(|_| panic!("not a frame: {frame}")),
+                )
+            })
+            .collect();
+        assert_eq!(counts.first(), Some(&(0, 2)), "{:?}", progress.sink.lines);
+        assert_eq!(
+            counts.last(),
+            Some(&(3, 3)),
+            "the union is counted to its end: {:?}",
+            progress.sink.lines
+        );
+        assert!(
+            counts
+                .windows(2)
+                .all(|w| w[0].0 <= w[1].0 && w[0].1 <= w[1].1),
+            "the line never goes backwards: {:?}",
+            progress.sink.lines
+        );
+        assert!(
+            counts.iter().any(|&(_, total)| total == 3),
+            "the widening pass raises the total: {:?}",
+            progress.sink.lines
+        );
+    }
+
+    /// A run whose own country the page does not name probes nothing before it widens, and an empty
+    /// candidate set has no count to show: no `0/0` line that a viewer reads as a stuck run.
+    #[test]
+    fn an_empty_candidate_set_shows_no_probing_line() {
+        let mut progress = Progress::new(RecordingSink::default(), true);
+        let none: Vec<thread::JoinHandle<()>> = Vec::new();
+        assert!(await_probes(none, &mut progress).is_empty());
+        assert!(progress.sink.lines.is_empty(), "{:?}", progress.sink.lines);
+        // The widening pass that follows counts from that zero, so its first line is still honest.
+        await_probes(vec![thread::spawn(|| ())], &mut progress);
+        assert_eq!(
+            progress.sink.lines.first().map(String::as_str),
+            Some("probing 1 mirror… 0/1")
+        );
     }
 
     /// The one line that survives, with one decimal place, as SPEC.md Output spells it.
