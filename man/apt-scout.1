@@ -1,8 +1,12 @@
-\" 78 columns, not the terminal width: the page must read on an 80-column console
-\" whatever terminal it is rendered in. Set before .TH so the header line is held too.
+.\" 78 columns, not the terminal width: the page must read on an 80-column
+.\" console whatever terminal it is rendered in. Set before .TH so the header
+.\" line is held too.
+.\" The header names no version on purpose: --version is the one place the
+.\" version is written, read from Cargo.toml at compile time, so a copy here
+.\" would drift from it at the first release bump, on a page nobody re-reads.
 .nr LL 78n
 .nr LT 78n
-.TH APT\-SCOUT 1 "" "apt-scout 0.1.0" "User Commands"
+.TH APT\-SCOUT 1 "" "apt-scout" "User Commands"
 .SH NAME
 apt\-scout \- find a fresh, fast Ubuntu archive mirror and point apt at it
 .SH SYNOPSIS
@@ -95,7 +99,9 @@ PPAs and third-party repositories are never touched, and a line or stanza
 carrying a \fI\-security\fR suite is left alone because \fI\-security\fR
 freshness is not checked. The one exception is Pop!_OS, where the
 \fI\-security\fR suite moves to a new file on the original mirror. After a
-write, run \fBapt update\fR yourself; apt\-scout never runs it.
+write, run \fBsudo apt update\fR yourself; apt\-scout never runs it. The
+hint carries its own \fBsudo\fR because the run that wrote has exited and
+left the reader in their own unprivileged shell.
 .SH OPTIONS
 Every flag is an override, never a step in the workflow, and no flag is
 required. A short form exists for every implemented flag except
@@ -175,6 +181,12 @@ words, the same columns and the same headings, minus the escape sequences.
 .TP
 .B \-h, \-\-help
 Print the help text and exit 0 before any run starts.
+.TP
+.B \-V, \-\-version
+Print one line, \fBapt\-scout\fR and the version of this build, and exit 0.
+Like \fB\-\-help\fR it is answered while the arguments are read, so it works
+whatever the uid, on any distribution and with no network; the first of the two
+a command line carries answers it, and a usage error before them still exits 2.
 .PP
 \fB\-R\fR is reserved for \fB\-\-refresh\fR and is not accepted yet, and
 neither are \fB\-\-refresh\fR and \fB\-\-tui\fR themselves. A run given
@@ -341,7 +353,7 @@ green, and the numeric column headings are dim. Nothing else is styled, and the
 .PP
 A write prints a second block after the confirmation: \fBbackup: <path>\fR, one
 \fBwrote <path>\fR per file, and a closing line naming the files and suggesting
-\fBapt update\fR.
+\fBsudo apt update\fR.
 .PP
 A restore has no ranked table and no recommendation, because it reads a backup
 instead of choosing a mirror. It prints one block instead: the backup it put

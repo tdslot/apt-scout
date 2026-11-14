@@ -124,6 +124,10 @@ fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args, Strin
                     .filter(|n| *n > 0)
                     .ok_or(format!("{arg} '{n}' is not a positive number"))?;
             }
+            arg if version_requested(arg) => {
+                println!("{VERSION_LINE}");
+                std::process::exit(0);
+            }
             arg if help_requested(arg) => {
                 println!("{HELP}");
                 std::process::exit(0);
@@ -165,6 +169,18 @@ fn help_requested(arg: &str) -> bool {
     matches!(arg, "-h" | "--help")
 }
 
+/// `-V` and `--version` are one request, answered the way `--help` is: the argument that answers it
+/// exits the process where the loop meets it, so the first of the two a run was given wins and a
+/// usage error before it still wins over both. `-V` is capital because `-v` is `--verbose`.
+fn version_requested(arg: &str) -> bool {
+    matches!(arg, "-V" | "--version")
+}
+
+/// The one line `--version` prints. The version is the crate's own, so it cannot drift from
+/// `Cargo.toml` and needs no second place to be bumped (SPEC.md CLI). A constant, like `HELP`: the
+/// line is built at compile time, so there is nothing to allocate at the one place that prints it.
+const VERSION_LINE: &str = concat!("apt-scout ", env!("CARGO_PKG_VERSION"));
+
 /// `--help`, once: the flags (long form first, the short alias beside it), what a run does with
 /// them, the exit codes and one example each. The rule that used to repeat under every table lives
 /// here instead. Examples and the `sudo` line stay long-form, so a copied command is unambiguous.
@@ -175,6 +191,7 @@ USAGE
   apt-scout [OPTIONS]
 
   -h, --help          this text, then exit 0
+  -V, --version       the version of this build, then exit 0
 
 DISCOVERY
   -c, --country <CC>  two-letter country; overrides detection
@@ -618,6 +635,26 @@ fn validate_preflight(args: &Args, arch: &str) -> Result<(), (u8, String)> {
 fn no_eligible_hint(list_source: &str) -> String {
     format!(
         "The sources here point at a host the mirror list from {list_source} does not name, so nothing here can be replaced: set those URIs back to archive.ubuntu.com, or put the newest backup back with 'sudo apt-scout --restore', and run again."
+    )
+}
+
+/// The last line a write prints, and the only command it names. That write was made by a root run
+/// started as `sudo apt-scout …`, which has exited by the time this line is read, so the reader is
+/// back in their own unprivileged shell: the command must carry its own `sudo`, or the one thing
+/// the run tells them to do next fails with permission denied (SPEC.md Output).
+fn next_step_hint() -> &'static str {
+    "Next: run 'sudo apt update' to refresh the package lists."
+}
+
+/// The closing block a finished mirror write prints: the `changed …` sentence and the next step, as
+/// the one string the write path hands to `println!`. Separated from that `println!` so a unit test
+/// can hold the line a write ends with as a whole and not the hint on its own: a test of the
+/// sentence alone cannot tell whether that line still carries it (SPEC.md Output).
+fn write_closing_block(touched: &[String], uri: &str) -> String {
+    format!(
+        "\nchanged {}: every eligible official archive URI in those files now points at {uri}.\n{}",
+        touched.join(", "),
+        next_step_hint()
     )
 }
 
@@ -2352,11 +2389,9 @@ fn run() -> Result<u8, (u8, String)> {
                 println!("{line}");
             }
             match plan.authority() {
-                plan::Authority::Mirror { uri, .. } => println!(
-                    "\nchanged {}: every eligible official archive URI in those files now points at \
-                     {uri}.\nNext: run 'apt update' to refresh the package lists.",
-                    touched.join(", ")
-                ),
+                plan::Authority::Mirror { uri, .. } => {
+                    println!("{}", write_closing_block(&touched, uri))
+                }
                 // A restore plan has no mirror URI: `run_restore` prints its own block and never
                 // reaches this match with a restore plan.
                 plan::Authority::Restore { .. } => {}
@@ -3409,6 +3444,7 @@ mod tests {
         assert!(!help_requested("--helpp"));
         for (long, short) in [
             ("--help", "-h"),
+            ("--version", "-V"),
             ("--country", "-c"),
             ("--any", "-a"),
             ("--no-geo", "-n"),
@@ -3425,6 +3461,42 @@ mod tests {
                 "{pair} is missing from --help:\n{HELP}"
             );
         }
+    }
+
+    /// `-V` and `--version` are one request, answered the way `--help` is, and the line it prints is
+    /// the crate's own version so a bump in `Cargo.toml` is the only place a version is written.
+    #[test]
+    fn version_is_two_spellings_and_the_line_is_the_crate_version() {
+        assert!(version_requested("-V"));
+        assert!(version_requested("--version"));
+        // `-v` is `--verbose` and keeps it, and neither a bundle nor a misspelling is a request.
+        assert!(!version_requested("-v"));
+        assert!(!version_requested("-VV"));
+        assert!(!version_requested("--versions"));
+        assert!(!version_requested("-vV"));
+
+        // The expectation is the crate version recomposed from Cargo's split parts, not the
+        // `CARGO_PKG_VERSION` string `VERSION_LINE` interpolates: `MAJOR`, `MINOR`, `PATCH` and `PRE`
+        // are separate manifest reads, so a constant that stopped naming the crate version — a
+        // hardcoded one, a changed prefix — fails here instead of matching itself. `PRE` carries no
+        // leading hyphen, so one is added only when the version has a pre-release part.
+        let pre = env!("CARGO_PKG_VERSION_PRE");
+        let version = format!(
+            "{}.{}.{}{}{}",
+            env!("CARGO_PKG_VERSION_MAJOR"),
+            env!("CARGO_PKG_VERSION_MINOR"),
+            env!("CARGO_PKG_VERSION_PATCH"),
+            if pre.is_empty() { "" } else { "-" },
+            pre
+        );
+        assert_eq!(
+            VERSION_LINE,
+            format!("apt-scout {version}"),
+            "the line names the crate version"
+        );
+        // One line, ending in no newline of its own: `println!` adds the one terminator.
+        assert_eq!(VERSION_LINE.lines().count(), 1, "{VERSION_LINE}");
+        assert!(!VERSION_LINE.contains('\n'), "{VERSION_LINE}");
     }
 
     /// One alias and one value per argument, never a bundle: `-lyc NO` stays an unknown option. The
@@ -5247,6 +5319,24 @@ mod tests {
             msg.contains("no mirror passed the freshness and reachability checks"),
             "{msg}"
         );
+    }
+
+    /// The last line a write prints names a command the reader can run from the shell they are back
+    /// in. The write was made by a root run started as `sudo apt-scout …`, which has exited, so a
+    /// bare `apt update` fails with permission denied where they stand. What is held here is the
+    /// block the write path builds as one string before it prints it; that the call site keeps
+    /// printing that block is not held, because a write needs root and `tests/cli.rs` cannot reach
+    /// the path.
+    #[test]
+    fn the_next_step_after_a_write_names_a_command_an_unprivileged_shell_can_run() {
+        let touched = ["/etc/apt/sources.list".to_string()];
+        let block = write_closing_block(&touched, "http://mirror.example/ubuntu/");
+        assert!(block.ends_with(next_step_hint()), "{block}");
+        assert!(block.contains("'sudo apt update'"), "{block}");
+        // A command without its own `sudo` is the defect this line is written not to have.
+        assert!(!block.contains("run 'apt update'"), "{block}");
+        // One hint, one line, whatever the `changed …` sentence above it says.
+        assert_eq!(next_step_hint().lines().count(), 1, "{block}");
     }
 
     #[test]

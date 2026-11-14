@@ -98,7 +98,7 @@ The default report is the decision and `--verbose` is the proof: `-v` adds each 
 
 While it works, a run shows one line on stderr, rewritten in place and only when stderr is a terminal: `loading the mirror list`, `verifying the reference`, `probing <n> mirrors… <done>/<total>`, `ranking`, then a summary such as `done — 4 usable, 0 rejected in 3.1 s`. The report itself is never split by it.
 
-Colour is display-only and terminal-only: it appears when stdout is a terminal and neither `NO_COLOR` (any value, the empty one included) nor `--no-color` is set, so a captured run prints the same words without the escapes. A write ends with its own short block: `backup:` the directory it created, `wrote` each file it replaced, and a `changed …` line naming the next step, `apt update`.
+Colour is display-only and terminal-only: it appears when stdout is a terminal and neither `NO_COLOR` (any value, the empty one included) nor `--no-color` is set, so a captured run prints the same words without the escapes. A write ends with its own short block: `backup:` the directory it created, `wrote` each file it replaced, and a `changed …` line naming the next step, `sudo apt update`: the run that wrote was started under `sudo` and has exited, so the hint carries its own `sudo`.
 
 ## Options
 
@@ -115,6 +115,9 @@ Colour is display-only and terminal-only: it appears when stdout is a terminal a
 | `-v` | `--verbose` | The proof behind every row, and the full text of every rejection reason. |
 | | `--no-color` | No colour, whatever the terminal is. The one flag without a short form. |
 | `-h` | `--help` | The built-in summary of the flags, the table and the exit codes. |
+| `-V` | `--version` | The version of this build, as the one line `apt-scout <version>`, and nothing else. |
+
+`--version` and `--help` answer while the arguments are read: before the distribution is detected, before any file is opened and before any request is made, whatever the uid. Whichever of the two a command line meets first answers it, and a usage error before them still exits 2.
 
 Short flags are never bundled: `-lyc NO` is an unknown option. `-r` is `--restore`'s short form. `-R` stays reserved for `--refresh`, and `--refresh` and `--tui` are not implemented: each is rejected as an unknown option, which is exit 2.
 
@@ -129,6 +132,7 @@ The uid decides whether a run writes; no flag makes it write and no answer to th
 | `apt-scout --list` | any | No, whatever the uid: the table and the planned change. | 0 |
 | `apt-scout --restore` | non-root | No: the one line `sudo apt-scout --restore`. | 3 |
 | `sudo apt-scout --restore` | root | Yes: the newest backup, after one confirmation (`--yes` skips it). | 0 |
+| `apt-scout --version` | any | No: the one line `apt-scout <version>`. | 0 |
 
 | Status | Meaning |
 | --- | --- |
