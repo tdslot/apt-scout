@@ -2416,9 +2416,9 @@ fn run_restore(args: &Args, ink: Painter, root: bool, ask: bool) -> Result<u8, (
             &format!("\n{} ", ink.bold("Restore this backup? [y/N]")),
         )? {
             Answer::Yes => {}
-            // A no is the user's decision, not a failure: the run did what it was told and there
-            // is a backup id to show for it, so it exits 0. The write path refuses a no instead,
-            // because there the write is the whole point of the run.
+            // A no is the user's decision, not a failure: the run prints the one sentence that
+            // says the backup is still the newest one and exits 0. The write path refuses a no
+            // instead, because there the write is the whole point of the run.
             Answer::No => {
                 println!("Nothing was written: the backup is still the newest one.");
                 return Ok(0);
@@ -2508,15 +2508,13 @@ fn restore_lines(
                 original.gid,
             ));
         }
-        if let Some(original) = &write.original {
-            lines.push(format!(
-                "    was sha256:{} mode {:04o} owner {}:{}",
-                digest::hex(&digest::sha256(&original.bytes)),
-                original.mode,
-                original.uid,
-                original.gid,
-            ));
-        }
+        lines.push(format!(
+            "    was sha256:{} mode {:04o} owner {}:{}",
+            digest::hex(&digest::sha256(&original.bytes)),
+            original.mode,
+            original.uid,
+            original.gid,
+        ));
     }
     lines.push(format!(
         "  copies: {}/{}",
