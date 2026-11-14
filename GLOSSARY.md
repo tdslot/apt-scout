@@ -36,7 +36,7 @@
 
 **Backup**: Timestamped copy of every apt sources file changed by a write, stored under `/var/backups/apt-scout/`.
 
-**Manifest**: The record inside a backup that lists, for each changed apt source file, its original path, SHA-256 digest, mode and owner, so a restore re-derives what to write from the backup instead of being told.
+**Manifest**: The record inside a backup that lists, for each apt source file the run changed, the path, the action, and the backup copy's SHA-256 digest, mode and owner, so a restore re-derives what to put back, or what to remove, from the backup instead of being told.
 
 **Plan**: The validated description of a pending apt change: the exact bytes of every file to write, and what authorizes them — the verified mirror that was chosen, or the backup the bytes were re-derived from. The run builds and validates it, it is never a file, and it never crosses a process boundary.
 
