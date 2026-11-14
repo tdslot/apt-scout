@@ -124,7 +124,7 @@ Library: `ratatui` + `crossterm` (no async). Opens only with `--tui`, after prob
 - Zero-effort flow: defaults must be right, so pressing `Enter` through the flow saves the best fresh mirror among the existing candidates. Keep the step count minimal, but never hide information the user needs. Base path (3 steps):
   1. Mirror table with the `Recommended` mirror pre-checked and a one-line summary of what will change; `Enter` continues.
   2. Confirmation dialog `Apply changes? [Yes]`: lists the files to change, old URI -> new URI, alternatives, and the backup path; `Yes` focused. As root, `Enter` validates the plan and writes it, so the dialog is the confirmation and `--yes` is not needed. As a non-root uid, `Enter` prints the one line `sudo apt-scout --tui` and exits 3; the TUI writes nothing.
-  3. Result screen: as root, `applied <mirror> to <files>`, the backup path the write created, how to undo (`--restore`), and the suggested `apt update`; as a non-root uid, `nothing written, run sudo apt-scout --tui`, the files the write would change and the backup path it would create. `Enter` exits.
+  3. Result screen: as root, `applied <mirror> to <files>`, the backup path the write created, how to undo (`--restore`), and the suggested `sudo apt update`; as a non-root uid, `nothing written, run sudo apt-scout --tui`, the files the write would change and the backup path it would create. `Enter` exits.
 - Extra steps appear only when the user must be informed or decide: selection has warnings (e.g. only http, lag near `MAX_LAG`, different country), a custom mirror failed its probe, no fresh mirror found, the write failed (show the reason and the state of the backup, which is untouched).
 - Every dialog shows its available keys in a footer bar.
 - Applying from the TUI uses the same writer as the default run: as root, `Enter` on the confirmation validates the plan and writes it; as a non-root uid the TUI writes nothing and prints the `sudo apt-scout --tui` line. Every other Apply rule below holds unchanged.
@@ -147,7 +147,7 @@ Library: `ratatui` + `crossterm` (no async). Opens only with `--tui`, after prob
 - Custom URLs (`Insert`): scheme `http` or `https` only; reject userinfo, whitespace, `file:`, and loopback/private/link-local addresses; probe like any candidate; show a warning before apt is pointed at a user-supplied host.
 - If no URI is rewritable (for example arm64, or a system already using a third-party mirror), say so before any probing: scan the sources first, print every file inspected and why each entry was skipped. `--list` exits 0, a non-root run prints the `sudo` line and exits 3, and a root run that was going to write exits 1. Do not probe 30 mirrors for nothing.
 - Candidate hygiene (mirror lists are partly fetched over plain HTTP): every candidate, from any list source, must be `http`/`https`, have no userinfo, and not resolve to a private, loopback or link-local address. Results from the `mirrors.ubuntu.com` fallback are marked unverified in the output.
-- After apply, suggest `apt update`; do not run it.
+- After apply, suggest `sudo apt update`; do not run it. The run that wrote was a root run under `sudo` and has exited by the time the sentence is read, so a hint that named a bare `apt update` would tell the reader to run, from their own shell, a command that fails there.
 
 ## Privilege boundary and threat model
 

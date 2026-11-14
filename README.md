@@ -98,7 +98,7 @@ The default report is the decision and `--verbose` is the proof: `-v` adds each 
 
 While it works, a run shows one line on stderr, rewritten in place and only when stderr is a terminal: `loading the mirror list`, `verifying the reference`, `probing <n> mirrors… <done>/<total>`, `ranking`, then a summary such as `done — 4 usable, 0 rejected in 3.1 s`. The report itself is never split by it.
 
-Colour is display-only and terminal-only: it appears when stdout is a terminal and neither `NO_COLOR` (any value, the empty one included) nor `--no-color` is set, so a captured run prints the same words without the escapes. A write ends with its own short block: `backup:` the directory it created, `wrote` each file it replaced, and a `changed …` line naming the next step, `apt update`.
+Colour is display-only and terminal-only: it appears when stdout is a terminal and neither `NO_COLOR` (any value, the empty one included) nor `--no-color` is set, so a captured run prints the same words without the escapes. A write ends with its own short block: `backup:` the directory it created, `wrote` each file it replaced, and a `changed …` line naming the next step, `sudo apt update`: the run that wrote was started under `sudo` and has exited, so the hint carries its own `sudo`.
 
 ## Options
 

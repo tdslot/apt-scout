@@ -639,6 +639,14 @@ fn no_eligible_hint(list_source: &str) -> String {
     )
 }
 
+/// The last line a write prints, and the only command it names. That write was made by a root run
+/// started as `sudo apt-scout …`, which has exited by the time this line is read, so the reader is
+/// back in their own unprivileged shell: the command must carry its own `sudo`, or the one thing
+/// the run tells them to do next fails with permission denied (SPEC.md Output).
+fn next_step_hint() -> &'static str {
+    "Next: run 'sudo apt update' to refresh the package lists."
+}
+
 /// No apt source file holds an official Ubuntu archive URI, so the run stops before probing. SPEC.md
 /// Apply: `--list` exits 0, a non-root run prints the `sudo` line and exits 3, and a root run that was
 /// going to write exits 1.
@@ -2372,8 +2380,9 @@ fn run() -> Result<u8, (u8, String)> {
             match plan.authority() {
                 plan::Authority::Mirror { uri, .. } => println!(
                     "\nchanged {}: every eligible official archive URI in those files now points at \
-                     {uri}.\nNext: run 'apt update' to refresh the package lists.",
-                    touched.join(", ")
+                     {uri}.\n{}",
+                    touched.join(", "),
+                    next_step_hint()
                 ),
                 // A restore plan has no mirror URI: `run_restore` prints its own block and never
                 // reaches this match with a restore plan.
@@ -5289,6 +5298,18 @@ mod tests {
             msg.contains("no mirror passed the freshness and reachability checks"),
             "{msg}"
         );
+    }
+
+    /// The last line a write prints names a command the reader can run from the shell they are back
+    /// in. The write was made by a root run started as `sudo apt-scout …`, which has exited, so a
+    /// bare `apt update` fails with permission denied where they stand.
+    #[test]
+    fn the_next_step_after_a_write_names_a_command_an_unprivileged_shell_can_run() {
+        let hint = next_step_hint();
+        assert!(hint.contains("'sudo apt update'"), "{hint}");
+        // A command without its own `sudo` is the defect this line is written not to have.
+        assert!(!hint.contains("run 'apt update'"), "{hint}");
+        assert!(!hint.contains('\n'), "the hint stays one line: {hint}");
     }
 
     #[test]
