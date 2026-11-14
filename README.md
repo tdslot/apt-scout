@@ -1,28 +1,39 @@
 # apt-scout
 
-Standalone Rust CLI for finding fresh, fast Ubuntu archive mirrors and pointing apt at them. A root run backs up every file it replaces under `/var/backups/apt-scout/<id>/` and rewrites the sources atomically after one confirmation (`--yes` skips it); a non-root run recommends the same mirror, prints the one `sudo apt-scout …` line and exits 3, and `--list` never writes.
+Find a fresh, fast Ubuntu archive mirror and point apt at it. `apt-scout` does what `nala fetch` does without installing nala: it loads the Launchpad mirror list, probes candidates for freshness, speed and signature status, ranks them, and either recommends one mirror or rewrites the apt sources to use it. One static binary, no Python and no runtime to install.
 
-## Usage
+## What it is
 
-```sh
-apt-scout --country LT
-apt-scout --country LT --no-geo --top 5 --https-only
-apt-scout --any --no-geo
-```
+A run reads `/etc/apt/sources.list` and the regular `*.list` and `*.sources` files under `/etc/apt/sources.list.d/`, and changes only the URI token of a line whose host and path the mirror list names. It asks once, copies every file it will replace into a backup, and then writes atomically. It never runs `apt update`, never touches `security.ubuntu.com`, a PPA, a third-party repository, `ports.ubuntu.com` or a `mirror://` line, and it does not work on Debian.
 
-Without `--country`, apt-scout attempts optional country detection. If every source fails, it asks for `--country`, or for `--any`, which needs no country at all. `--no-geo` disables country and AS lookups and requires one of those two answers. `--any` (`-a`) ranks the mirrors the list names for every country together, so the country is shown but constrains nothing; with no country the `<CC>.txt` fallback has no file to read, so only Launchpad can supply that list.
+## Requirements
 
-A run stays in its own country and widens once only when that country has nothing usable: it then adds every other country's mirrors from the list it has already loaded, prints one `note:` line saying why, and ranks them together. Widening needs Launchpad's list, so a run whose only list is the one-country `mirrors.ubuntu.com` fallback says it cannot widen and fails as before. A set that is not narrowed to one country is capped at the 30 fastest-declared mirrors, so an `--any` run probes 30 of about 560 and a widened run at most 60.
+- Ubuntu 20.04, 22.04, 24.04 or 26.04, or a derivative such as Pop!_OS or Linux Mint: `ID` or `ID_LIKE` in `/etc/os-release` must name ubuntu. The container matrix runs those four releases, and a Debian image as the case that must be refused with exit status 4.
+- `amd64` or `i386`. Every other architecture installs from `ports.ubuntu.com`, which has no mirror to choose from, so the run stops with exit status 4 and changes nothing.
+- `gpgv` and `ubuntu-keyring` for the `-updates` `InRelease` signature check. The `.deb` depends on both. Without them a run still ranks mirrors, every `verified` cell reads `?`, and no write is allowed.
+- Root, for the write only. Any other uid gets the same discovery and ranking, a recommendation, and the one `sudo` line to copy.
 
-Before mirror probing, apt-scout prints a read-only inventory of apt source URIs and stops if none can use an official Ubuntu mirror. `--list` prints ranked mirrors; `--top N` limits results. Each mirror's `-updates` `InRelease` signature is checked with `/usr/bin/gpgv` and `/usr/share/keyrings/ubuntu-archive-keyring.gpg`, and the `verified` column reports it in one word: `yes` when the check passed, `no` when the file was readable but unsigned, altered, or signed by an unknown key, and `?` when the check could not run at all. `--verbose` adds the exact status behind that cell. Ranking still works when verification cannot run, but only a `yes` may authorize a write. The `.deb` package depends on `gpgv` and `ubuntu-keyring`; tarball users should install both packages.
+## Install
+
+## Quick start
+
+## How a run works
+
+## What the output means
+
+## Options
+
+## Modes and exit codes
+
+## Backups
 
 `man apt-scout` documents every option and mode, the report, the files it touches and the rules a write follows; the `.deb` installs that page at `/usr/share/man/man1/apt-scout.1`.
 
 ## Network and privacy
 
-Country detection contacts Canonical geoip, ifconfig.co, ipinfo.io, and Cloudflare trace in order until country, public IP, and AS are found. Team Cymru DNS provides AS lookups for the server and mirror hosts. These services or the configured DNS resolver can observe the server's public IP; DNS queries also include mirror IPs during AS ranking. Use `--no-geo --country CC` (or `--no-geo --any`) to skip geolocation and AS queries.
+## Troubleshooting
 
-See [SPEC.md](SPEC.md) for implemented behavior and planned milestones. See [AGENTS.md](AGENTS.md) for contributor checks.
+## Documentation
 
 ## Packaging
 
@@ -36,5 +47,3 @@ scripts/docker-test.sh --build-only   # leaves the static binary at target/docke
 One package covers every supported Ubuntu release rather than one per release: the binary is linked against musl, so it has no `libc6` dependency and no glibc ABI to match, and `gpgv` and `ubuntu-keyring` keep the same names and paths from 20.04 to 26.04. The split is by architecture (`amd64` today, `arm64` later), never by release. The Docker matrix is the compatibility evidence, and it is as wide as this: two cases run on every supported release - the offline release-codename detection and the live ranked-table run that needs the network - on 20.04, 22.04, 24.04 and 26.04; the legacy-layout refusal runs on 22.04 and the Debian refusal on `debian:12`; every other case runs on the pinned 24.04 image. The script makes two builds and reports two digests, the plain binary mounted in the read-only cases and the harness binary in the write cases, and the same pair runs in every image.
 
 ## License
-
-MIT OR Apache-2.0
