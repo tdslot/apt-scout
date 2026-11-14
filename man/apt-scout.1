@@ -1,8 +1,11 @@
 \" 78 columns, not the terminal width: the page must read on an 80-column console
 \" whatever terminal it is rendered in. Set before .TH so the header line is held too.
+\" The header names no version on purpose: --version is the one place the
+\" version is written, read from Cargo.toml at compile time, so a copy here
+\" would drift from it at the first release bump, on a page nobody re-reads.
 .nr LL 78n
 .nr LT 78n
-.TH APT\-SCOUT 1 "" "apt-scout 0.1.0" "User Commands"
+.TH APT\-SCOUT 1 "" "apt-scout" "User Commands"
 .SH NAME
 apt\-scout \- find a fresh, fast Ubuntu archive mirror and point apt at it
 .SH SYNOPSIS
