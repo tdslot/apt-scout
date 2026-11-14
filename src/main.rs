@@ -15,7 +15,7 @@ mod probe;
 pub mod sources;
 mod verify;
 
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::ExitCode;
@@ -42,6 +42,8 @@ struct Args {
     yes: bool,
     /// `--verbose`: per-mirror detail and each rejection's full reason.
     verbose: bool,
+    /// `--no-color`: no escapes in the report, whatever the terminal is (SPEC.md Output).
+    no_color: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -57,6 +59,7 @@ fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args, Strin
         list: false,
         yes: false,
         verbose: false,
+        no_color: false,
     };
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
@@ -70,6 +73,8 @@ fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args, Strin
             "--https-only" | "-s" => a.https_only = true,
             "--no-geo" | "-n" => a.no_geo = true,
             "--verbose" | "-v" => a.verbose = true,
+            // The one implemented flag without a short form, so `-N` stays an unknown option.
+            "--no-color" => a.no_color = true,
             "--country" | "-c" => {
                 let cc = it.next().ok_or(format!(
                     "{arg} needs a two-letter country code, for example {arg} LT"
@@ -137,6 +142,12 @@ TABLE
   notes reads sec:<n>m for a -security lag and redir:<host> for a redirect to another host;
   a host that does not fit is cut and ends in ~; --verbose prints it in full.
 
+DISPLAY
+  --no-color          no colour in the report, even on a terminal
+  colour and the progress line are terminal-only: colour paints stdout when it is a
+  terminal and NO_COLOR is unset, and progress rewrites one line on stderr when that
+  is a terminal. A pipe gets neither, so a captured run prints the plain words.
+
 EXIT CODES
   0 success    1 refusal or failure    2 usage    3 not root
   4 unsupported distribution or architecture
@@ -190,20 +201,12 @@ fn sudo_command(args: &Args) -> String {
     if args.verbose {
         line.push_str(" --verbose");
     }
+    // The report's display is part of the run the line reproduces: a copy-pasted command must not
+    // colour what the user asked it not to colour.
+    if args.no_color {
+        line.push_str(" --no-color");
+    }
     line
-}
-
-/// What `build_plan` found (SPEC.md Apply): either the writes a run must make, or that every
-/// eligible URI already points at the selected mirror — which is success, not an error, so that
-/// re-running a run whose write already happened does not fail.
-#[derive(Debug)]
-struct PlannedChange {
-    /// `None` when there is nothing to change: `Plan::validate` refuses an empty plan, and an empty
-    /// plan is the one case that is not an error.
-    plan: Option<plan::Plan>,
-    /// Every file, stanza and URI the rewrite refused, with its reason, for the caller to report
-    /// whatever the mode (SPEC.md Apply: report each skipped entry and why).
-    skipped: Vec<String>,
 }
 
 /// True when `file` already carries the selected mirror as an eligible URI: `rewrite_source` then
@@ -224,15 +227,19 @@ fn already_at_mirror(file: &sources::FileReport, selected_uri: &str) -> bool {
 /// inspected file is rewritten purely, the bytes on disk are captured as the `FileState` the
 /// writer re-checks before its first byte, and the whole set goes through `Plan::for_apply`, which
 /// refuses a mirror without a verified `-updates` proof. A file that would not change produces no
-/// write: when every eligible URI already points at the selected mirror the plan is empty and that is
-/// reported as success, and when nothing eligible exists at all the plan is refused.
+/// write: when every eligible URI already points at the selected mirror the answer is `None` and that
+/// is reported as success, and when nothing eligible exists at all the plan is refused.
+///
+/// The skips it collects are read here and nowhere else: they name the refusal in the error, and
+/// `Sources` has already listed them per entry before probing (SPEC.md Apply), so the report repeats
+/// none of them.
 fn build_plan(
     root: &Path,
     inventory: &sources::Inventory,
     roots: &[sources::MirrorRoot],
     selected: &fresh::Probed,
     platform: plan::Platform,
-) -> Result<PlannedChange, (u8, String)> {
+) -> Result<Option<plan::Plan>, (u8, String)> {
     let nothing_written = "Nothing was written.";
     let mut writes = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
@@ -332,10 +339,7 @@ fn build_plan(
             .iter()
             .any(|file| already_at_mirror(file, selected.url.as_str()))
         {
-            return Ok(PlannedChange {
-                plan: None,
-                skipped,
-            });
+            return Ok(None);
         }
         let why = if skipped.is_empty() {
             "no eligible official archive URI was found".to_string()
@@ -360,10 +364,7 @@ fn build_plan(
             format!("cannot write {}: {other}. {nothing_written}", selected.url),
         ),
     })?;
-    Ok(PlannedChange {
-        plan: Some(plan),
-        skipped,
-    })
+    Ok(Some(plan))
 }
 
 /// `st_mode` also carries the file-type bits, and the writer records and compares
@@ -574,10 +575,269 @@ impl Report {
     }
 }
 
+/// The inks the report uses: the whole vocabulary of SPEC.md Output, so no render site can invent a
+/// sixth one. Display only — a decision, a comparison, an ordering, a path, a written byte and an
+/// exit code never read it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Style {
+    Bold,
+    Green,
+    Yellow,
+    Red,
+    Dim,
+}
+
+impl Style {
+    /// The SGR parameter that turns this ink on; `paint` always closes it with a reset.
+    fn code(self) -> &'static str {
+        match self {
+            Style::Bold => "1",
+            Style::Green => "32",
+            Style::Yellow => "33",
+            Style::Red => "31",
+            Style::Dim => "2",
+        }
+    }
+}
+
+/// SPEC.md Output: colour appears only when all three inputs agree — stdout is a terminal, `--no-color`
+/// was not given, and `NO_COLOR` is unset. Pure, so a test proves every combination without owning a
+/// terminal.
+fn colour_enabled(stdout_is_terminal: bool, no_color_flag: bool, no_color_set: bool) -> bool {
+    stdout_is_terminal && !no_color_flag && !no_color_set
+}
+
+/// The one environment read colour makes. `var_os`, because SPEC.md Output counts `NO_COLOR` as set
+/// whatever its value is, the empty one included, and a non-UTF-8 value is still a value. It reaches
+/// no decision, no path, no written byte and no exit code.
+fn no_color_from_env() -> bool {
+    std::env::var_os("NO_COLOR").is_some()
+}
+
+/// `text` in `style`, or `text` unchanged when colour is off. The only place an escape sequence is
+/// made, so a plain run prints exactly the bytes a colour run prints minus the escapes (SPEC.md
+/// Output). Pure.
+fn paint(style: Style, text: &str, enabled: bool) -> String {
+    if !enabled {
+        return text.to_string();
+    }
+    format!("\x1b[{}m{text}\x1b[0m", style.code())
+}
+
+/// The style set one run paints its report with, threaded into every render site. The plain one
+/// returns its input, so a render function needs no branch of its own and the plain text cannot
+/// drift from the coloured one. A styled cell is always painted **after** it is padded: `{:<44.44}`
+/// counts bytes, so painting first would break every column.
+#[derive(Clone, Copy)]
+struct Painter {
+    colour: bool,
+}
+
+impl Painter {
+    fn new(colour: bool) -> Self {
+        Painter { colour }
+    }
+
+    /// What a piped run and every test use: no escapes, ever.
+    #[cfg(test)]
+    fn plain() -> Self {
+        Painter { colour: false }
+    }
+
+    fn bold(&self, text: &str) -> String {
+        paint(Style::Bold, text, self.colour)
+    }
+
+    fn green(&self, text: &str) -> String {
+        paint(Style::Green, text, self.colour)
+    }
+
+    fn yellow(&self, text: &str) -> String {
+        paint(Style::Yellow, text, self.colour)
+    }
+
+    fn red(&self, text: &str) -> String {
+        paint(Style::Red, text, self.colour)
+    }
+
+    fn dim(&self, text: &str) -> String {
+        paint(Style::Dim, text, self.colour)
+    }
+}
+
+/// Where a transient progress line goes. The shipped sink writes to standard error; a test records,
+/// so the phase sequence is asserted without a terminal anywhere and the no-terminal case is proven to
+/// be silent rather than merely unobserved.
+trait Sink {
+    /// Rewrite the one live line in place.
+    fn rewrite(&mut self, line: &str);
+
+    /// Erase the live line, leaving the cursor where it was: a warning that follows keeps its own line
+    /// (SPEC.md Output).
+    fn clear(&mut self);
+
+    /// Write the line that ends the progress and stays: it stops being transient.
+    fn settle(&mut self, line: &str);
+}
+
+/// The one real sink. `\r` returns to the start of the line and `\x1b[K` erases what was there, so a
+/// shorter line never leaves the tail of a longer one behind. A failed write is dropped rather than
+/// turned into an error: progress is a convenience, never a result.
+struct StderrSink<W: Write> {
+    err: W,
+}
+
+impl StderrSink<io::Stderr> {
+    /// The only constructor a run has, so the progress line cannot be pointed at standard output,
+    /// where it would land in the report a pipe or a log captures (SPEC.md Output).
+    fn new() -> Self {
+        StderrSink { err: io::stderr() }
+    }
+}
+
+#[cfg(test)]
+impl<W: Write> StderrSink<W> {
+    /// A test's own buffer, so the sink's exact bytes are asserted without a terminal anywhere.
+    fn with_writer(err: W) -> Self {
+        StderrSink { err }
+    }
+}
+
+impl<W: Write> Sink for StderrSink<W> {
+    fn rewrite(&mut self, line: &str) {
+        let _ = write!(self.err, "\r{line}\x1b[K");
+        let _ = self.err.flush();
+    }
+
+    fn clear(&mut self) {
+        let _ = write!(self.err, "\r\x1b[K");
+        let _ = self.err.flush();
+    }
+
+    fn settle(&mut self, line: &str) {
+        let _ = write!(self.err, "\r{line}\x1b[K\n");
+        let _ = self.err.flush();
+    }
+}
+
+/// The line that ends the progress and stays: the counts the ranked title carries, and the time from
+/// the loading phase to the end of ranking, with one decimal place (SPEC.md Output). Pure.
+fn done_line(usable: usize, rejected: usize, elapsed: Duration) -> String {
+    format!(
+        "done — {usable} usable, {rejected} rejected in {:.1} s",
+        elapsed.as_secs_f64()
+    )
+}
+
+/// The status line a run shows while it works: one line, on standard error, rewritten in place, and
+/// only when standard error is a terminal (SPEC.md Output). `enabled == false` makes every method
+/// return at once, so a piped run takes the same code path and writes nothing at all — no line and no
+/// "still working" notice.
+struct Progress<S: Sink> {
+    sink: S,
+    enabled: bool,
+    started: Instant,
+}
+
+impl<S: Sink> Progress<S> {
+    /// The clock starts here, so the summary spans the run's work and not only its last phase.
+    fn new(sink: S, enabled: bool) -> Self {
+        Progress {
+            sink,
+            enabled,
+            started: Instant::now(),
+        }
+    }
+
+    fn show(&mut self, line: String) {
+        if self.enabled {
+            self.sink.rewrite(&line);
+        }
+    }
+
+    /// The four phases SPEC.md Output names, in the order a run reaches them.
+    fn load(&mut self) {
+        self.show("loading the mirror list".to_string());
+    }
+
+    fn reference(&mut self) {
+        self.show("verifying the reference".to_string());
+    }
+
+    /// The candidates probed **so far** (SPEC.md Output): `done` is how many probes have finished,
+    /// which `await_probes` reads from the probes themselves rather than from the joins.
+    fn probe(&mut self, done: usize, total: usize) {
+        let noun = if total == 1 { "mirror" } else { "mirrors" };
+        self.show(format!("probing {total} {noun}… {done}/{total}"));
+    }
+
+    fn ranked(&mut self) {
+        self.show("ranking".to_string());
+    }
+
+    /// Erase the live line before something that needs a line of its own, such as a warning.
+    fn clear(&mut self) {
+        if self.enabled {
+            self.sink.clear();
+        }
+    }
+
+    /// End the progress at the end of ranking: the line becomes the one summary that stays, so no
+    /// transient line survives into the report and an error that follows starts on a line of its own
+    /// (SPEC.md Output).
+    fn finish(&mut self, usable: usize, rejected: usize) {
+        if self.enabled {
+            let line = done_line(usable, rejected, self.started.elapsed());
+            self.sink.settle(&line);
+        }
+    }
+}
+
+/// How often the probing line is redrawn while probes are in flight: short enough that the count keeps
+/// up with the mirrors landing, long enough that waiting costs nothing.
+const PROBE_POLL: Duration = Duration::from_millis(50);
+
+/// Wait for every probe with the line counting the probes that have **finished**, and hand back the
+/// joins in candidate order. `handle.join()` blocks in candidate order, so a loop that joins first
+/// would count the joins: a slow first mirror would freeze the line while the other twenty-eight are
+/// already done, which is not "the candidates probed so far" (SPEC.md Output). Polling the probes
+/// redraws as each one lands, and the results still come back in candidate order, so nothing
+/// downstream depends on which probe answered first.
+fn await_probes<T, S: Sink>(
+    handles: Vec<thread::JoinHandle<T>>,
+    progress: &mut Progress<S>,
+) -> Vec<thread::Result<T>> {
+    let total = handles.len();
+    // The line goes up before the first wait, so the probing phase is visible from its first
+    // millisecond instead of after the first probe comes back.
+    progress.probe(0, total);
+    let mut shown = 0;
+    loop {
+        let done = handles.iter().filter(|h| h.is_finished()).count();
+        if done != shown {
+            progress.probe(done, total);
+            shown = done;
+        }
+        if done == total {
+            break;
+        }
+        thread::sleep(PROBE_POLL);
+    }
+    handles.into_iter().map(|h| h.join()).collect()
+}
+
 /// The run's identity: version, release and the country the run used, with the source of the
 /// country, because `--country` is an override and the line says which one won (SPEC.md CLI).
-fn header_identity(version: &str, distro: &str, country: &str, origin: &str) -> String {
-    format!("apt-scout {version} · {distro} · country: {country} ({origin})")
+fn header_identity(
+    version: &str,
+    distro: &str,
+    country: &str,
+    origin: &str,
+    ink: Painter,
+) -> String {
+    ink.bold(&format!(
+        "apt-scout {version} · {distro} · country: {country} ({origin})"
+    ))
 }
 
 /// The facts about where the answer came from: server AS, mirror list source, freshness reference.
@@ -600,12 +860,13 @@ fn header_context(
 }
 
 /// A section title with an annotation on the right, so a heading can state the rule it follows
-/// without a sentence underneath the table.
-fn titled(left: &str, right: &str) -> String {
+/// without a sentence underneath the table. The heading is bold, and painted after its padding so the
+/// annotation stays in its column.
+fn titled(left: &str, right: &str, ink: Painter) -> String {
     if right.is_empty() {
-        left.to_string()
+        ink.bold(left)
     } else {
-        format!("{left:<45}  {right}")
+        format!("{}  {right}", ink.bold(&format!("{left:<45}")))
     }
 }
 
@@ -622,10 +883,11 @@ fn as_note(rows: &[Row], reason: Option<&str>) -> Option<String> {
 }
 
 /// `Ranked — 5 of 12 usable, 7 rejected`: how much of the ranking is shown, and what did not make it.
-fn ranked_title(shown: usize, usable: usize, rejected: usize) -> String {
+fn ranked_title(shown: usize, usable: usize, rejected: usize, ink: Painter) -> String {
     titled(
         &format!("Ranked — {shown} of {usable} usable, {rejected} rejected"),
         "lag = -updates age vs freshest",
+        ink,
     )
 }
 
@@ -661,7 +923,7 @@ const CUT_MARKER: char = '~';
 /// column is left out entirely when no row has AS data, so it can never read as "every mirror is
 /// unknown"; the notes column is left out when no shown row has a note, so a plain table gains no
 /// empty column.
-fn ranked_rows(rows: &[Row]) -> Vec<String> {
+fn ranked_rows(rows: &[Row], ink: Painter) -> Vec<String> {
     // Both facts SPEC step 9 asks for, in one cell: the ASN the lookup answered and whether it is
     // the server's. A fixed printed width would either cut a 6-digit ASN or waste columns on a
     // 4-digit one, so the column is as wide as the widest cell it holds.
@@ -674,10 +936,14 @@ fn ranked_rows(rows: &[Row]) -> Vec<String> {
     let notes: Vec<Option<String>> = rows.iter().map(note_cell).collect();
     let with_notes = notes.iter().any(Option::is_some);
     let mut out = Vec::new();
-    let mut head = format!(
-        "  {:>2}  {:<44} {:>5} {:>10} {:>9}",
-        "#", "mirror", "lag", "speed", "delay"
-    );
+    // Each heading word is padded first and dimmed second: the width format counts bytes, so a
+    // dimmed word would lose its padding and shift every column under it.
+    let mut head = format!("  {:>2}  {:<44} ", "#", "mirror");
+    head.push_str(&ink.dim(&format!("{:>5}", "lag")));
+    head.push(' ');
+    head.push_str(&ink.dim(&format!("{:>10}", "speed")));
+    head.push(' ');
+    head.push_str(&ink.dim(&format!("{:>9}", "delay")));
     if let Some(width) = as_width {
         head.push_str(&format!(" {:>width$}", "as"));
     }
@@ -699,7 +965,7 @@ fn ranked_rows(rows: &[Row]) -> Vec<String> {
             let cell = row.as_cell.as_deref().unwrap_or("unknown");
             line.push_str(&format!(" {cell:>width$}"));
         }
-        line.push_str(&format!("  {}", signature_cell(row.signature)));
+        line.push_str(&format!("  {}", signature_cell_painted(row.signature, ink)));
         if let Some(note) = &notes[i] {
             line.push_str(&format!("  {note}"));
         }
@@ -794,10 +1060,15 @@ fn table_rows<'a>(
 /// The recommendation and the facts behind it: host, country, AS, speed, lag and signature status
 /// (SPEC.md CLI), in one line so nothing repeats the table. The AS cell is the table's own, so the
 /// ASN the tie-break used is named here too instead of the bare match word.
-fn recommendation(best: &fresh::Probed, country: &str, as_cell: Option<&str>) -> String {
+fn recommendation(
+    best: &fresh::Probed,
+    country: &str,
+    as_cell: Option<&str>,
+    ink: Painter,
+) -> String {
     format!(
         "  {} — {} {}, {}, AS {}, {}m lag, {:.1} MB/s, {} ms",
-        best.url,
+        ink.bold(&best.url),
         if best.lag_secs == 0 {
             "freshest"
         } else {
@@ -870,7 +1141,7 @@ fn rejection(error: &probe::ProbeError) -> Reject {
 /// `Rejected — 7` and one line per reason with the hosts and their numbers (SPEC step 8: every
 /// rejected mirror with the reason it was rejected). Sorted by reason, so two runs that saw the
 /// same answers print the same section.
-fn rejected_section(rejected: &[Rejected]) -> Vec<String> {
+fn rejected_section(rejected: &[Rejected], ink: Painter) -> Vec<String> {
     let mut groups: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
     for r in rejected {
@@ -880,27 +1151,37 @@ fn rejected_section(rejected: &[Rejected]) -> Vec<String> {
         };
         groups.entry(r.kind.label()).or_default().push(item);
     }
-    let mut out = vec![format!("Rejected — {}", rejected.len())];
+    let mut out = vec![ink.bold(&format!("Rejected — {}", rejected.len()))];
     for (label, items) in groups {
-        out.push(format!("  {label:<17} {}", items.join(", ")));
+        out.push(ink.red(&format!("  {label:<17} {}", items.join(", "))));
     }
     out
 }
 
 /// `--verbose` says why for each mirror on its own line, instead of grouping.
-fn rejected_detail(rejected: &[Rejected]) -> Vec<String> {
-    let mut out = vec![format!("Rejected — {}", rejected.len())];
+fn rejected_detail(rejected: &[Rejected], ink: Painter) -> Vec<String> {
+    let mut out = vec![ink.bold(&format!("Rejected — {}", rejected.len()))];
     for r in rejected {
-        out.push(format!("  {:<40} {:<17} {}", r.host, r.kind.label(), r.why));
+        out.push(ink.red(&format!(
+            "  {:<40} {:<17} {}",
+            r.host,
+            r.kind.label(),
+            r.why
+        )));
     }
     out
 }
 
-fn rejected_lines(rejected: &[Rejected], verbose: bool) -> Vec<String> {
+/// The `Rejected` section, or nothing at all: a run that rejected nobody prints no heading and no
+/// `0` count (SPEC.md Output). `Report::block` skips an empty section, so the caller needs no case.
+fn rejected_lines(rejected: &[Rejected], verbose: bool, ink: Painter) -> Vec<String> {
+    if rejected.is_empty() {
+        return Vec::new();
+    }
     if verbose {
-        rejected_detail(rejected)
+        rejected_detail(rejected, ink)
     } else {
-        rejected_section(rejected)
+        rejected_section(rejected, ink)
     }
 }
 
@@ -917,8 +1198,9 @@ fn detail_section(
     rows: &[Row],
     details: &std::collections::HashMap<String, Detail>,
     resolved: &std::collections::HashMap<String, ResolvedAs>,
+    ink: Painter,
 ) -> Vec<String> {
-    let mut out = vec!["Detail".to_string()];
+    let mut out = vec![ink.bold("Detail")];
     for (i, row) in rows.iter().enumerate() {
         out.push(format!("  {}  {}", i + 1, row.url));
         let detail = details.get(row.url);
@@ -984,8 +1266,8 @@ fn utc_stamp(secs: i64) -> String {
 /// skip, with the reason (SPEC.md Apply: report each inspected file and each skipped entry). One
 /// line per file and per URI, so the section is a list, not a paragraph. Paths are relative to the
 /// apt root named in the title, which keeps the list narrow and unambiguous.
-fn sources_section(root: &Path, inventory: &sources::Inventory) -> Vec<String> {
-    let mut out = vec![titled("Sources", &root.display().to_string())];
+fn sources_section(root: &Path, inventory: &sources::Inventory, ink: Painter) -> Vec<String> {
+    let mut out = vec![titled("Sources", &root.display().to_string(), ink)];
     if inventory.files.is_empty() {
         out.push("  no apt source files found".to_string());
     }
@@ -1052,14 +1334,19 @@ fn skip_reason(entry: &sources::Entry) -> String {
 /// The change a write would make, per target: the old URI and the new one. URI pairs rather than
 /// file lines, because the one thing that changes is the URI, and a long `sources.list` diff buries
 /// it (SPEC.md Apply: the old URI and the new one, the files it will change).
-fn plan_changes(root: &Path, inventory: &sources::Inventory, plan: &plan::Plan) -> Vec<String> {
+fn plan_changes(
+    root: &Path,
+    inventory: &sources::Inventory,
+    plan: &plan::Plan,
+    ink: Painter,
+) -> Vec<String> {
     let mut out = Vec::new();
     for write in plan.writes() {
         let relative = write.target.relative().display().to_string();
         if write.create_new {
             out.push(format!("  {relative}  (new file, mode 0600)"));
             for line in String::from_utf8_lossy(&write.new_bytes).lines() {
-                out.push(format!("    + {line}"));
+                out.push(ink.green(&format!("    + {line}")));
             }
             continue;
         }
@@ -1070,8 +1357,8 @@ fn plan_changes(root: &Path, inventory: &sources::Inventory, plan: &plan::Plan) 
                 for (uri, rewritable) in entry.uris.iter().zip(&entry.rewritable) {
                     if *rewritable {
                         out.push(format!("  {relative}:{}", entry.line));
-                        out.push(format!("    - {uri}"));
-                        out.push(format!("    + {}", plan.selected_uri()));
+                        out.push(ink.red(&format!("    - {uri}")));
+                        out.push(ink.green(&format!("    + {}", plan.selected_uri())));
                         shown = true;
                     }
                 }
@@ -1086,8 +1373,39 @@ fn plan_changes(root: &Path, inventory: &sources::Inventory, plan: &plan::Plan) 
     out
 }
 
+/// The body of the `Planned change` section for a plan that will be written: the URI pairs and the
+/// backup directory the write creates. `backup` is `None` for a `--list` run, which creates no backup
+/// directory. What the write leaves alone is not here: `Sources` already reported every skip, and the
+/// confirmation repeats none of them (SPEC.md CLI). Alternatives appear only when the run has some,
+/// and this run has none — extra mirrors as comments are a TUI option.
+fn planned_change_lines(
+    root: &Path,
+    inventory: &sources::Inventory,
+    plan: &plan::Plan,
+    backup: Option<&manifest::BackupId>,
+    ink: Painter,
+) -> Vec<String> {
+    let mut out = plan_changes(root, inventory, plan, ink);
+    if let Some(id) = backup {
+        out.push(format!(
+            "  backup: {}/{} (every replaced file is copied there, mode 0700, before the first write)",
+            apply::BACKUP_ROOT,
+            id.as_str()
+        ));
+    }
+    out
+}
+
 fn run() -> Result<u8, (u8, String)> {
     let args = parse_args().map_err(|e| (2, e))?;
+    // SPEC.md Output: colour is decided once, at startup, from the three inputs that all have to
+    // agree. Nothing below re-reads a terminal or an environment variable, so a report cannot be
+    // half painted.
+    let ink = Painter::new(colour_enabled(
+        io::stdout().is_terminal(),
+        args.no_color,
+        no_color_from_env(),
+    ));
     let (d, source) = distro::detect().map_err(|e| (1, e))?;
     if !d.is_ubuntu_family() {
         return Err((
@@ -1140,8 +1458,12 @@ fn run() -> Result<u8, (u8, String)> {
         )
     })?;
 
+    // SPEC.md Output: progress is for a person watching the run work, so the sink is inert unless
+    // standard error is a terminal. The clock starts here, before the list loads, so the summary
+    // spans the four phases it names.
+    let mut progress = Progress::new(StderrSink::new(), io::stderr().is_terminal());
     let (mut cands, list_source, list_roots) =
-        load_candidates(&net, &country, country_name, args.https_only)?;
+        load_with_progress(&net, &country, country_name, args.https_only, &mut progress)?;
     // Different list sources can name the same mirror twice (with and without a trailing slash).
     let mut seen = std::collections::HashSet::new();
     cands.retain(|m| seen.insert(m.url.trim_end_matches('/').to_ascii_lowercase()));
@@ -1175,21 +1497,31 @@ fn run() -> Result<u8, (u8, String)> {
         &distro_label,
         country_name,
         country_origin,
+        ink,
     ));
-    report.block(sources_section(Path::new(apply::APT_DIR), &apt_sources));
+    report.block(sources_section(
+        Path::new(apply::APT_DIR),
+        &apt_sources,
+        ink,
+    ));
     if !apt_sources.has_rewritable_uri() {
         report.line(
             "No official Ubuntu apt source URI can be changed; stopping before mirror probes."
                 .to_string(),
         );
         report.line(no_eligible_hint(list_source));
+        // No phase after the list load ran, so there is no summary to print: the line is erased and the
+        // report starts on its own (SPEC.md Output).
+        progress.clear();
         report.print();
         return no_eligible_uri(mode, &args, list_source);
     }
 
+    progress.reference();
     let reference = match probe::fetch_reference(&net, REFERENCE, &codename) {
         Ok(r) => Some(r),
         Err(probe::ReferenceError::NotFound(url)) => {
+            progress.clear();
             return Err((
                 4,
                 format!(
@@ -1198,6 +1530,9 @@ fn run() -> Result<u8, (u8, String)> {
             ));
         }
         Err(e) => {
+            // A warning keeps its own line: the live progress line is erased first, so the two never
+            // share one (SPEC.md Output).
+            progress.clear();
             eprintln!(
                 "warning: cannot read the reference release from {REFERENCE}: {e}. Using the newest mirror date as the baseline instead, so lag is relative to the best candidate."
             );
@@ -1218,8 +1553,8 @@ fn run() -> Result<u8, (u8, String)> {
         .collect();
     let mut results = Vec::new();
     let mut rejected: Vec<Rejected> = Vec::new();
-    for (m, handle) in cands.iter().zip(handles) {
-        match handle.join() {
+    for (m, joined) in cands.iter().zip(await_probes(handles, &mut progress)) {
+        match joined {
             Ok(done) => results.push(done),
             Err(_) => rejected.push(Rejected {
                 host: m.url.trim_end_matches('/').to_string(),
@@ -1271,6 +1606,9 @@ fn run() -> Result<u8, (u8, String)> {
             Some("the server's AS is unknown, so no mirror can match it".to_string()),
         )
     } else {
+        // The AS lookup is not one of the four phases SPEC.md Output names, and it may print a note of
+        // its own; the live line goes first so a note keeps its own line.
+        progress.clear();
         resolve_mirror_asns(
             &results
                 .iter()
@@ -1320,6 +1658,7 @@ fn run() -> Result<u8, (u8, String)> {
         }
     }
     rejected.sort_by(|a, b| a.host.cmp(&b.host));
+    progress.ranked();
     let ranked = fresh::rank(probed);
     let rows = table_rows(
         &ranked,
@@ -1333,24 +1672,28 @@ fn run() -> Result<u8, (u8, String)> {
         list_source,
         reference.as_ref(),
     )]);
-    let mut ranked_lines = vec![ranked_title(rows.len(), ranked.len(), rejected.len())];
-    ranked_lines.extend(ranked_rows(&rows));
+    let mut ranked_lines = vec![ranked_title(rows.len(), ranked.len(), rejected.len(), ink)];
+    ranked_lines.extend(ranked_rows(&rows, ink));
     // A run with no AS data says why under the table, once, instead of printing a column of
     // `unknown` that implies the lookup happened (SPEC step 9).
     ranked_lines.extend(as_note(&rows, as_error.as_deref()));
     report.block(ranked_lines);
+    // SPEC.md Output: the status line ends with the ranking it was counting, and becomes the one line
+    // that stays. Everything below only assembles what the report will say, so a failure there cannot
+    // glue its message onto a live line.
+    progress.finish(ranked.len(), rejected.len());
     if args.verbose && !rows.is_empty() {
-        report.block(detail_section(&rows, &details, &mirror_asn));
+        report.block(detail_section(&rows, &details, &mirror_asn, ink));
     }
     let Some(best) = ranked.first() else {
-        report.block(rejected_lines(&rejected, args.verbose));
+        report.block(rejected_lines(&rejected, args.verbose, ink));
         report.print();
         return Err(no_fresh_mirror());
     };
     let best_cell = as_cell(&mirror_asn, server_asn.as_deref(), &best.url);
     report.block(vec![
-        "Recommendation".to_string(),
-        recommendation(best, country_name, best_cell.as_deref()),
+        ink.bold("Recommendation"),
+        recommendation(best, country_name, best_cell.as_deref(), ink),
     ]);
 
     let platform = if d.id == "pop" {
@@ -1384,6 +1727,7 @@ fn run() -> Result<u8, (u8, String)> {
             } else {
                 "written only after the confirmation"
             },
+            ink,
         )];
         match build_plan(
             Path::new(apply::APT_DIR),
@@ -1392,25 +1736,15 @@ fn run() -> Result<u8, (u8, String)> {
             best,
             platform,
         ) {
-            Ok(change) => match change.plan {
+            Ok(wanted) => match wanted {
                 Some(plan) => {
-                    planned.extend(plan_changes(Path::new(apply::APT_DIR), &apt_sources, &plan));
-                    if let Some((_, id)) = &write_timing {
-                        planned.push(format!(
-                            "  backup: {}/{} (every replaced file is copied there, mode 0700, before the first write)",
-                            apply::BACKUP_ROOT,
-                            id.as_str()
-                        ));
-                        planned.push(
-                            "  alternatives: none (extra mirrors as comments are a TUI option)"
-                                .to_string(),
-                        );
-                        // The confirmation lists what the write leaves alone, too: the user is
-                        // confirming the whole change, not only the files that move.
-                        for reason in &change.skipped {
-                            planned.push(format!("  keep as is  {reason}"));
-                        }
-                    }
+                    planned.extend(planned_change_lines(
+                        Path::new(apply::APT_DIR),
+                        &apt_sources,
+                        &plan,
+                        write_timing.as_ref().map(|(_, id)| id),
+                        ink,
+                    ));
                     pending = Some(plan);
                 }
                 None => planned.push(format!(
@@ -1427,7 +1761,7 @@ fn run() -> Result<u8, (u8, String)> {
         }
         report.block(planned);
     }
-    report.block(rejected_lines(&rejected, args.verbose));
+    report.block(rejected_lines(&rejected, args.verbose, ink));
     report.print();
 
     match mode {
@@ -1454,7 +1788,10 @@ fn run() -> Result<u8, (u8, String)> {
                 ));
             };
             if confirm {
-                confirm_write(&mut io::stdin().lock(), "\nApply this change? [y/N] ")?;
+                confirm_write(
+                    &mut io::stdin().lock(),
+                    &format!("\n{} ", ink.bold("Apply this change? [y/N]")),
+                )?;
             }
             let outcome = apply::apply(&plan, trusted_baseline.as_ref(), now)
                 .map_err(|e| (e.exit_code(), e.to_string()))?;
@@ -1511,6 +1848,18 @@ fn signature_cell(status: &verify::SignatureStatus) -> &'static str {
         verify::SignatureStatus::Verified(_) => "ok",
         verify::SignatureStatus::Invalid(_) => "no",
         verify::SignatureStatus::Unavailable(_) => "unavailable",
+    }
+}
+
+/// The `sig` column in its ink: `ok` green, `no` and `unavailable` yellow (SPEC.md Output). The cell
+/// names itself; the ink repeats it for a reader who scans the column.
+fn signature_cell_painted(status: &verify::SignatureStatus, ink: Painter) -> String {
+    let cell = signature_cell(status);
+    match status {
+        verify::SignatureStatus::Verified(_) => ink.green(cell),
+        verify::SignatureStatus::Invalid(_) | verify::SignatureStatus::Unavailable(_) => {
+            ink.yellow(cell)
+        }
     }
 }
 
@@ -1802,23 +2151,54 @@ fn mirror_roots<'a>(
     (roots, rejected)
 }
 
-/// Report the entries a list named that never entered the rewrite set. An entry that fails candidate
-/// validation is left out **and said so**, on the same channel as the fallback warning, rather than
-/// silently trusted (SPEC: Apply).
-fn report_rejected(list: &str, rejected: &[String]) {
+/// The warning for the entries a list named that never entered the rewrite set, or `None` when every
+/// entry entered it. An entry that fails candidate validation is left out **and said so**, on the same
+/// channel as the fallback warning, rather than silently trusted (SPEC: Apply). Returned as text, so
+/// the caller decides when the line lands: it may have a live progress line to erase first
+/// (SPEC.md Output).
+fn rejected_note(list: &str, rejected: &[String]) -> Option<String> {
     if rejected.is_empty() {
-        return;
+        return None;
     }
-    eprintln!(
+    Some(format!(
         "warning: {list} names {} mirror URL(s) that cannot make an apt source rewritable, so they are left out of that set: {}",
         rejected.len(),
         rejected.join(", ")
-    );
+    ))
+}
+
+/// The run's list phase: name it, do the load, and let what the load has to say land on lines of its
+/// own. Extracted from `run()` so the order is pinned by a test rather than by reading it: the line
+/// goes up **before** the work (the load is the longest silent stretch of a run — Launchpad up to
+/// 10 s, then `mirrors.ubuntu.com` up to another 10 s) and is erased after it, so a warning or an
+/// error that follows never lands on top of a live line (SPEC.md Output).
+fn load_with_progress<S: Sink>(
+    net: &dyn Fetch,
+    cc: &str,
+    country_name: &str,
+    https_only: bool,
+    progress: &mut Progress<S>,
+) -> Result<LoadedCandidates, (u8, String)> {
+    progress.load();
+    let mut notes = Vec::new();
+    let loaded = load_candidates(net, cc, country_name, https_only, &mut notes);
+    // The load is over whether it worked or not, so its notes get lines of their own and the error
+    // that may follow starts where the live line was.
+    progress.clear();
+    for note in &notes {
+        eprintln!("{note}");
+    }
+    loaded
 }
 
 /// SPEC step 3: Launchpad first, then `mirrors.ubuntu.com/<CC>.txt`. Returns the candidates, the
 /// name of the source that supplied them, and the run's mirror roots; every failed source is
 /// reported with its reason.
+///
+/// The lines this load has to tell the user are pushed onto `notes` instead of written here, because
+/// the caller owns a live progress line that has to be erased before the first of them lands
+/// (SPEC.md Output). A note is produced whether the load succeeds or not, so the caller prints them
+/// before it handles the result.
 ///
 /// Contract for the third element: every mirror in the returned `Vec<Mirror>` has its `(host, path)`
 /// in it. From Launchpad that set is every host and path the page names, in every country, collected
@@ -1831,6 +2211,7 @@ fn load_candidates(
     cc: &str,
     country_name: &str,
     https_only: bool,
+    notes: &mut Vec<String>,
 ) -> Result<LoadedCandidates, (u8, String)> {
     let keep =
         |m: &mirrors::Mirror| mirrors::validate_url(&m.url).is_ok() && (!https_only || m.https);
@@ -1842,7 +2223,7 @@ fn load_candidates(
                 // Every country's entry, not only this run's, and before `keep`: eligibility answers
                 // recognizability, never use. Both list sources pass the same validation here.
                 let (roots, rejected) = mirror_roots(all.iter().map(|m| m.url.as_str()));
-                report_rejected("Launchpad", &rejected);
+                notes.extend(rejected_note("Launchpad", &rejected));
                 let found: Vec<_> = all
                     .into_iter()
                     .filter(|m| m.country == country_name && keep(m))
@@ -1878,13 +2259,13 @@ fn load_candidates(
             // still does not narrow it — it picks what may be selected, never what may be recognized,
             // so a mirror written over `http` stays rewritable in a later run.
             let (roots, rejected) = mirror_roots(all.iter().map(|m| m.url.as_str()));
-            report_rejected("mirrors.ubuntu.com", &rejected);
+            notes.extend(rejected_note("mirrors.ubuntu.com", &rejected));
             let found: Vec<_> = all.into_iter().filter(keep).collect();
             if !found.is_empty() {
-                eprintln!(
+                notes.push(format!(
                     "warning: {}. Using {url} instead (its URLs come over plain HTTP, so they are unverified).",
                     failures.join("; ")
-                );
+                ));
                 return Ok((found, "mirrors.ubuntu.com (unverified)", roots));
             }
             failures.push(format!("{url} has no usable mirrors"));
@@ -2264,7 +2645,7 @@ mod tests {
             (LAUNCHPAD, Ok(LAUNCHPAD_OK)),
             ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
         ]);
-        let (c, src, _) = load_candidates(&net, "LT", "Lithuania", false).unwrap();
+        let (c, src, _) = load_candidates(&net, "LT", "Lithuania", false, &mut Vec::new()).unwrap();
         assert_eq!(src, "Launchpad");
         assert!(c.iter().all(|m| m.country == "Lithuania"));
         assert!(c.len() >= 4);
@@ -2276,7 +2657,7 @@ mod tests {
             (LAUNCHPAD, Err(503)),
             ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
         ]);
-        let (c, src, _) = load_candidates(&net, "LT", "Lithuania", false).unwrap();
+        let (c, src, _) = load_candidates(&net, "LT", "Lithuania", false, &mut Vec::new()).unwrap();
         assert_eq!(src, "mirrors.ubuntu.com (unverified)");
         assert_eq!(c.len(), 2); // the ftp:// line is dropped
         assert!(c.iter().any(|m| m.https));
@@ -2291,7 +2672,7 @@ mod tests {
                 Ok(b"http://ftp.is.example/ubuntu/\n"),
             ),
         ]);
-        let (c, src, _) = load_candidates(&net, "IS", "Iceland", false).unwrap();
+        let (c, src, _) = load_candidates(&net, "IS", "Iceland", false, &mut Vec::new()).unwrap();
         assert_eq!(src, "mirrors.ubuntu.com (unverified)");
         assert_eq!(c.len(), 1);
     }
@@ -2302,7 +2683,7 @@ mod tests {
             (LAUNCHPAD, Err(503)),
             ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
         ]);
-        let (c, _, _) = load_candidates(&net, "LT", "Lithuania", true).unwrap();
+        let (c, _, _) = load_candidates(&net, "LT", "Lithuania", true, &mut Vec::new()).unwrap();
         assert_eq!(c.len(), 1);
         assert!(c[0].https);
     }
@@ -2314,7 +2695,8 @@ mod tests {
             (LAUNCHPAD, Err(503)),
             ("http://mirrors.ubuntu.com/LT.txt", Ok(txt)),
         ]);
-        let (c, _, roots) = load_candidates(&net, "LT", "Lithuania", false).unwrap();
+        let (c, _, roots) =
+            load_candidates(&net, "LT", "Lithuania", false, &mut Vec::new()).unwrap();
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].url, "http://ok.example/ubuntu/");
         // The fallback list arrives over plain HTTP, so only its validated entries join the set: a
@@ -2377,7 +2759,8 @@ mod tests {
         // The same rule on the Launchpad side: its valid entries are still in the set, the invalid
         // one is in neither the set nor silence.
         let net = Canned(vec![(LAUNCHPAD, Ok(launchpad_one_bad()))]);
-        let (_, src, roots) = load_candidates(&net, "DE", "Germany", false).unwrap();
+        let (_, src, roots) =
+            load_candidates(&net, "DE", "Germany", false, &mut Vec::new()).unwrap();
         assert_eq!(src, "Launchpad");
         assert!(
             roots.iter().all(|r| r.host != "127.0.0.1"),
@@ -2395,11 +2778,117 @@ mod tests {
             (LAUNCHPAD, Err(503)),
             ("http://mirrors.ubuntu.com/LT.txt", Err(404)),
         ]);
-        let (code, msg) = load_candidates(&net, "LT", "Lithuania", false).unwrap_err();
+        let (code, msg) =
+            load_candidates(&net, "LT", "Lithuania", false, &mut Vec::new()).unwrap_err();
         assert_eq!(code, 1);
         assert!(msg.contains("Launchpad"), "{msg}");
         assert!(msg.contains("LT.txt"), "{msg}");
         assert!(msg.contains("--country"), "{msg}");
+    }
+
+    /// One ordered log of what a run showed and what it asked the network for, so a test can pin which
+    /// came first.
+    #[derive(Clone, Default)]
+    struct Trace(std::rc::Rc<std::cell::RefCell<Vec<String>>>);
+
+    impl Trace {
+        fn note(&self, what: impl Into<String>) {
+            self.0.borrow_mut().push(what.into());
+        }
+
+        fn lines(&self) -> Vec<String> {
+            self.0.borrow().clone()
+        }
+    }
+
+    /// The real sink's contract, recorded into the shared log.
+    struct TracingSink(Trace);
+
+    impl Sink for TracingSink {
+        fn rewrite(&mut self, line: &str) {
+            self.0.note(format!("show: {line}"));
+        }
+
+        fn clear(&mut self) {
+            self.0.note("clear");
+        }
+
+        fn settle(&mut self, line: &str) {
+            self.0.note(format!("settle: {line}"));
+        }
+    }
+
+    /// A `Canned` net that enters every request into the same log.
+    struct TracedNet {
+        canned: Canned,
+        trace: Trace,
+    }
+
+    impl Fetch for TracedNet {
+        fn get(
+            &self,
+            url: &str,
+            max_bytes: u64,
+            range: Option<(u64, u64)>,
+        ) -> Result<http::Fetched, http::HttpError> {
+            self.trace.note(format!("fetch: {url}"));
+            self.canned.get(url, max_bytes, range)
+        }
+    }
+
+    /// The phase goes up **before** the work it names. The list load is up to 20 s of silence — 10 s of
+    /// Launchpad, then 10 s of `mirrors.ubuntu.com` — so a line printed after it returns is the one
+    /// phase a person never sees happen, which is the complaint the progress line exists to answer
+    /// (SPEC.md Output).
+    #[test]
+    fn the_list_phase_is_shown_before_the_list_is_loaded() {
+        let trace = Trace::default();
+        let net = TracedNet {
+            canned: Canned(vec![
+                (LAUNCHPAD, Err(503)),
+                ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
+            ]),
+            trace: trace.clone(),
+        };
+        let mut progress = Progress::new(TracingSink(trace.clone()), true);
+        let (cands, src, _) =
+            load_with_progress(&net, "LT", "Lithuania", false, &mut progress).unwrap();
+        assert!(!cands.is_empty(), "{src}");
+        assert_eq!(
+            trace.lines(),
+            [
+                "show: loading the mirror list",
+                "fetch: https://launchpad.net/ubuntu/+archivemirrors",
+                "fetch: http://mirrors.ubuntu.com/LT.txt",
+                // The line is erased once the load is over, before the warning it produced prints.
+                "clear",
+            ]
+        );
+    }
+
+    /// The load's own lines are data now, not a side effect: the caller decides when they land, and a
+    /// test can check what the run would say.
+    #[test]
+    fn a_fallback_load_reports_its_reasons_as_notes() {
+        let net = Canned(vec![
+            (LAUNCHPAD, Err(503)),
+            ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
+        ]);
+        let mut notes = Vec::new();
+        let (cands, src, _) = load_candidates(&net, "LT", "Lithuania", false, &mut notes).unwrap();
+        assert_eq!(src, "mirrors.ubuntu.com (unverified)");
+        assert!(!cands.is_empty());
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(
+            notes[0].contains("cannot load the Launchpad mirror list"),
+            "{}",
+            notes[0]
+        );
+        assert!(
+            notes[0].contains("Using http://mirrors.ubuntu.com/LT.txt instead"),
+            "{}",
+            notes[0]
+        );
     }
 
     /// The rewrite-eligibility set is every host and path the Launchpad page names, in every country,
@@ -2407,7 +2896,8 @@ mod tests {
     #[test]
     fn the_host_list_names_every_country_not_only_the_run_s_country() {
         let net = Canned(vec![(LAUNCHPAD, Ok(LAUNCHPAD_OK))]);
-        let (cands, src, roots) = load_candidates(&net, "DE", "Germany", false).unwrap();
+        let (cands, src, roots) =
+            load_candidates(&net, "DE", "Germany", false, &mut Vec::new()).unwrap();
         assert_eq!(src, "Launchpad");
         assert!(cands.iter().all(|m| m.country == "Germany"));
         assert!(
@@ -2436,7 +2926,8 @@ mod tests {
     #[test]
     fn https_only_does_not_narrow_the_host_list() {
         let net = Canned(vec![(LAUNCHPAD, Ok(LAUNCHPAD_OK))]);
-        let (cands, _, roots) = load_candidates(&net, "DE", "Germany", true).unwrap();
+        let (cands, _, roots) =
+            load_candidates(&net, "DE", "Germany", true, &mut Vec::new()).unwrap();
         assert!(cands.iter().all(|m| m.https));
         // ftp.litnet.lt's only HTTP link in the fixture is `http`, so no candidate may carry it,
         // while its host must still be in the set.
@@ -2460,7 +2951,8 @@ mod tests {
             (LAUNCHPAD, Err(503)),
             ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
         ]);
-        let (cands, _, roots) = load_candidates(&net, "LT", "Lithuania", true).unwrap();
+        let (cands, _, roots) =
+            load_candidates(&net, "LT", "Lithuania", true, &mut Vec::new()).unwrap();
         assert_eq!(cands.len(), 1);
         assert!(cands.iter().all(|m| m.https));
         assert!(
@@ -2487,7 +2979,8 @@ mod tests {
             ),
         ];
         for (net, cc, name) in cases {
-            let (cands, src, roots) = load_candidates(&net, cc, name, false).unwrap();
+            let (cands, src, roots) =
+                load_candidates(&net, cc, name, false, &mut Vec::new()).unwrap();
             assert!(!cands.is_empty(), "{src}");
             for m in &cands {
                 let mine = sources::mirror_root(&m.url).expect("a validated candidate has a host");
@@ -2506,7 +2999,8 @@ mod tests {
                 (LAUNCHPAD, launchpad),
                 ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
             ]);
-            let (cands, src, roots) = load_candidates(&net, "LT", "Lithuania", false).unwrap();
+            let (cands, src, roots) =
+                load_candidates(&net, "LT", "Lithuania", false, &mut Vec::new()).unwrap();
             assert_eq!(src, "mirrors.ubuntu.com (unverified)");
             let mut expected: Vec<sources::MirrorRoot> = cands
                 .iter()
@@ -2531,7 +3025,8 @@ mod tests {
     #[test]
     fn a_mirror_a_run_wrote_stays_rewritable_under_a_country_change() {
         let net = Canned(vec![(LAUNCHPAD, Ok(LAUNCHPAD_OK))]);
-        let (_, src, roots) = load_candidates(&net, "DE", "Germany", false).unwrap();
+        let (_, src, roots) =
+            load_candidates(&net, "DE", "Germany", false, &mut Vec::new()).unwrap();
         assert_eq!(src, "Launchpad");
         assert!(
             roots
@@ -2589,14 +3084,22 @@ mod tests {
         assert_eq!(sudo_command(&plain), "sudo apt-scout");
 
         let flags = parse_args_from(
-            ["--country", "lt", "--no-geo", "--top", "3", "--https-only"]
-                .into_iter()
-                .map(str::to_string),
+            [
+                "--country",
+                "lt",
+                "--no-geo",
+                "--top",
+                "3",
+                "--https-only",
+                "--no-color",
+            ]
+            .into_iter()
+            .map(str::to_string),
         )
         .unwrap();
         assert_eq!(
             sudo_command(&flags),
-            "sudo apt-scout --country LT --no-geo --top 3 --https-only"
+            "sudo apt-scout --country LT --no-geo --top 3 --https-only --no-color"
         );
     }
 
@@ -2679,42 +3182,100 @@ mod tests {
             plan::Platform::Ubuntu,
         )
         .expect("a run whose write already happened must not fail");
-        assert!(change.plan.is_none(), "nothing to change, so no plan");
-        assert!(change.skipped.is_empty(), "{:?}", change.skipped);
+        assert!(change.is_none(), "nothing to change, so no plan");
         // Success is still a run that writes nothing.
         assert_eq!(apt.read("sources.list"), current);
     }
 
+    /// Every entry the plan refuses is still reported to the user — in the `Sources` section, before
+    /// probing, which is where SPEC.md Apply puts it — and the confirmation that follows repeats none
+    /// of them (SPEC.md CLI). The two reports read the same apt files, so a skip cannot fall between
+    /// them.
     #[test]
-    fn the_plan_reports_every_skipped_entry_with_its_reason() {
+    fn a_skip_is_named_in_sources_and_never_again_in_the_confirmation() {
         let apt = TempApt::new("skipped");
         apt.write(
             "sources.list",
             "deb http://archive.ubuntu.com/ubuntu noble main\ndeb https://security.ubuntu.com/ubuntu noble-security main\n",
         );
-        // Not valid UTF-8: the inventory reports the file instead of dropping it, and the plan has to
-        // pass that report on (SPEC.md Apply: every skipped file with its reason).
+        // Not valid UTF-8: the inventory reports the file instead of dropping it (SPEC.md Apply:
+        // every skipped file with its reason).
         std::fs::write(apt.0.join("sources.list.d/bad.list"), [0xff, 0xfe]).expect("fixture file");
         let hosts = listed(&["archive.ubuntu.com", "mirror.example"]);
         let inventory = sources::inventory(&apt.0, &hosts, false);
-        let change = build_plan(
+        let plan = build_plan(
             &apt.0,
             &inventory,
             &hosts,
             &probed(MIRROR, verify::SignatureStatus::verified_for_test()),
             plan::Platform::Ubuntu,
         )
-        .expect("one URI is rewritable");
-        assert!(change.plan.is_some(), "the archive URI is rewritten");
-        let skipped = change.skipped.join("\n");
+        .expect("one URI is rewritable")
+        .expect("the archive URI is rewritten");
+        let sources = sources_section(&apt.0, &inventory, Painter::plain()).join("\n");
         assert!(
-            skipped.contains("bad.list: file is not valid UTF-8"),
-            "{skipped}"
+            sources.contains("bad.list                   skip     file is not valid UTF-8"),
+            "{sources}"
         );
         assert!(
-            skipped.contains("https://security.ubuntu.com/ubuntu was not changed"),
-            "{skipped}"
+            sources.contains("security.ubuntu.com — security suite is never rewritten"),
+            "{sources}"
         );
+        let confirmation = planned_change_lines(
+            &apt.0,
+            &inventory,
+            &plan,
+            Some(&manifest::BackupId::from_secs(1_700_000_000).expect("a valid backup id")),
+            Painter::plain(),
+        )
+        .join("\n");
+        assert!(!confirmation.contains("bad.list"), "{confirmation}");
+        assert!(!confirmation.contains("security"), "{confirmation}");
+    }
+
+    /// The confirmation names the files, the URI pairs and the backup directory it will create — and
+    /// nothing it would only repeat. `Sources` already listed every skip, alternatives appear only
+    /// when the run has some, and this run has none (SPEC.md CLI).
+    #[test]
+    fn the_planned_change_names_the_uri_pairs_and_the_backup_and_no_skip() {
+        let apt = TempApt::new("planned");
+        apt.write(
+            "sources.list.d/ubuntu.sources",
+            "# noble\nTypes: deb\nURIs: http://archive.ubuntu.com/ubuntu\nSuites: noble noble-updates\nComponents: main\n\nTypes: deb\nURIs: http://security.ubuntu.com/ubuntu\nSuites: noble-security\nComponents: main\n",
+        );
+        let hosts = listed(&["archive.ubuntu.com", "mirror.example"]);
+        let inventory = sources::inventory(&apt.0, &hosts, false);
+        let plan = build_plan(
+            &apt.0,
+            &inventory,
+            &hosts,
+            &probed(MIRROR, verify::SignatureStatus::verified_for_test()),
+            plan::Platform::Ubuntu,
+        )
+        .expect("the archive stanza is rewritable")
+        .expect("one file changes");
+        let id = manifest::BackupId::from_secs(1_700_000_000).expect("a valid backup id");
+        let lines = planned_change_lines(&apt.0, &inventory, &plan, Some(&id), Painter::plain());
+        assert_eq!(
+            lines,
+            [
+                "  sources.list.d/ubuntu.sources:2".to_string(),
+                "    - http://archive.ubuntu.com/ubuntu".to_string(),
+                "    + https://mirror.example/ubuntu/".to_string(),
+                format!(
+                    "  backup: {}/{} (every replaced file is copied there, mode 0700, before the first write)",
+                    apply::BACKUP_ROOT,
+                    id.as_str()
+                ),
+            ]
+        );
+        let text = lines.join("\n");
+        assert!(!text.contains("keep as is"), "{text}");
+        assert!(!text.contains("was not changed"), "{text}");
+        assert!(!text.contains("alternatives"), "{text}");
+        // A `--list` run creates no backup directory, so it prints the URI pairs and no backup line.
+        let listed = planned_change_lines(&apt.0, &inventory, &plan, None, Painter::plain());
+        assert_eq!(listed, lines[..3].to_vec());
     }
 
     #[test]
@@ -2837,6 +3398,16 @@ mod tests {
         .expect_err("an empty plan must be refused, not written");
         assert_eq!(code, 1);
         assert!(msg.contains("no apt source file would change"), "{msg}");
+        // Both halves of the refusal: the reason each inspected entry was left alone, and the fact
+        // that the run wrote nothing. The skips reach the user only through this message.
+        assert!(
+            msg.contains("https://security.ubuntu.com/ubuntu was not changed"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("https://ppa.example/ubuntu was not changed"),
+            "{msg}"
+        );
         assert!(msg.contains("Nothing was written"), "{msg}");
     }
 
@@ -2857,7 +3428,6 @@ mod tests {
             plan::Platform::Ubuntu,
         )
         .expect("both inspected files have a rewritable URI")
-        .plan
         .expect("both inspected files are written");
         assert_eq!(plan.selected_uri(), MIRROR);
         assert_eq!(plan.proof().seconds(), 1000);
@@ -2895,7 +3465,7 @@ mod tests {
         // The change the confirmation and --list show: the old URI and the new one per target,
         // and nothing else.
         assert_eq!(
-            plan_changes(&apt.0, &inventory, &plan),
+            plan_changes(&apt.0, &inventory, &plan, Painter::plain()),
             [
                 "  sources.list:1",
                 "    - http://archive.ubuntu.com/ubuntu",
@@ -2924,7 +3494,6 @@ mod tests {
             plan::Platform::PopOs,
         )
         .expect("the Pop!_OS split is planned")
-        .plan
         .expect("the Pop!_OS split is written");
         assert_eq!(plan.writes().len(), 2);
         let created = plan
@@ -3009,10 +3578,13 @@ mod tests {
     #[test]
     fn the_ranked_table_renders_the_as_column_only_with_as_data() {
         let ok = verify::SignatureStatus::verified_for_test();
-        let without = ranked_rows(&[
-            row("http://a.example/ubuntu", 0, &ok, None),
-            row("http://b.example/ubuntu", 600, &ok, None),
-        ]);
+        let without = ranked_rows(
+            &[
+                row("http://a.example/ubuntu", 0, &ok, None),
+                row("http://b.example/ubuntu", 600, &ok, None),
+            ],
+            Painter::plain(),
+        );
         assert_eq!(
             without,
             [
@@ -3024,10 +3596,13 @@ mod tests {
                     .to_string(),
             ]
         );
-        let with = ranked_rows(&[
-            row("http://a.example/ubuntu", 0, &ok, Some("12929 same")),
-            row("http://b.example/ubuntu", 0, &ok, None),
-        ]);
+        let with = ranked_rows(
+            &[
+                row("http://a.example/ubuntu", 0, &ok, Some("12929 same")),
+                row("http://b.example/ubuntu", 0, &ok, None),
+            ],
+            Painter::plain(),
+        );
         assert_eq!(
             with,
             [
@@ -3046,7 +3621,10 @@ mod tests {
     #[test]
     fn the_notes_column_carries_each_fact_and_only_when_present() {
         let ok = verify::SignatureStatus::verified_for_test();
-        let plain = ranked_rows(&[row("http://a.example/ubuntu", 0, &ok, None)]);
+        let plain = ranked_rows(
+            &[row("http://a.example/ubuntu", 0, &ok, None)],
+            Painter::plain(),
+        );
         assert_eq!(
             plain[0],
             "   #  mirror                                         lag      speed     delay  sig"
@@ -3057,11 +3635,14 @@ mod tests {
         );
 
         // A `-security` lag is informational only (it never rejects), but it is shown.
-        let lagging = ranked_rows(&[noted(
-            row("http://a.example/ubuntu", 0, &ok, None),
-            Some(778 * 60),
-            None,
-        )]);
+        let lagging = ranked_rows(
+            &[noted(
+                row("http://a.example/ubuntu", 0, &ok, None),
+                Some(778 * 60),
+                None,
+            )],
+            Painter::plain(),
+        );
         assert_eq!(
             lagging[0],
             "   #  mirror                                         lag      speed     delay  sig  notes"
@@ -3072,31 +3653,40 @@ mod tests {
         );
 
         // A mirror that redirects to another host says which one, by default.
-        let redirected = ranked_rows(&[noted(
-            row("http://a.example/ubuntu", 0, &ok, None),
-            None,
-            Some("mirror2.example"),
-        )]);
+        let redirected = ranked_rows(
+            &[noted(
+                row("http://a.example/ubuntu", 0, &ok, None),
+                None,
+                Some("mirror2.example"),
+            )],
+            Painter::plain(),
+        );
         assert_eq!(
             redirected[1],
             "   1  http://a.example/ubuntu                         0m   1.2 MB/s   1235 ms  ok  redir:mirror2.example"
         );
 
         // Both facts, one row; a zero lag is not one of them.
-        let both = ranked_rows(&[noted(
-            row("http://a.example/ubuntu", 0, &ok, None),
-            Some(60),
-            Some("mirror2.example"),
-        )]);
+        let both = ranked_rows(
+            &[noted(
+                row("http://a.example/ubuntu", 0, &ok, None),
+                Some(60),
+                Some("mirror2.example"),
+            )],
+            Painter::plain(),
+        );
         assert_eq!(
             both[1],
             "   1  http://a.example/ubuntu                         0m   1.2 MB/s   1235 ms  ok  sec:1m redir:mirror2.example"
         );
-        let zero = ranked_rows(&[noted(
-            row("http://a.example/ubuntu", 0, &ok, None),
-            Some(0),
-            None,
-        )]);
+        let zero = ranked_rows(
+            &[noted(
+                row("http://a.example/ubuntu", 0, &ok, None),
+                Some(0),
+                None,
+            )],
+            Painter::plain(),
+        );
         assert!(!zero[0].contains("notes") && !zero[1].contains("sec:"));
     }
 
@@ -3160,7 +3750,12 @@ mod tests {
                 redirected_to: Some(long.to_string()),
             },
         );
-        let verbose = detail_section(&[cell], &details, &std::collections::HashMap::new());
+        let verbose = detail_section(
+            &[cell],
+            &details,
+            &std::collections::HashMap::new(),
+            Painter::plain(),
+        );
         assert!(
             verbose
                 .iter()
@@ -3244,7 +3839,10 @@ mod tests {
             same_as: false,
             signature: outcome.updates_signature.clone(),
         }];
-        ranked_rows(&table_rows(&ranked, &details, &no_as, None, 5))
+        ranked_rows(
+            &table_rows(&ranked, &details, &no_as, None, 5),
+            Painter::plain(),
+        )
     }
 
     /// The table's `notes` cell is filled from the run's own probe result, not from a `Row` a test
@@ -3324,7 +3922,7 @@ mod tests {
         let url = "http://lt.archive.ubuntu.com/ubuntu";
         let longest_note = "a-very-long-mirror-host.example.org";
         let width = |rows: &[Row]| {
-            ranked_rows(rows)
+            ranked_rows(rows, Painter::plain())
                 .iter()
                 .map(|line| line.chars().count())
                 .max()
@@ -3359,7 +3957,7 @@ mod tests {
     #[test]
     fn the_ranked_title_counts_what_is_shown() {
         assert_eq!(
-            ranked_title(3, 12, 7),
+            ranked_title(3, 12, 7, Painter::plain()),
             "Ranked — 3 of 12 usable, 7 rejected            lag = -updates age vs freshest"
         );
     }
@@ -3388,20 +3986,34 @@ mod tests {
         );
     }
 
+    /// Nothing was rejected, so there is no `Rejected — 0` heading: a section with nothing to say
+    /// prints nothing at all, no heading and no `0` count (SPEC.md Output).
+    #[test]
+    fn a_report_with_no_rejection_prints_no_rejected_heading() {
+        assert!(rejected_lines(&[], false, Painter::plain()).is_empty());
+        assert!(rejected_lines(&[], true, Painter::plain()).is_empty());
+        // The report it feeds gains no line and no gap for it: `Report::block` skips an empty section,
+        // so nothing needs a case here.
+        let mut report = Report::default();
+        report.line("apt-scout 0.1.0 · Ubuntu 24.04 (noble)".to_string());
+        report.block(rejected_lines(&[], false, Painter::plain()));
+        assert_eq!(report.0, ["apt-scout 0.1.0 · Ubuntu 24.04 (noble)"]);
+    }
+
     /// The recommendation's reason carries every fact SPEC.md CLI asks for in it, and it names the
     /// AS the tie-break used: the bare match word cannot be checked against the table.
     #[test]
     fn the_recommendation_carries_country_as_lag_speed_and_signature() {
         let best = probed(MIRROR, verify::SignatureStatus::verified_for_test());
         assert_eq!(
-            recommendation(&best, "Lithuania", Some("12929 same")),
+            recommendation(&best, "Lithuania", Some("12929 same"), Painter::plain()),
             "  https://mirror.example/ubuntu/ — freshest verified, Lithuania, AS 12929 same, 0m lag, 1.0 MB/s, 10 ms"
         );
         // A mirror one generation behind says so instead of claiming to be the freshest.
         let mut lagging = best;
         lagging.lag_secs = 6 * 3600;
         assert_eq!(
-            recommendation(&lagging, "Lithuania", None),
+            recommendation(&lagging, "Lithuania", None, Painter::plain()),
             "  https://mirror.example/ubuntu/ — closest verified, Lithuania, AS unknown, 360m lag, 1.0 MB/s, 10 ms"
         );
     }
@@ -3442,7 +4054,7 @@ mod tests {
             },
         ];
         assert_eq!(
-            rejected_section(&rejected),
+            rejected_section(&rejected, Painter::plain()),
             [
                 "Rejected — 5",
                 "  404               mirror.b.example, mirror.a.example",
@@ -3452,7 +4064,7 @@ mod tests {
             ]
         );
         // --verbose trades the groups for each mirror's own line and its full reason.
-        let verbose = rejected_detail(&rejected);
+        let verbose = rejected_detail(&rejected, Painter::plain());
         assert_eq!(verbose.len(), rejected.len() + 1);
         assert!(
             verbose.iter().any(|l| l.contains("mirror.a.example")
@@ -3613,7 +4225,7 @@ mod tests {
             },
         ];
         let inventory = sources::inventory(&apt.0, &hosts, false);
-        let lines = sources_section(&apt.0, &inventory);
+        let lines = sources_section(&apt.0, &inventory, Painter::plain());
         // The title names the root, so the list itself carries only paths relative to it.
         assert!(lines[0].starts_with("Sources"), "{lines:?}");
         assert_eq!(
@@ -3639,7 +4251,8 @@ mod tests {
                 "0.1.0",
                 "Ubuntu 24.04 (noble)",
                 "United States",
-                "--country"
+                "--country",
+                Painter::plain(),
             ),
             "apt-scout 0.1.0 · Ubuntu 24.04 (noble) · country: United States (--country)"
         );
@@ -3685,7 +4298,7 @@ mod tests {
             },
         );
         assert_eq!(
-            detail_section(&rows, &details, &resolved),
+            detail_section(&rows, &details, &resolved, Painter::plain()),
             [
                 "Detail",
                 "  1  http://a.example/ubuntu",
@@ -3700,7 +4313,8 @@ mod tests {
             detail_section(
                 &rows,
                 &std::collections::HashMap::new(),
-                &std::collections::HashMap::new()
+                &std::collections::HashMap::new(),
+                Painter::plain(),
             ),
             [
                 "Detail",
@@ -3748,7 +4362,6 @@ mod tests {
             plan::Platform::Ubuntu,
         )
         .expect("the archive stanza is rewritable")
-        .plan
         .expect("one file changes");
         let verified = verify::SignatureStatus::verified_for_test();
         let unverified = verify::SignatureStatus::Unavailable("no gpgv in this image".into());
@@ -3792,25 +4405,36 @@ mod tests {
             "Ubuntu 24.04 (noble)",
             "United States",
             "--country",
+            Painter::plain(),
         ));
-        report.block(sources_section(&apt.0, &inventory));
+        report.block(sources_section(&apt.0, &inventory, Painter::plain()));
         report.block(vec![header_context(Some("AS12929"), "Launchpad", None)]);
-        let mut ranked_lines = vec![ranked_title(rows.len(), rows.len(), rejected.len())];
-        ranked_lines.extend(ranked_rows(&rows));
+        let mut ranked_lines = vec![ranked_title(
+            rows.len(),
+            rows.len(),
+            rejected.len(),
+            Painter::plain(),
+        )];
+        ranked_lines.extend(ranked_rows(&rows, Painter::plain()));
         ranked_lines.extend(as_note(&rows, None));
         report.block(ranked_lines);
         report.block(vec![
-            "Recommendation".to_string(),
+            Painter::plain().bold("Recommendation"),
             recommendation(
                 &probed(selected, verify::SignatureStatus::verified_for_test()),
                 "United States",
                 Some("12929 same"),
+                Painter::plain(),
             ),
         ]);
-        let mut planned = vec![titled("Planned change", "nothing is written with --list")];
-        planned.extend(plan_changes(&apt.0, &inventory, &plan));
+        let mut planned = vec![titled(
+            "Planned change",
+            "nothing is written with --list",
+            Painter::plain(),
+        )];
+        planned.extend(plan_changes(&apt.0, &inventory, &plan, Painter::plain()));
         report.block(planned);
-        report.block(rejected_section(&rejected));
+        report.block(rejected_section(&rejected, Painter::plain()));
         let expected = vec![
             "apt-scout 0.1.0 · Ubuntu 24.04 (noble) · country: United States (--country)".to_string(),
             String::new(),
@@ -3888,6 +4512,408 @@ mod tests {
         assert_eq!(
             as_cell(&resolved, None, "http://a.example/ubuntu"),
             Some("64500 unknown".to_string())
+        );
+    }
+
+    /// An apt root, its inventory and the plan a write would make, so a report test can print the
+    /// `Planned change` section without going near a real `/etc/apt`.
+    fn sample_plan(tag: &str) -> (TempApt, sources::Inventory, plan::Plan) {
+        let apt = TempApt::new(tag);
+        apt.write(
+            "sources.list.d/ubuntu.sources",
+            "# noble\nTypes: deb\nURIs: http://archive.ubuntu.com/ubuntu\nSuites: noble noble-updates\nComponents: main\n\nTypes: deb\nURIs: http://security.ubuntu.com/ubuntu\nSuites: noble-security\nComponents: main\n",
+        );
+        let hosts = listed(&["archive.ubuntu.com", "mirror.example"]);
+        let inventory = sources::inventory(&apt.0, &hosts, false);
+        let plan = build_plan(
+            &apt.0,
+            &inventory,
+            &hosts,
+            &probed(MIRROR, verify::SignatureStatus::verified_for_test()),
+            plan::Platform::Ubuntu,
+        )
+        .expect("the archive stanza is rewritable")
+        .expect("one file changes");
+        (apt, inventory, plan)
+    }
+
+    /// Every styled site in one report — the identity line, the four headings, the `sig` column, both
+    /// diff signs, a rejection reason — built with whichever painter it is given, so a colour run and
+    /// a plain run can be compared line for line (SPEC.md Output).
+    fn painted_report(
+        ink: Painter,
+        apt: &TempApt,
+        inventory: &sources::Inventory,
+        plan: &plan::Plan,
+    ) -> Vec<String> {
+        let verified = verify::SignatureStatus::verified_for_test();
+        let invalid = verify::SignatureStatus::Invalid("bad signature".into());
+        let rows = vec![
+            row(MIRROR, 0, &verified, Some("12929 same")),
+            row("http://b.example/ubuntu", 600, &invalid, None),
+        ];
+        let rejected = vec![Rejected {
+            host: "mirror.lostpacket.org".into(),
+            kind: Reject::NotFound,
+            why: "answered HTTP 404".into(),
+        }];
+        let mut report = Report::default();
+        report.line(header_identity(
+            "0.1.0",
+            "Ubuntu 24.04 (noble)",
+            "United States",
+            "--country",
+            ink,
+        ));
+        report.block(sources_section(&apt.0, inventory, ink));
+        let mut ranked_lines = vec![ranked_title(rows.len(), rows.len(), rejected.len(), ink)];
+        ranked_lines.extend(ranked_rows(&rows, ink));
+        report.block(ranked_lines);
+        report.block(detail_section(
+            &rows,
+            &Default::default(),
+            &Default::default(),
+            ink,
+        ));
+        report.block(vec![
+            ink.bold("Recommendation"),
+            recommendation(
+                &probed(MIRROR, verify::SignatureStatus::verified_for_test()),
+                "United States",
+                Some("12929 same"),
+                ink,
+            ),
+        ]);
+        let mut planned = vec![titled(
+            "Planned change",
+            "written only after the confirmation",
+            ink,
+        )];
+        planned.extend(planned_change_lines(
+            &apt.0,
+            inventory,
+            plan,
+            Some(&manifest::BackupId::from_secs(1_700_000_000).expect("a valid backup id")),
+            ink,
+        ));
+        report.block(planned);
+        report.block(rejected_lines(&rejected, false, ink));
+        report.0
+    }
+
+    /// `\x1b[…m` removed. `paint` writes nothing else, so scanning for the closing `m` is exact,
+    /// and a colour run must differ from the plain one by nothing else.
+    fn strip_escapes(line: &str) -> String {
+        let mut out = String::with_capacity(line.len());
+        let mut rest = line;
+        while let Some(at) = rest.find('\u{1b}') {
+            out.push_str(&rest[..at]);
+            let after = &rest[at + 1..];
+            let end = after.find('m').expect("paint closes every escape with 'm'");
+            rest = &after[end + 1..];
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// SPEC.md Output: colour appears only when the three inputs agree. One lone `false` is enough to
+    /// turn it off, and no pair of them turns it back on.
+    #[test]
+    fn colour_needs_all_three_conditions() {
+        assert!(colour_enabled(true, false, false));
+        assert!(!colour_enabled(false, false, false));
+        assert!(!colour_enabled(true, true, false));
+        assert!(!colour_enabled(true, false, true));
+        assert!(!colour_enabled(true, true, true));
+        assert!(!colour_enabled(false, true, false));
+        assert!(!colour_enabled(false, false, true));
+        assert!(!colour_enabled(false, true, true));
+    }
+
+    /// A plain painter returns its input, whatever the ink: this is what makes the plain bytes the
+    /// coloured bytes minus the escapes, without a branch in any render site.
+    #[test]
+    fn a_plain_painter_returns_its_input() {
+        let plain = Painter::plain();
+        assert_eq!(plain.bold("Ranked"), "Ranked");
+        assert_eq!(plain.green("ok"), "ok");
+        assert_eq!(plain.yellow("no"), "no");
+        assert_eq!(plain.red("- old"), "- old");
+        assert_eq!(plain.dim("lag"), "lag");
+        assert_eq!(paint(Style::Bold, "x", false), "x");
+    }
+
+    /// The ink table, and that `paint` is the only function that makes an escape.
+    #[test]
+    fn an_enabled_painter_wraps_the_text_in_one_escape() {
+        let ink = Painter::new(true);
+        assert_eq!(ink.bold("Section"), "\u{1b}[1mSection\u{1b}[0m");
+        assert_eq!(ink.green("ok"), "\u{1b}[32mok\u{1b}[0m");
+        assert_eq!(ink.yellow("no"), "\u{1b}[33mno\u{1b}[0m");
+        assert_eq!(ink.red("- x"), "\u{1b}[31m- x\u{1b}[0m");
+        assert_eq!(ink.dim("lag"), "\u{1b}[2mlag\u{1b}[0m");
+        assert_eq!(paint(Style::Dim, "x", true), "\u{1b}[2mx\u{1b}[0m");
+        // A plain painter over the same text is the identity, so the two differ by the escape only.
+        assert_eq!(
+            strip_escapes(&ink.bold("Section")),
+            Painter::plain().bold("Section")
+        );
+    }
+
+    /// The three ways colour is off (SPEC.md Output): stdout is not a terminal — a pipe, a file, the
+    /// container matrix — `--no-color`, and `NO_COLOR` set to any value, the empty one included.
+    /// Each one alone is enough, and each one must leave the report byte for byte as the plain one.
+    #[test]
+    fn a_report_with_colour_off_is_the_plain_report_byte_for_byte() {
+        let (apt, inventory, plan) = sample_plan("colour-off");
+        let plain = painted_report(Painter::plain(), &apt, &inventory, &plan);
+        for (stdout_is_terminal, no_color_flag, no_color_set) in [
+            (false, false, false),
+            (true, true, false),
+            (true, false, true),
+        ] {
+            let ink = Painter::new(colour_enabled(
+                stdout_is_terminal,
+                no_color_flag,
+                no_color_set,
+            ));
+            assert_eq!(
+                painted_report(ink, &apt, &inventory, &plan),
+                plain,
+                "stdout a terminal: {stdout_is_terminal}, --no-color: {no_color_flag}, NO_COLOR set: {no_color_set}"
+            );
+        }
+        // What a capture sees: no escape sequence at all, which is what the container matrix greps.
+        assert!(
+            !plain.iter().any(|line| line.contains('\u{1b}')),
+            "{plain:?}"
+        );
+    }
+
+    /// The same report painted: every other byte identical, and each SPEC.md Output site carries the
+    /// ink it names. Column width is part of the comparison, so painting a cell before padding it
+    /// would fail here.
+    #[test]
+    fn a_coloured_report_differs_from_the_plain_one_only_by_escapes() {
+        let (apt, inventory, plan) = sample_plan("colour-escapes");
+        let plain = painted_report(Painter::plain(), &apt, &inventory, &plan);
+        let coloured = painted_report(Painter::new(true), &apt, &inventory, &plan);
+        assert_ne!(coloured, plain, "something must be painted");
+        let stripped: Vec<String> = coloured.iter().map(|line| strip_escapes(line)).collect();
+        assert_eq!(stripped, plain);
+
+        // Site by site (SPEC.md Output): bold for the identity line, section headings and the
+        // recommended host; green `ok` and `+` lines; yellow `no`; red rejection reasons and `-`
+        // lines; dim `lag`, `speed` and `delay`.
+        let any = |needle: &str| coloured.iter().any(|line| line.contains(needle));
+        assert!(
+            coloured[0].starts_with("\u{1b}[1mapt-scout 0.1.0"),
+            "{}",
+            coloured[0]
+        );
+        assert!(any("\u{1b}[1mSources "));
+        assert!(any("\u{1b}[1mRanked — "));
+        assert!(any("\u{1b}[1mDetail\u{1b}[0m"));
+        assert!(any("\u{1b}[1mRecommendation\u{1b}[0m"));
+        assert!(any("\u{1b}[1mRejected — 1\u{1b}[0m"));
+        assert!(any("\u{1b}[1mPlanned change "));
+        assert!(any("\u{1b}[1mhttps://mirror.example/ubuntu/\u{1b}[0m"));
+        assert!(any("\u{1b}[2m  lag\u{1b}[0m"));
+        assert!(any("\u{1b}[2m     speed\u{1b}[0m"));
+        assert!(any("\u{1b}[2m    delay\u{1b}[0m"));
+        assert!(any("\u{1b}[32mok\u{1b}[0m"));
+        assert!(any("\u{1b}[33mno\u{1b}[0m"));
+        assert!(any("\u{1b}[31m  404"));
+        assert!(any("\u{1b}[31m    - http://archive.ubuntu.com/ubuntu"));
+        assert!(any("\u{1b}[32m    + https://mirror.example/ubuntu/"));
+    }
+
+    /// `--no-color` is a flag of its own and has no short form, so no one can bundle or guess it
+    /// (SPEC.md CLI: the one implemented flag without one).
+    #[test]
+    fn no_color_parses_and_has_no_short_form() {
+        let args =
+            parse_args_from(["--no-color"].map(str::to_string)).expect("--no-color is a flag");
+        assert!(args.no_color);
+        assert!(
+            !parse_args_from(std::iter::empty::<String>())
+                .expect("no flags")
+                .no_color
+        );
+        // `-N` and every other guess stay an unknown option, and one that exits 2.
+        for argv in ["-N", "-C", "-x"] {
+            let err = parse_args_from([argv].map(str::to_string))
+                .expect_err(&format!("{argv} must be refused"));
+            assert_eq!(err, format!("unknown option '{argv}'; try --help"));
+        }
+    }
+
+    /// `--help` stays in sync with what the run does: the flag is listed, and the help says colour and
+    /// the progress line are for a terminal only, because that is the difference a user sees between
+    /// a run here and the same run in a pipe.
+    #[test]
+    fn the_help_lists_no_color_and_says_display_is_terminal_only() {
+        assert!(HELP.contains("--no-color"), "{HELP}");
+        assert!(
+            HELP.contains("colour and the progress line are terminal-only"),
+            "{HELP}"
+        );
+        assert!(HELP.contains("NO_COLOR is unset"), "{HELP}");
+        // The flag has no short form, so the help must not invent one beside it.
+        assert!(!HELP.contains("-N, --no-color"), "{HELP}");
+    }
+
+    /// The test sink: what the run would have shown, in order, with no terminal anywhere.
+    #[derive(Default)]
+    struct RecordingSink {
+        lines: Vec<String>,
+        clears: usize,
+        settled: Vec<String>,
+    }
+
+    impl Sink for RecordingSink {
+        fn rewrite(&mut self, line: &str) {
+            self.lines.push(line.to_string());
+        }
+
+        fn clear(&mut self) {
+            self.clears += 1;
+        }
+
+        fn settle(&mut self, line: &str) {
+            self.settled.push(line.to_string());
+        }
+    }
+
+    /// The real sink's whole job: rewrite in place and erase what it leaves, so a shorter line never
+    /// leaves the tail of a longer one behind and the summary stops being transient.
+    #[test]
+    fn the_stderr_sink_rewrites_in_place_and_erases_what_it_leaves() {
+        let mut sink = StderrSink::with_writer(Vec::new());
+        sink.rewrite("ranking");
+        sink.clear();
+        sink.settle("done — 1 usable, 0 rejected in 0.2 s");
+        assert_eq!(
+            String::from_utf8(sink.err).expect("ASCII"),
+            "\rranking\u{1b}[K\r\u{1b}[K\rdone — 1 usable, 0 rejected in 0.2 s\u{1b}[K\n"
+        );
+    }
+
+    /// A piped or logged stderr is silent: not a shorter line, not a "still working" notice, nothing
+    /// at all — and that is the same code path a terminal takes (SPEC.md Output).
+    #[test]
+    fn progress_writes_nothing_when_stderr_is_not_a_terminal() {
+        let mut progress = Progress::new(RecordingSink::default(), false);
+        progress.load();
+        progress.reference();
+        progress.probe(1, 3);
+        progress.probe(2, 3);
+        progress.probe(3, 3);
+        progress.ranked();
+        progress.clear();
+        progress.finish(4, 0);
+        assert!(progress.sink.lines.is_empty(), "{:?}", progress.sink.lines);
+        assert_eq!(progress.sink.clears, 0);
+        assert!(
+            progress.sink.settled.is_empty(),
+            "{:?}",
+            progress.sink.settled
+        );
+    }
+
+    /// At a terminal the run names each phase it is in and how far probing got, and it ends with the one
+    /// summary line: nothing transient survives into the report (SPEC.md Output).
+    #[test]
+    fn progress_names_each_phase_and_ends_with_the_summary() {
+        let mut progress = Progress::new(RecordingSink::default(), true);
+        progress.load();
+        progress.reference();
+        progress.probe(1, 3);
+        progress.probe(2, 3);
+        progress.probe(3, 3);
+        progress.ranked();
+        // A warning that lands mid-run erases the live line instead of sharing it.
+        progress.clear();
+        progress.finish(4, 0);
+        assert_eq!(
+            progress.sink.lines,
+            [
+                "loading the mirror list",
+                "verifying the reference",
+                "probing 3 mirrors… 1/3",
+                "probing 3 mirrors… 2/3",
+                "probing 3 mirrors… 3/3",
+                "ranking",
+            ]
+        );
+        assert_eq!(progress.sink.clears, 1);
+        assert_eq!(
+            progress.sink.settled.len(),
+            1,
+            "one summary, and nothing after it"
+        );
+        let summary = &progress.sink.settled[0];
+        let number = summary
+            .strip_prefix("done — 4 usable, 0 rejected in ")
+            .and_then(|rest| rest.strip_suffix(" s"))
+            .unwrap_or_else(|| panic!("not the summary line: {summary}"));
+        assert!(number.parse::<f64>().is_ok(), "{summary}");
+    }
+
+    /// One candidate is not "1 mirrors": the line counts the way a person says it.
+    #[test]
+    fn a_single_candidate_is_not_plural() {
+        let mut progress = Progress::new(RecordingSink::default(), true);
+        progress.probe(1, 1);
+        assert_eq!(progress.sink.lines, ["probing 1 mirror… 1/1"]);
+    }
+
+    /// "The candidates probed so far" (SPEC.md Output): the count comes from the probes that have
+    /// finished, not from the joins, so it starts at the truth and moves while the slow ones run —
+    /// with the first probe slow, a join-driven count would sit on `1/2` while `2/2` was the truth.
+    #[test]
+    fn the_probe_count_follows_the_probes_that_finished() {
+        let slow = thread::spawn(|| thread::sleep(Duration::from_millis(60)));
+        let quick = thread::spawn(|| ());
+        let mut progress = Progress::new(RecordingSink::default(), true);
+        assert_eq!(await_probes(vec![slow, quick], &mut progress).len(), 2);
+        let frames = &progress.sink.lines;
+        // The first frame is honest: nothing has finished yet, so it does not claim one.
+        assert_eq!(
+            frames.first().map(String::as_str),
+            Some("probing 2 mirrors… 0/2")
+        );
+        let counts: Vec<usize> = frames
+            .iter()
+            .map(|frame| {
+                frame
+                    .split_once('/')
+                    .and_then(|(left, _)| left.split_whitespace().next_back())
+                    .and_then(|n| n.parse().ok())
+                    .unwrap_or_else(|| panic!("not a counting frame: {frame}"))
+            })
+            .collect();
+        assert!(counts.len() >= 2, "{frames:?}");
+        // Each frame counts one more probe, so the line never claims a probe that is not done.
+        assert!(counts.windows(2).all(|w| w[0] < w[1]), "{frames:?}");
+        assert_eq!(counts.last(), Some(&2));
+    }
+
+    /// The one line that survives, with one decimal place, as SPEC.md Output spells it.
+    #[test]
+    fn the_summary_line_has_one_decimal_place() {
+        assert_eq!(
+            done_line(4, 0, Duration::from_millis(3_100)),
+            "done — 4 usable, 0 rejected in 3.1 s"
+        );
+        assert_eq!(
+            done_line(2, 7, Duration::from_millis(59_940)),
+            "done — 2 usable, 7 rejected in 59.9 s"
+        );
+        // The counts come from the ranked title, which a run with nothing usable still carries.
+        assert_eq!(
+            done_line(0, 0, Duration::from_millis(40)),
+            "done — 0 usable, 0 rejected in 0.0 s"
         );
     }
 }
