@@ -724,4 +724,84 @@ else
   fail "W24 third-party and PPA lines -> exit $rc: $(printf '%s\n' "$got" | head -14)"
 fi
 
+# W25 Live (needs internet): the one automatic widening. Nothing about the page is hard-coded: the
+#   container learns this country's own hosts from the run's own `Ranked` table, maps every one of
+#   them to 127.0.0.1 in /etc/hosts (the resolver drops loopback addresses, so each fails fast
+#   without reaching the network), and then runs the same country for real. With the country's whole
+#   set unusable the run must widen once, say so on its own line, and write a mirror from outside
+#   that set — a run that did not widen fails at `no mirror passed the freshness and reachability
+#   checks` and writes nothing. Neither run's mirror is named.
+rc=0; got=$(run bridge ubuntu:24.04 sh -c "$FIX_DEB822
+apt-get update -qq >/dev/null 2>&1
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gpgv ubuntu-keyring >/dev/null 2>&1 || { echo DEPENDENCY_INSTALL_FAILED; exit 9; }
+ranked_hosts() { awk '/^Ranked/{f=1;next} f&&/^[[:space:]]*\$/{exit} f' \"\$1\" | grep -oE 'https?://[^/ ]+' | sed -E 's|^https?://||' | sort -u; }
+/apt-scout --list --country LT --top 30 --verbose > /tmp/list1 2>&1 || { echo LIST_FAILED; exit 8; }
+ranked_hosts /tmp/list1 > /tmp/lt-hosts
+echo blocked=\$(wc -l < /tmp/lt-hosts)
+[ -s /tmp/lt-hosts ] || { echo NO_HOSTS; exit 7; }
+while read -r h; do printf '127.0.0.1 %s\n' \"\$h\" >> /etc/hosts; done < /tmp/lt-hosts
+sleep 1
+rc1=0; /apt-scout --country LT --yes > /tmp/run1 2>&1 || rc1=\$?
+echo run1-rc=\$rc1
+host=\$(grep -oE 'URIs: [a-z]+://[^ /]+' /etc/apt/sources.list.d/ubuntu.sources | head -n 1 | sed -E 's|^URIs: [a-z]+://||; s|/.*||')
+echo written-host=\$host
+# The recommendation names the mirror's country, not the run's: this run asked for LT and selected
+# a foreign mirror, so a line that still says Lithuania is the bug SPEC.md CLI forbids.
+echo rec=\$(grep -E '— (freshest|closest) ' /tmp/run1 | head -n 1)
+echo BLOCKED-BEGIN; cat /tmp/lt-hosts; echo BLOCKED-END
+echo RUN1; cat /tmp/run1" 2>&1) || rc=$?
+written=$(printf '%s\n' "$got" | sed -n 's/^written-host=//p')
+blocked=$(printf '%s\n' "$got" | sed -n '/^BLOCKED-BEGIN$/,/^BLOCKED-END$/p' | grep -v '^BLOCKED-')
+run1_out=$(printf '%s\n' "$got" | sed -n '/^RUN1$/,$p')
+if [[ "$got" == *"DEPENDENCY_INSTALL_FAILED"* ]]; then
+  fail "W25 widening -> apt-get install gpgv ubuntu-keyring failed in the container (live-network reason)"
+elif [[ "$got" == *"NO_HOSTS"* || "$got" == *"LIST_FAILED"* ]]; then
+  fail "W25 widening -> the learning pass (--list --country LT) named no ranked host: $(printf '%s\n' "$got" | head -6)"
+elif [ "$rc" -ne 0 ] || ! printf '%s\n' "$got" | grep -qx 'run1-rc=0'; then
+  fail "W25 widening -> the country's own set blocked and the run did not recover: $(printf '%s\n' "$got" | head -8)"
+elif [ -n "$written" ] && [ -n "$blocked" ] \
+  && printf '%s\n' "$blocked" | grep -qvxF "$written" \
+  && printf '%s\n' "$run1_out" | grep -qE '^note: no usable mirror in ' \
+  && printf '%s\n' "$run1_out" | grep -qF 'note: no usable mirror in Lithuania (LT)' \
+  && rec=$(printf '%s\n' "$got" | sed -n 's/^rec=//p') && [ -n "$rec" ] && [[ "$rec" != *Lithuania* ]]; then
+  pass "W25 widening -> every LT mirror blocked, a foreign mirror ($written) written, the note says why"
+else
+  fail "W25 widening -> written='$written' blocked=$(printf '%s\n' "$blocked" | wc -l): $(printf '%s\n' "$run1_out" | head -14)"
+fi
+
+# W26 Live (needs internet): `--any` makes the country display-only. The same learning pass gives the
+#   country's own host set; a `--any` run then has to say in its header that the country is not a
+#   constraint, rank at least one host from outside that set, and print no widening line — it never
+#   widens, because its set already is every country. Which mirror it ranks first is never asserted.
+rc=0; got=$(run bridge ubuntu:24.04 sh -c "$FIX_DEB822
+apt-get update -qq >/dev/null 2>&1
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gpgv ubuntu-keyring >/dev/null 2>&1 || { echo DEPENDENCY_INSTALL_FAILED; exit 9; }
+ranked_hosts() { awk '/^Ranked/{f=1;next} f&&/^[[:space:]]*\$/{exit} f' \"\$1\" | grep -oE 'https?://[^/ ]+' | sed -E 's|^https?://||' | sort -u; }
+/apt-scout --list --country LT --top 30 --verbose > /tmp/list1 2>&1 || { echo LIST_FAILED; exit 8; }
+ranked_hosts /tmp/list1 > /tmp/lt-hosts
+echo lt-hosts=\$(wc -l < /tmp/lt-hosts)
+[ -s /tmp/lt-hosts ] || { echo NO_HOSTS; exit 7; }
+rc2=0; /apt-scout --list --any --country LT --top 30 --verbose > /tmp/run2 2>&1 || rc2=\$?
+echo run2-rc=\$rc2
+ranked_hosts /tmp/run2 > /tmp/any-hosts
+echo any-hosts=\$(wc -l < /tmp/any-hosts)
+echo outside=\$(comm -13 /tmp/lt-hosts /tmp/any-hosts | wc -l)
+echo RUN2; cat /tmp/run2" 2>&1) || rc=$?
+run2_out=$(printf '%s\n' "$got" | sed -n '/^RUN2$/,$p')
+outside=$(printf '%s\n' "$got" | sed -n 's/^outside=//p')
+lt_hosts=$(printf '%s\n' "$got" | sed -n 's/^lt-hosts=//p')
+if [[ "$got" == *"DEPENDENCY_INSTALL_FAILED"* ]]; then
+  fail "W26 --any -> apt-get install gpgv ubuntu-keyring failed in the container (live-network reason)"
+elif [[ "$got" == *"NO_HOSTS"* || "$got" == *"LIST_FAILED"* ]]; then
+  fail "W26 --any -> the learning pass (--list --country LT) named no ranked host: $(printf '%s\n' "$got" | head -6)"
+elif [ "$rc" -ne 0 ] || ! printf '%s\n' "$got" | grep -qx 'run2-rc=0'; then
+  fail "W26 --any -> the flag was refused or the run failed: $(printf '%s\n' "$got" | head -8)"
+elif printf '%s\n' "$run2_out" | grep -qF 'country: Lithuania (--country, not a constraint)' \
+  && [ -n "$outside" ] && [ "$outside" -gt 0 ] \
+  && ! printf '%s\n' "$run2_out" | grep -qE '^note: no usable mirror in '; then
+  pass "W26 --any -> country not a constraint, $outside of the ranked hosts outside Lithuania's own set, no widening note"
+else
+  fail "W26 --any -> outside=$outside lt-hosts=$lt_hosts: $(printf '%s\n' "$run2_out" | head -14)"
+fi
+
 exit $status

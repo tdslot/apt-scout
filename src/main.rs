@@ -38,6 +38,8 @@ struct Args {
     top: usize,
     https_only: bool,
     no_geo: bool,
+    /// `--any`: the country stops constraining the candidate set and becomes display-only.
+    any: bool,
     list: bool,
     yes: bool,
     /// `--verbose`: per-mirror detail and each rejection's full reason.
@@ -56,6 +58,7 @@ fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args, Strin
         top: DEFAULT_TOP,
         https_only: false,
         no_geo: false,
+        any: false,
         list: false,
         yes: false,
         verbose: false,
@@ -65,13 +68,14 @@ fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args, Strin
     while let Some(arg) = it.next() {
         // Each short alias is the same arm as its long form, and the value-taking ones name the
         // spelling the user typed in their error, so a message never points at a flag they did not
-        // write. Only these aliases exist; `-a`, `-r` and `-R` stay reserved for flags that are not
+        // write. Only these aliases exist; `-r` and `-R` stay reserved for flags that are not
         // implemented yet, and bundling (`-lyc NO`) stays an unknown option.
         match arg.as_str() {
             "--list" | "-l" => a.list = true,
             "--yes" | "-y" => a.yes = true,
             "--https-only" | "-s" => a.https_only = true,
             "--no-geo" | "-n" => a.no_geo = true,
+            "--any" | "-a" => a.any = true,
             "--verbose" | "-v" => a.verbose = true,
             // The one implemented flag without a short form, so `-N` stays an unknown option.
             "--no-color" => a.no_color = true,
@@ -126,7 +130,8 @@ USAGE
 
 DISCOVERY
   -c, --country <CC>  two-letter country; overrides detection
-  -n, --no-geo        no geolocation; requires --country
+  -a, --any           ignore the country; rank every country together
+  -n, --no-geo        no geolocation; requires --country or --any
   -s, --https-only    only https mirrors
   -t, --top <N>       rows to show (default 5)
   -v, --verbose       per-mirror detail and full rejection reasons
@@ -188,6 +193,11 @@ fn sudo_command(args: &Args) -> String {
     }
     if args.no_geo {
         line.push_str(" --no-geo");
+    }
+    // A `sudo` line that dropped this one would run a different candidate set, so the flag that
+    // decided the set has to travel with it (SPEC.md CLI: the line repeats the flags of the run).
+    if args.any {
+        line.push_str(" --any");
     }
     if args.top != DEFAULT_TOP {
         line.push_str(&format!(" --top {}", args.top));
@@ -473,8 +483,8 @@ fn now_secs() -> Result<u64, (u8, String)> {
 }
 
 fn validate_geo_args(args: &Args) -> Result<(), String> {
-    if args.no_geo && args.country.is_none() {
-        return Err("--no-geo needs --country <CC>, because nothing else can tell which country you are in. Example: --no-geo --country LT".to_string());
+    if args.no_geo && args.country.is_none() && !args.any {
+        return Err("--no-geo needs --country <CC> or --any, because nothing else can tell which country you are in. Example: --no-geo --country LT".to_string());
     }
     if let Some(country) = args.country.as_deref()
         && countries::launchpad_name(country).is_none()
@@ -824,6 +834,70 @@ fn await_probes<T, S: Sink>(
         thread::sleep(PROBE_POLL);
     }
     handles.into_iter().map(|h| h.join()).collect()
+}
+
+/// Probe one batch of candidates, each on its own thread with its own `Net`, and hand the answers back
+/// in candidate order. Both passes use this, so the one widening probes exactly as pass 1 does. A
+/// probe thread that crashed is reported as a rejection instead of becoming a silent gap: `probe`
+/// has no panic path of its own, so a crash is a bug and the run says so.
+fn probe_candidates<S: Sink>(
+    candidates: &[mirrors::Mirror],
+    codename: &str,
+    arch: &str,
+    progress: &mut Progress<S>,
+    rejected: &mut Vec<Rejected>,
+) -> ProbeBatch {
+    let handles: Vec<_> = candidates
+        .iter()
+        .cloned()
+        .map(|m| {
+            let (codename, arch) = (codename.to_string(), arch.to_string());
+            thread::spawn(move || {
+                let net = Net::new();
+                let r = probe::probe(&net, &m.url, &codename, &arch);
+                (m, r)
+            })
+        })
+        .collect();
+    let mut batch = Vec::new();
+    for (m, joined) in candidates.iter().zip(await_probes(handles, progress)) {
+        match joined {
+            Ok(done) => batch.push(done),
+            Err(_) => rejected.push(Rejected {
+                host: m.url.trim_end_matches('/').to_string(),
+                kind: Reject::Crashed,
+                why: "the probe crashed unexpectedly".to_string(),
+            }),
+        }
+    }
+    batch
+}
+
+/// Where the country in the header came from, and whether it constrains anything. Under `--any` the
+/// country is display-only, so the header says `not a constraint` instead of reading like a filter
+/// that decided the candidate set (SPEC step 4); with no country at all it reads `any (--any)`.
+fn origin_label(any: bool, country_known: bool, given: bool) -> &'static str {
+    if any {
+        match (country_known, given) {
+            (false, _) => "--any",
+            (true, true) => "--country, not a constraint",
+            (true, false) => "detected, not a constraint",
+        }
+    } else if given {
+        "--country"
+    } else {
+        "detected"
+    }
+}
+
+/// The country a recommendation names: the selected mirror's own, which `detail_of` recorded from the
+/// list. It is the mirror's and not the run's, because the two differ once a run is not narrowed to
+/// its own country (SPEC.md CLI); `unknown` covers a mirror whose probe recorded none.
+fn recommendation_country<'a>(
+    details: &'a std::collections::HashMap<String, Detail>,
+    url: &str,
+) -> &'a str {
+    details.get(url).map_or("unknown", |d| d.country.as_str())
 }
 
 /// The run's identity: version, release and the country the run used, with the source of the
@@ -1441,33 +1515,69 @@ fn run() -> Result<u8, (u8, String)> {
             }
         }
     }
-    let country = args.country.clone().or(geo.country.clone()).ok_or((
-        2,
-        "cannot tell which country you are in (every geolocation source failed or was skipped). Pass it with --country <CC>, for example --country LT.".to_string(),
-    ))?;
-    let country_origin = if args.country.is_some() {
-        "--country"
-    } else {
-        "detected"
+    // `--any` needs no country at all: the country is display-only there, so a failed detection is
+    // not a reason to stop (SPEC step 2 and step 4).
+    let country = match (args.country.clone().or(geo.country.clone()), args.any) {
+        (Some(found), _) => Some(found),
+        (None, true) => None,
+        (None, false) => {
+            return Err((
+                2,
+                "cannot tell which country you are in (every geolocation source failed or was skipped). Pass it with --country <CC>, for example --country LT.".to_string(),
+            ));
+        }
     };
+    // Where the country in the header came from, and whether it constrains anything. `--any` says so
+    // in the header itself, because a run that ignores the country must not look narrowed to it.
+    let country_origin = origin_label(args.any, country.is_some(), args.country.is_some());
 
-    let country_name = countries::launchpad_name(&country).ok_or_else(|| {
-        (
-            2,
-            format!("unknown country code '{country}'; Launchpad lists mirrors in 82 countries, for example LT, NO, DE, GB, US"),
-        )
-    })?;
+    let country_name = match &country {
+        Some(cc) => Some(countries::launchpad_name(cc).ok_or_else(|| {
+            (
+                2,
+                format!("unknown country code '{cc}'; Launchpad lists mirrors in 82 countries, for example LT, NO, DE, GB, US"),
+            )
+        })?),
+        None => None,
+    };
+    // What the header prints, and the name a widened run's note repeats.
+    let country_label = country_name.unwrap_or("any");
 
     // SPEC.md Output: progress is for a person watching the run work, so the sink is inert unless
     // standard error is a terminal. The clock starts here, before the list loads, so the summary
     // spans the four phases it names.
     let mut progress = Progress::new(StderrSink::new(), io::stderr().is_terminal());
-    let (mut cands, list_source, list_roots) =
-        load_with_progress(&net, &country, country_name, args.https_only, &mut progress)?;
+    let LoadedCandidates {
+        found,
+        source: list_source,
+        roots: list_roots,
+        rest,
+    } = load_with_progress(
+        &net,
+        country.as_deref().map(|cc| Country {
+            cc,
+            name: country_name.unwrap_or(""),
+        }),
+        !args.any,
+        args.https_only,
+        &mut progress,
+    )?;
     // Different list sources can name the same mirror twice (with and without a trailing slash).
     let mut seen = std::collections::HashSet::new();
-    cands.retain(|m| seen.insert(m.url.trim_end_matches('/').to_ascii_lowercase()));
-    cands.truncate(MAX_CANDIDATES);
+    let mut kept = found;
+    kept.retain(|m| seen.insert(candidate_key(&m.url)));
+    // A narrowed set keeps list order and takes the first 30; a set that is not narrowed to one
+    // country is capped by Launchpad's declared link speed, then URL, because the page names about
+    // 560 mirrors and probing them all is not a burst any run makes (SPEC step 4).
+    let cands = if args.any {
+        global_selection(&kept, MAX_CANDIDATES)
+    } else {
+        kept.truncate(MAX_CANDIDATES);
+        kept
+    };
+    // What this pass probes, so the one widening can never probe a mirror twice.
+    let probed_keys: std::collections::HashSet<String> =
+        cands.iter().map(|m| candidate_key(&m.url)).collect();
 
     // The places the loaded list says an Ubuntu archive lives. Eligibility is host **and** path from
     // every country's Launchpad entry, so a mirror this tool wrote survives `--country`; `--https-only`
@@ -1495,7 +1605,7 @@ fn run() -> Result<u8, (u8, String)> {
     report.line(header_identity(
         env!("CARGO_PKG_VERSION"),
         &distro_label,
-        country_name,
+        country_label,
         country_origin,
         ink,
     ));
@@ -1539,46 +1649,30 @@ fn run() -> Result<u8, (u8, String)> {
             None
         }
     };
-    let handles: Vec<_> = cands
-        .iter()
-        .cloned()
-        .map(|m| {
-            let (codename, arch) = (codename.clone(), arch.clone());
-            thread::spawn(move || {
-                let net = Net::new();
-                let r = probe::probe(&net, &m.url, &codename, &arch);
-                (m, r)
-            })
-        })
-        .collect();
-    let mut results = Vec::new();
     let mut rejected: Vec<Rejected> = Vec::new();
-    for (m, joined) in cands.iter().zip(await_probes(handles, &mut progress)) {
-        match joined {
-            Ok(done) => results.push(done),
-            Err(_) => rejected.push(Rejected {
-                host: m.url.trim_end_matches('/').to_string(),
-                kind: Reject::Crashed,
-                why: "the probe crashed unexpectedly".to_string(),
-            }),
-        }
-    }
+    let mut results = probe_candidates(&cands, &codename, &arch, &mut progress, &mut rejected);
+
+    // SPEC step 4: one extra pass, and only from an empty set. `--any` already made the set every
+    // country, so an empty one means nothing usable anywhere. Everything below ranks one union and
+    // never learns that a widening happened, except the `note:` line the header block carries.
+    let widening = if args.any {
+        Widening::NotAsked
+    } else {
+        widen_if_empty(
+            &mut results,
+            rest.as_deref(),
+            &probed_keys,
+            country_label,
+            reference.as_ref(),
+            MAX_CANDIDATES,
+            &mut |batch| probe_candidates(batch, &codename, &arch, &mut progress, &mut rejected),
+        )
+    };
 
     // Read-only ranking baseline (SPEC step 8): the canonical archive; when it was unreachable, the
-    // newest candidate date, verified or not, because ranking must work without `gpgv`.
-    let baseline = reference
-        .as_ref()
-        .map(|r| r.updates)
-        .or_else(|| {
-            display_baseline_fallback(
-                results
-                    .iter()
-                    .filter_map(|(_, r)| r.as_ref().ok())
-                    .map(|o| o.updates_date)
-                    .collect(),
-            )
-        })
-        .unwrap_or(0);
+    // newest candidate date, verified or not, because ranking must work without `gpgv`. Read over the
+    // union, so a widened mirror is not called stale against pass 1's newest date.
+    let baseline = ranking_baseline(reference.as_ref(), &results);
     // Write baseline (SPEC: Freshness trust boundary, ruling 5): verified values only, so a write
     // fails closed when nothing verified. The writer holds the selected mirror's proof against it.
     let trusted_baseline = write_baseline(
@@ -1667,11 +1761,25 @@ fn run() -> Result<u8, (u8, String)> {
         server_asn.as_deref(),
         args.top,
     );
-    report.block(vec![header_context(
-        server_asn.as_deref(),
-        list_source,
-        reference.as_ref(),
-    )]);
+    report.block({
+        let mut header = vec![header_context(
+            server_asn.as_deref(),
+            list_source,
+            reference.as_ref(),
+        )];
+        // SPEC.md Output: the reason a run widened is one line directly under the header and before
+        // the table. It belongs to this block, not the ranked one, so the no-fresh-mirror return
+        // prints it too.
+        header.extend(set_note(
+            &widening,
+            args.any,
+            rest.is_none(),
+            country_label,
+            country.as_deref().unwrap_or("unknown"),
+            list_source,
+        ));
+        header
+    });
     let mut ranked_lines = vec![ranked_title(rows.len(), ranked.len(), rejected.len(), ink)];
     ranked_lines.extend(ranked_rows(&rows, ink));
     // A run with no AS data says why under the table, once, instead of printing a column of
@@ -1691,9 +1799,12 @@ fn run() -> Result<u8, (u8, String)> {
         return Err(no_fresh_mirror());
     };
     let best_cell = as_cell(&mirror_asn, server_asn.as_deref(), &best.url);
+    // The mirror's own country, not the run's: only the mirror's is a fact about the mirror (SPEC.md
+    // CLI), and the two differ once a run is not narrowed to one country.
+    let best_country = recommendation_country(&details, &best.url);
     report.block(vec![
         ink.bold("Recommendation"),
-        recommendation(best, country_name, best_cell.as_deref(), ink),
+        recommendation(best, best_country, best_cell.as_deref(), ink),
     ]);
 
     let platform = if d.id == "pop" {
@@ -2127,9 +2238,171 @@ fn write_baseline(
         .or_else(|| fallback_baseline(candidates))
 }
 
-/// What one mirror-list source produced: the candidates, the name of the list that supplied them,
-/// and the run's mirror roots (see `load_candidates` for the contract between the first and last).
-type LoadedCandidates = (Vec<mirrors::Mirror>, &'static str, Vec<sources::MirrorRoot>);
+/// The country a run narrows to: the code the `mirrors.ubuntu.com` fallback needs and the name
+/// Launchpad groups its entries under. `None` only under `--any` with no country known, where the
+/// country is display-only and nothing needs narrowing (SPEC step 4).
+struct Country<'a> {
+    cc: &'a str,
+    name: &'a str,
+}
+
+/// What one mirror-list source produced. `found` is what this run probes; `rest` is the same loaded
+/// list un-narrowed, kept so the one widening of SPEC step 4 can add every other country without a
+/// second fetch, and `None` when the list names one country and cannot widen. `roots` is the rewrite
+/// eligibility set (see `load_candidates` for its contract).
+#[derive(Debug)]
+struct LoadedCandidates {
+    found: Vec<mirrors::Mirror>,
+    source: &'static str,
+    roots: Vec<sources::MirrorRoot>,
+    rest: Option<Vec<mirrors::Mirror>>,
+}
+
+/// `cap` mirrors out of a set that is **not** narrowed to one country, chosen by Launchpad's own
+/// declared link speed, descending, then by URL so the answer is deterministic. `None` sorts last:
+/// a mirror that declares no speed is not read as a fast one (SPEC step 4). This decides what is
+/// probed and never what ranks.
+fn global_selection(all: &[mirrors::Mirror], cap: usize) -> Vec<mirrors::Mirror> {
+    let speed = |m: &mirrors::Mirror| mirrors::declared_speed_bps(m.speed.as_deref().unwrap_or(""));
+    let mut sorted: Vec<&mirrors::Mirror> = all.iter().collect();
+    sorted.sort_by(|a, b| speed(b).cmp(&speed(a)).then_with(|| a.url.cmp(&b.url)));
+    sorted.into_iter().take(cap).cloned().collect()
+}
+
+/// The dedupe key of one candidate: a trailing slash and the case of the host do not make a second
+/// mirror, so the same entry can never be probed twice (SPEC step 4).
+fn candidate_key(url: &str) -> String {
+    url.trim_end_matches('/').to_ascii_lowercase()
+}
+
+/// What pass 1 found out about SPEC step 4's one widening: whether it was not asked for, not needed,
+/// done, or impossible with the list this run loaded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Widening {
+    /// `--any`: the candidate set already is every country, so an empty one means nothing usable
+    /// anywhere and there is nothing to widen from or to.
+    NotAsked,
+    /// The run's own country had a usable mirror. The set is untouched and nothing is spawned.
+    NotNeeded,
+    /// `added` mirrors from other countries were probed and appended to the same results.
+    Widened { added: usize },
+    /// The only list this run loaded names one country, so there is nothing to widen to.
+    Impossible,
+}
+
+/// One probe batch's answers, one per mirror that produced a result: a crashed probe thread is
+/// reported by whoever ran the batch, so a batch answer is never ambiguous about a mirror.
+type ProbeBatch = Vec<(mirrors::Mirror, Result<probe::Outcome, probe::ProbeError>)>;
+
+/// The freshness baseline a read-only run ranks against (SPEC step 8): the canonical reference;
+/// when it was unreachable, the newest sane candidate date, verified or not, because ranking must
+/// work without `gpgv`. It is a function of the candidate set, so a widened run ranks the union
+/// against the union's newest date instead of pass 1's.
+fn ranking_baseline(
+    reference: Option<&probe::Reference>,
+    results: &[(mirrors::Mirror, Result<probe::Outcome, probe::ProbeError>)],
+) -> i64 {
+    reference
+        .map(|r| r.updates)
+        .or_else(|| {
+            display_baseline_fallback(
+                results
+                    .iter()
+                    .filter_map(|(_, r)| r.as_ref().ok())
+                    .map(|o| o.updates_date)
+                    .collect(),
+            )
+        })
+        .unwrap_or(0)
+}
+
+/// How many of a pass's candidates produced a usable mirror: a probe that answered and whose
+/// `-updates` date is not stale against `baseline`. Every other outcome — unreachable, non-200, no
+/// usable `InRelease` or `Date`, no speed sample, a crashed probe — is not usable.
+fn usable_mirrors(
+    results: &[(mirrors::Mirror, Result<probe::Outcome, probe::ProbeError>)],
+    baseline: i64,
+) -> usize {
+    results
+        .iter()
+        .filter(|(_, answer)| match answer {
+            Ok(o) => !fresh::is_stale(fresh::lag(baseline, o.updates_date)),
+            Err(_) => false,
+        })
+        .count()
+}
+
+/// SPEC step 4's one automatic widening, and the only place it may happen: when the run's own
+/// country yielded nothing usable, add the mirrors the **already loaded** list names for every other
+/// country, probe them in one extra pass and append them to the same results, so one pipeline ranks
+/// one union. `--any` never widens. A run that found one usable mirror in its own country never
+/// widens, and no candidate is probed twice: both are the difference between an answer to an empty
+/// set and a preference for foreign mirrors.
+fn widen_if_empty(
+    results: &mut Vec<(mirrors::Mirror, Result<probe::Outcome, probe::ProbeError>)>,
+    rest: Option<&[mirrors::Mirror]>,
+    already: &std::collections::HashSet<String>,
+    own_country: &str,
+    reference: Option<&probe::Reference>,
+    cap: usize,
+    probe_batch: &mut dyn FnMut(&[mirrors::Mirror]) -> ProbeBatch,
+) -> Widening {
+    if usable_mirrors(results, ranking_baseline(reference, results)) > 0 {
+        return Widening::NotNeeded;
+    }
+    let Some(rest) = rest else {
+        return Widening::Impossible;
+    };
+    // The same dedupe key as pass 1, seeded with what pass 1 probed, so a mirror that is in the
+    // un-narrowed list *and* in the country's own set is never probed twice.
+    let mut seen = already.clone();
+    let mut others: Vec<mirrors::Mirror> = Vec::new();
+    for m in rest {
+        if m.country == own_country || !seen.insert(candidate_key(&m.url)) {
+            continue;
+        }
+        others.push(m.clone());
+    }
+    let selection = global_selection(&others, cap);
+    if selection.is_empty() {
+        // Nothing outside the country is left to probe, so the candidate set does not change and
+        // there is nothing to announce: the run fails exactly as it did before.
+        return Widening::Widened { added: 0 };
+    }
+    let mut added = 0;
+    for (m, answer) in probe_batch(&selection) {
+        results.push((m, answer));
+        added += 1;
+    }
+    Widening::Widened { added }
+}
+
+/// The one line a widened run owes the user, in `as_note`'s voice, printed under the report header
+/// and before the table: the one thing this feature must not do is silently prefer a foreign mirror
+/// (SPEC step 4). `--any` never widens, and a run whose candidate set did not change says nothing.
+fn set_note(
+    widening: &Widening,
+    any: bool,
+    rest_is_none: bool,
+    country: &str,
+    cc: &str,
+    source: &str,
+) -> Option<String> {
+    match widening {
+        Widening::Widened { added } if *added > 0 => Some(format!(
+            "note: no usable mirror in {country} ({cc}), so every country's mirrors were added and ranked together"
+        )),
+        Widening::Impossible => Some(format!(
+            "note: no usable mirror in {country} ({cc}), and the list from {source} names only that country, so there is nothing to widen to"
+        )),
+        // `--any` cannot widen, so a run whose only list names one country says which set it read
+        // instead of presenting one country's mirrors as every country's.
+        _ if any && rest_is_none => Some(format!(
+            "note: --any, but the list from {source} names only one country"
+        )),
+        _ => None,
+    }
+}
 
 /// The `(host, path)` pairs of `urls`, in the order the list gave them, plus every URL that failed
 /// candidate validation. A URL whose authority or path does not parse contributes nothing, so a tree
@@ -2174,14 +2447,14 @@ fn rejected_note(list: &str, rejected: &[String]) -> Option<String> {
 /// error that follows never lands on top of a live line (SPEC.md Output).
 fn load_with_progress<S: Sink>(
     net: &dyn Fetch,
-    cc: &str,
-    country_name: &str,
+    country: Option<Country<'_>>,
+    narrow: bool,
     https_only: bool,
     progress: &mut Progress<S>,
 ) -> Result<LoadedCandidates, (u8, String)> {
     progress.load();
     let mut notes = Vec::new();
-    let loaded = load_candidates(net, cc, country_name, https_only, &mut notes);
+    let loaded = load_candidates(net, country, narrow, https_only, &mut notes);
     // The load is over whether it worked or not, so its notes get lines of their own and the error
     // that may follow starts where the live line was.
     progress.clear();
@@ -2192,24 +2465,27 @@ fn load_with_progress<S: Sink>(
 }
 
 /// SPEC step 3: Launchpad first, then `mirrors.ubuntu.com/<CC>.txt`. Returns the candidates, the
-/// name of the source that supplied them, and the run's mirror roots; every failed source is
-/// reported with its reason.
+/// name of the source that supplied them, the run's mirror roots and the un-narrowed list; every
+/// failed source is reported with its reason.
+///
+/// `narrow` is false under `--any`, where the country stops constraining the candidate set: `found`
+/// is then every kept mirror the list names, whatever country it puts it in (SPEC step 4).
 ///
 /// The lines this load has to tell the user are pushed onto `notes` instead of written here, because
 /// the caller owns a live progress line that has to be erased before the first of them lands
 /// (SPEC.md Output). A note is produced whether the load succeeds or not, so the caller prints them
 /// before it handles the result.
 ///
-/// Contract for the third element: every mirror in the returned `Vec<Mirror>` has its `(host, path)`
-/// in it. From Launchpad that set is every host and path the page names, in every country, collected
+/// Contract for `roots`: every mirror in the returned `Vec<Mirror>` has its `(host, path)` in it.
+/// From Launchpad that set is every host and path the page names, in every country, collected
 /// before the country filter and before `keep`, so a mirror a previous run wrote stays rewritable
 /// after the operator changes country and `--https-only` does not narrow what is recognized (SPEC:
 /// Apply). When the run falls back to `<CC>.txt`, the set is that file's validated entries, because
 /// that list arrives over plain HTTP: the set fails closed rather than widening on an unverified list.
 fn load_candidates(
     net: &dyn Fetch,
-    cc: &str,
-    country_name: &str,
+    country: Option<Country<'_>>,
+    narrow: bool,
     https_only: bool,
     notes: &mut Vec<String>,
 ) -> Result<LoadedCandidates, (u8, String)> {
@@ -2224,29 +2500,55 @@ fn load_candidates(
                 // recognizability, never use. Both list sources pass the same validation here.
                 let (roots, rejected) = mirror_roots(all.iter().map(|m| m.url.as_str()));
                 notes.extend(rejected_note("Launchpad", &rejected));
-                let found: Vec<_> = all
-                    .into_iter()
-                    .filter(|m| m.country == country_name && keep(m))
-                    .collect();
+                // The same list un-narrowed, so the one widening can add another country's mirrors
+                // without a second fetch of this page. `--https-only` already applied by `keep`.
+                let kept: Vec<_> = all.into_iter().filter(|m| keep(m)).collect();
+                let found: Vec<_> = if narrow {
+                    let own = country.as_ref().map(|c| c.name);
+                    kept.iter()
+                        .filter(|m| Some(m.country.as_str()) == own)
+                        .cloned()
+                        .collect()
+                } else {
+                    kept.clone()
+                };
                 if !found.is_empty() {
-                    return Ok((found, "Launchpad", roots));
+                    return Ok(LoadedCandidates {
+                        found,
+                        source: "Launchpad",
+                        roots,
+                        rest: Some(kept),
+                    });
                 }
-                failures.push(format!(
-                    "Launchpad lists no usable mirrors for {country_name}"
-                ));
+                failures.push(match country.as_ref() {
+                    Some(c) if narrow => {
+                        format!("Launchpad lists no usable mirrors for {}", c.name)
+                    }
+                    _ => "Launchpad lists no usable mirrors".to_string(),
+                });
             }
             Err(e) => failures.push(format!("cannot read {LAUNCHPAD}: {e}")),
         },
         Err(e) => failures.push(format!("cannot load the Launchpad mirror list: {e}")),
     }
 
-    let url = format!("{TEXT_LIST}/{cc}.txt");
+    // `mirrors.ubuntu.com` names one country per run and no run fetches another country's file, so
+    // without a country there is no file to ask for and nothing to widen to (SPEC step 4). The list
+    // that is left cannot supply every country, and the run says so instead of pretending.
+    let Some(country) = country else {
+        failures.push(
+            "the mirrors.ubuntu.com fallback needs a country code, and --any without a country has none"
+                .to_string(),
+        );
+        return Err((1, no_mirror_list(&failures)));
+    };
+    let url = format!("{TEXT_LIST}/{}.txt", country.cc);
     match net.get(&url, http::MAX_SMALL, None) {
         Ok(got) => {
             let all: Vec<_> = mirrors::parse_text_list(&String::from_utf8_lossy(&got.body))
                 .into_iter()
                 .map(|u| mirrors::Mirror {
-                    country: country_name.to_string(),
+                    country: country.name.to_string(),
                     name: String::new(),
                     https: u.starts_with("https://"),
                     url: u,
@@ -2266,19 +2568,28 @@ fn load_candidates(
                     "warning: {}. Using {url} instead (its URLs come over plain HTTP, so they are unverified).",
                     failures.join("; ")
                 ));
-                return Ok((found, "mirrors.ubuntu.com (unverified)", roots));
+                return Ok(LoadedCandidates {
+                    found,
+                    source: "mirrors.ubuntu.com (unverified)",
+                    roots,
+                    // One country in this file: widening has nothing to reach, and the run says so.
+                    rest: None,
+                });
             }
             failures.push(format!("{url} has no usable mirrors"));
         }
         Err(e) => failures.push(format!("cannot load {url}: {e}")),
     }
-    Err((
-        1,
-        format!(
-            "no mirror list is available: {}. Check the network connection, or try another country with --country.",
-            failures.join("; ")
-        ),
-    ))
+    Err((1, no_mirror_list(&failures)))
+}
+
+/// The one sentence a run with no usable list fails with, so both exits from `load_candidates` say
+/// the same thing.
+fn no_mirror_list(failures: &[String]) -> String {
+    format!(
+        "no mirror list is available: {}. Check the network connection, or try another country with --country.",
+        failures.join("; ")
+    )
 }
 
 fn main() -> ExitCode {
@@ -2372,12 +2683,14 @@ mod tests {
         assert!(validate_preflight(&args, "i386").is_ok());
     }
 
+    /// `--no-geo` has nothing but `--country` or `--any` to tell it where the server is, so the usage
+    /// error names both and either satisfies it (SPEC.md CLI: `--any` needs no country at all).
     #[test]
-    fn no_geo_requires_country() {
+    fn no_geo_needs_a_country_or_any() {
         let args = parse_args_from(["--no-geo"].into_iter().map(str::to_string)).unwrap();
         assert_eq!(
             validate_geo_args(&args).unwrap_err(),
-            "--no-geo needs --country <CC>, because nothing else can tell which country you are in. Example: --no-geo --country LT"
+            "--no-geo needs --country <CC> or --any, because nothing else can tell which country you are in. Example: --no-geo --country LT"
         );
         let args = parse_args_from(
             ["--no-geo", "--country", "LT"]
@@ -2387,6 +2700,21 @@ mod tests {
         .unwrap();
         assert!(args.no_geo);
         assert_eq!(args.country.as_deref(), Some("LT"));
+        // `--any` needs no country, so it is the other way to satisfy `--no-geo`.
+        let args = parse_args_from(["-n", "-a"].into_iter().map(str::to_string)).unwrap();
+        assert!(args.any);
+        assert!(validate_geo_args(&args).is_ok());
+        let args = parse_args_from(
+            ["-n", "-a", "--country", "LT"]
+                .into_iter()
+                .map(str::to_string),
+        )
+        .unwrap();
+        assert!(validate_geo_args(&args).is_ok());
+        // The country code is still validated when one is given.
+        let args =
+            parse_args_from(["-a", "--country", "ZZ"].into_iter().map(str::to_string)).unwrap();
+        assert!(validate_geo_args(&args).is_err());
     }
 
     /// Every approved short alias is the same flag as its long form: the same `Args`, so the same
@@ -2409,6 +2737,7 @@ mod tests {
             ),
             (&["--https-only"][..], &["-s"][..]),
             (&["--verbose"][..], &["-v"][..]),
+            (&["--any"][..], &["-a"][..]),
         ] {
             assert_eq!(parse(short), parse(long), "{short:?} must be {long:?}");
         }
@@ -2416,6 +2745,11 @@ mod tests {
         assert_eq!(
             sudo_command(&parse(&["-c", "LT", "-y", "-t", "3"])),
             "sudo apt-scout --country LT --top 3 --yes"
+        );
+        // A `sudo` line that dropped `--any` would run against a different candidate set.
+        assert_eq!(
+            sudo_command(&parse(&["-a", "-c", "DE"])),
+            "sudo apt-scout --country DE --any"
         );
     }
 
@@ -2431,6 +2765,7 @@ mod tests {
         for (long, short) in [
             ("--help", "-h"),
             ("--country", "-c"),
+            ("--any", "-a"),
             ("--no-geo", "-n"),
             ("--https-only", "-s"),
             ("--top", "-t"),
@@ -2447,17 +2782,10 @@ mod tests {
     }
 
     /// One alias and one value per argument, never a bundle: `-lyc NO` stays an unknown option. The
-    /// reserved shorts stay unknown too, so `--any`, `--restore` and `--refresh` can still claim
-    /// them.
+    /// reserved shorts stay unknown too, so `--restore` and `--refresh` can still claim them.
     #[test]
     fn unknown_and_bundled_short_options_are_refused() {
-        for argv in [
-            &["-lyc", "NO"][..],
-            &["-ly"][..],
-            &["-a"][..],
-            &["-r"][..],
-            &["-R"][..],
-        ] {
+        for argv in [&["-lyc", "NO"][..], &["-ly"][..], &["-r"][..], &["-R"][..]] {
             let err = parse_args_from(argv.iter().copied().map(str::to_string))
                 .expect_err(&format!("{argv:?} must be refused"));
             assert_eq!(
@@ -2645,7 +2973,21 @@ mod tests {
             (LAUNCHPAD, Ok(LAUNCHPAD_OK)),
             ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
         ]);
-        let (c, src, _) = load_candidates(&net, "LT", "Lithuania", false, &mut Vec::new()).unwrap();
+        let LoadedCandidates {
+            found: c,
+            source: src,
+            ..
+        } = load_candidates(
+            &net,
+            Some(Country {
+                cc: "LT",
+                name: "Lithuania",
+            }),
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .unwrap();
         assert_eq!(src, "Launchpad");
         assert!(c.iter().all(|m| m.country == "Lithuania"));
         assert!(c.len() >= 4);
@@ -2657,7 +2999,21 @@ mod tests {
             (LAUNCHPAD, Err(503)),
             ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
         ]);
-        let (c, src, _) = load_candidates(&net, "LT", "Lithuania", false, &mut Vec::new()).unwrap();
+        let LoadedCandidates {
+            found: c,
+            source: src,
+            ..
+        } = load_candidates(
+            &net,
+            Some(Country {
+                cc: "LT",
+                name: "Lithuania",
+            }),
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .unwrap();
         assert_eq!(src, "mirrors.ubuntu.com (unverified)");
         assert_eq!(c.len(), 2); // the ftp:// line is dropped
         assert!(c.iter().any(|m| m.https));
@@ -2672,7 +3028,21 @@ mod tests {
                 Ok(b"http://ftp.is.example/ubuntu/\n"),
             ),
         ]);
-        let (c, src, _) = load_candidates(&net, "IS", "Iceland", false, &mut Vec::new()).unwrap();
+        let LoadedCandidates {
+            found: c,
+            source: src,
+            ..
+        } = load_candidates(
+            &net,
+            Some(Country {
+                cc: "IS",
+                name: "Iceland",
+            }),
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .unwrap();
         assert_eq!(src, "mirrors.ubuntu.com (unverified)");
         assert_eq!(c.len(), 1);
     }
@@ -2683,7 +3053,17 @@ mod tests {
             (LAUNCHPAD, Err(503)),
             ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
         ]);
-        let (c, _, _) = load_candidates(&net, "LT", "Lithuania", true, &mut Vec::new()).unwrap();
+        let LoadedCandidates { found: c, .. } = load_candidates(
+            &net,
+            Some(Country {
+                cc: "LT",
+                name: "Lithuania",
+            }),
+            true,
+            true,
+            &mut Vec::new(),
+        )
+        .unwrap();
         assert_eq!(c.len(), 1);
         assert!(c[0].https);
     }
@@ -2695,8 +3075,19 @@ mod tests {
             (LAUNCHPAD, Err(503)),
             ("http://mirrors.ubuntu.com/LT.txt", Ok(txt)),
         ]);
-        let (c, _, roots) =
-            load_candidates(&net, "LT", "Lithuania", false, &mut Vec::new()).unwrap();
+        let LoadedCandidates {
+            found: c, roots, ..
+        } = load_candidates(
+            &net,
+            Some(Country {
+                cc: "LT",
+                name: "Lithuania",
+            }),
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .unwrap();
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].url, "http://ok.example/ubuntu/");
         // The fallback list arrives over plain HTTP, so only its validated entries join the set: a
@@ -2759,8 +3150,19 @@ mod tests {
         // The same rule on the Launchpad side: its valid entries are still in the set, the invalid
         // one is in neither the set nor silence.
         let net = Canned(vec![(LAUNCHPAD, Ok(launchpad_one_bad()))]);
-        let (_, src, roots) =
-            load_candidates(&net, "DE", "Germany", false, &mut Vec::new()).unwrap();
+        let LoadedCandidates {
+            source: src, roots, ..
+        } = load_candidates(
+            &net,
+            Some(Country {
+                cc: "DE",
+                name: "Germany",
+            }),
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .unwrap();
         assert_eq!(src, "Launchpad");
         assert!(
             roots.iter().all(|r| r.host != "127.0.0.1"),
@@ -2778,8 +3180,17 @@ mod tests {
             (LAUNCHPAD, Err(503)),
             ("http://mirrors.ubuntu.com/LT.txt", Err(404)),
         ]);
-        let (code, msg) =
-            load_candidates(&net, "LT", "Lithuania", false, &mut Vec::new()).unwrap_err();
+        let (code, msg) = load_candidates(
+            &net,
+            Some(Country {
+                cc: "LT",
+                name: "Lithuania",
+            }),
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
         assert_eq!(code, 1);
         assert!(msg.contains("Launchpad"), "{msg}");
         assert!(msg.contains("LT.txt"), "{msg}");
@@ -2851,8 +3262,21 @@ mod tests {
             trace: trace.clone(),
         };
         let mut progress = Progress::new(TracingSink(trace.clone()), true);
-        let (cands, src, _) =
-            load_with_progress(&net, "LT", "Lithuania", false, &mut progress).unwrap();
+        let LoadedCandidates {
+            found: cands,
+            source: src,
+            ..
+        } = load_with_progress(
+            &net,
+            Some(Country {
+                cc: "LT",
+                name: "Lithuania",
+            }),
+            true,
+            false,
+            &mut progress,
+        )
+        .unwrap();
         assert!(!cands.is_empty(), "{src}");
         assert_eq!(
             trace.lines(),
@@ -2875,7 +3299,21 @@ mod tests {
             ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
         ]);
         let mut notes = Vec::new();
-        let (cands, src, _) = load_candidates(&net, "LT", "Lithuania", false, &mut notes).unwrap();
+        let LoadedCandidates {
+            found: cands,
+            source: src,
+            ..
+        } = load_candidates(
+            &net,
+            Some(Country {
+                cc: "LT",
+                name: "Lithuania",
+            }),
+            true,
+            false,
+            &mut notes,
+        )
+        .unwrap();
         assert_eq!(src, "mirrors.ubuntu.com (unverified)");
         assert!(!cands.is_empty());
         assert_eq!(notes.len(), 1, "{notes:?}");
@@ -2896,8 +3334,22 @@ mod tests {
     #[test]
     fn the_host_list_names_every_country_not_only_the_run_s_country() {
         let net = Canned(vec![(LAUNCHPAD, Ok(LAUNCHPAD_OK))]);
-        let (cands, src, roots) =
-            load_candidates(&net, "DE", "Germany", false, &mut Vec::new()).unwrap();
+        let LoadedCandidates {
+            found: cands,
+            source: src,
+            roots,
+            ..
+        } = load_candidates(
+            &net,
+            Some(Country {
+                cc: "DE",
+                name: "Germany",
+            }),
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .unwrap();
         assert_eq!(src, "Launchpad");
         assert!(cands.iter().all(|m| m.country == "Germany"));
         assert!(
@@ -2926,8 +3378,21 @@ mod tests {
     #[test]
     fn https_only_does_not_narrow_the_host_list() {
         let net = Canned(vec![(LAUNCHPAD, Ok(LAUNCHPAD_OK))]);
-        let (cands, _, roots) =
-            load_candidates(&net, "DE", "Germany", true, &mut Vec::new()).unwrap();
+        let LoadedCandidates {
+            found: cands,
+            roots,
+            ..
+        } = load_candidates(
+            &net,
+            Some(Country {
+                cc: "DE",
+                name: "Germany",
+            }),
+            true,
+            true,
+            &mut Vec::new(),
+        )
+        .unwrap();
         assert!(cands.iter().all(|m| m.https));
         // ftp.litnet.lt's only HTTP link in the fixture is `http`, so no candidate may carry it,
         // while its host must still be in the set.
@@ -2951,8 +3416,21 @@ mod tests {
             (LAUNCHPAD, Err(503)),
             ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
         ]);
-        let (cands, _, roots) =
-            load_candidates(&net, "LT", "Lithuania", true, &mut Vec::new()).unwrap();
+        let LoadedCandidates {
+            found: cands,
+            roots,
+            ..
+        } = load_candidates(
+            &net,
+            Some(Country {
+                cc: "LT",
+                name: "Lithuania",
+            }),
+            true,
+            true,
+            &mut Vec::new(),
+        )
+        .unwrap();
         assert_eq!(cands.len(), 1);
         assert!(cands.iter().all(|m| m.https));
         assert!(
@@ -2979,8 +3457,19 @@ mod tests {
             ),
         ];
         for (net, cc, name) in cases {
-            let (cands, src, roots) =
-                load_candidates(&net, cc, name, false, &mut Vec::new()).unwrap();
+            let LoadedCandidates {
+                found: cands,
+                source: src,
+                roots,
+                ..
+            } = load_candidates(
+                &net,
+                Some(Country { cc, name }),
+                true,
+                false,
+                &mut Vec::new(),
+            )
+            .unwrap();
             assert!(!cands.is_empty(), "{src}");
             for m in &cands {
                 let mine = sources::mirror_root(&m.url).expect("a validated candidate has a host");
@@ -2999,8 +3488,22 @@ mod tests {
                 (LAUNCHPAD, launchpad),
                 ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
             ]);
-            let (cands, src, roots) =
-                load_candidates(&net, "LT", "Lithuania", false, &mut Vec::new()).unwrap();
+            let LoadedCandidates {
+                found: cands,
+                source: src,
+                roots,
+                ..
+            } = load_candidates(
+                &net,
+                Some(Country {
+                    cc: "LT",
+                    name: "Lithuania",
+                }),
+                true,
+                false,
+                &mut Vec::new(),
+            )
+            .unwrap();
             assert_eq!(src, "mirrors.ubuntu.com (unverified)");
             let mut expected: Vec<sources::MirrorRoot> = cands
                 .iter()
@@ -3017,6 +3520,465 @@ mod tests {
         }
     }
 
+    /// A candidate as a list names it, with the speed the cap sorts by when one is given.
+    fn candidate(country: &str, url: &str, speed: Option<&str>) -> mirrors::Mirror {
+        mirrors::Mirror {
+            country: country.to_string(),
+            name: String::new(),
+            url: url.to_string(),
+            https: url.starts_with("https://"),
+            speed: speed.map(str::to_string),
+            status: mirrors::Status::Up,
+        }
+    }
+
+    /// A known instant every probe answer in these tests is dated around, so a lag is arithmetic
+    /// rather than a real clock.
+    const NOW: i64 = 1_760_000_000;
+
+    /// A probe answer a test can hold: the fields the widening, the note and the report read.
+    fn answer_at(url: &str, updates_date: i64) -> probe::Outcome {
+        probe::Outcome {
+            url: format!("{}/", url.trim_end_matches('/')),
+            updates_date,
+            verified_updates: None,
+            updates_signature: verify::SignatureStatus::Unavailable(
+                "not verified in a test".to_string(),
+            ),
+            security_date: None,
+            latency_ms: 10,
+            throughput_bps: 1_000_000,
+            redirected_to: None,
+        }
+    }
+
+    /// `--any` removes the country from the candidate set instead of replacing it: every country's
+    /// kept entry is what the run probes, and the same list is still on hand for the one widening
+    /// (SPEC step 4).
+    #[test]
+    fn any_does_not_narrow_the_candidates_to_one_country() {
+        let net = Canned(vec![(LAUNCHPAD, Ok(LAUNCHPAD_OK))]);
+        let LoadedCandidates { found, rest, .. } = load_candidates(
+            &net,
+            Some(Country {
+                cc: "LT",
+                name: "Lithuania",
+            }),
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let countries: std::collections::BTreeSet<&str> =
+            found.iter().map(|m| m.country.as_str()).collect();
+        assert!(
+            countries.len() > 1,
+            "every country's mirrors enter the set: {countries:?}"
+        );
+        assert!(found.iter().any(|m| m.country == "Lithuania"));
+        assert!(found.iter().any(|m| m.country == "Germany"));
+        assert_eq!(
+            rest.map(|r| r.len()),
+            Some(found.len()),
+            "one list, read once, kept un-narrowed"
+        );
+
+        // The same list narrowed to Lithuania is a different set, so the country still decides the
+        // candidates whenever it is allowed to.
+        let net = Canned(vec![(LAUNCHPAD, Ok(LAUNCHPAD_OK))]);
+        let narrowed = load_candidates(
+            &net,
+            Some(Country {
+                cc: "LT",
+                name: "Lithuania",
+            }),
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert!(narrowed.found.iter().all(|m| m.country == "Lithuania"));
+        assert!(narrowed.found.len() < found.len());
+
+        // No country known at all: Launchpad needs no country code, so the set is every country.
+        let net = Canned(vec![(LAUNCHPAD, Ok(LAUNCHPAD_OK))]);
+        let LoadedCandidates {
+            found: everywhere,
+            rest,
+            ..
+        } = load_candidates(&net, None, false, false, &mut Vec::new()).unwrap();
+        assert_eq!(everywhere.len(), found.len());
+        assert!(rest.is_some());
+    }
+
+    /// Without a country the `mirrors.ubuntu.com` fallback has no file to ask for, so a `--any` run
+    /// with no country and no Launchpad says so instead of reading one country's list as every
+    /// country's (SPEC step 4).
+    #[test]
+    fn any_without_a_country_says_the_fallback_needs_one() {
+        let net = Canned(vec![(LAUNCHPAD, Err(503))]);
+        let (code, msg) = load_candidates(&net, None, false, false, &mut Vec::new()).unwrap_err();
+        assert_eq!(code, 1);
+        assert!(
+            msg.contains("the mirrors.ubuntu.com fallback needs a country code"),
+            "{msg}"
+        );
+        assert!(msg.contains("--any without a country has none"), "{msg}");
+    }
+
+    /// The no-preference rule: one usable mirror in the run's own country and the set is left exactly
+    /// as it was, so widening can never top up a working run (SPEC step 4).
+    #[test]
+    fn widening_is_not_triggered_when_one_usable_mirror_exists() {
+        let mut results = vec![(
+            candidate("Lithuania", "http://lt.example/ubuntu/", None),
+            Ok(answer_at("http://lt.example/ubuntu", NOW)),
+        )];
+        let rest = vec![
+            candidate("Lithuania", "http://lt.example/ubuntu/", None),
+            candidate("Germany", "http://de.example/ubuntu/", None),
+            candidate("Norway", "http://no.example/ubuntu/", None),
+        ];
+        let mut asked: Vec<String> = Vec::new();
+        let widening = widen_if_empty(
+            &mut results,
+            Some(&rest),
+            &std::collections::HashSet::new(),
+            "Lithuania",
+            None,
+            MAX_CANDIDATES,
+            &mut |batch| {
+                asked.extend(batch.iter().map(|m| m.url.clone()));
+                Vec::new()
+            },
+        );
+        assert_eq!(widening, Widening::NotNeeded);
+        assert_eq!(results.len(), 1, "the candidate set is not touched");
+        assert!(asked.is_empty(), "nothing is probed: {asked:?}");
+        assert_eq!(
+            set_note(&widening, false, false, "Lithuania", "LT", "Launchpad"),
+            None,
+            "a run that did not widen owes no line"
+        );
+    }
+
+    /// Every candidate rejected and the run widens once, to the other countries only, and says why:
+    /// the note is the announcement the feature is not allowed to skip.
+    #[test]
+    fn every_candidate_rejected_widens_once_and_the_note_says_why() {
+        let mut results = vec![
+            (
+                candidate("Lithuania", "http://lt.example/ubuntu/", None),
+                Err(probe::ProbeError::BadSample("no sample".to_string())),
+            ),
+            (
+                candidate("Lithuania", "http://lt2.example/ubuntu/", None),
+                Err(probe::ProbeError::Unreachable(http::HttpError::Status(
+                    404,
+                    "http://lt2.example/ubuntu/dists/noble-updates/InRelease".to_string(),
+                ))),
+            ),
+        ];
+        let rest = vec![
+            candidate("Lithuania", "http://lt.example/ubuntu/", None),
+            candidate("Lithuania", "http://lt2.example/ubuntu/", None),
+            candidate("Germany", "http://de.example/ubuntu/", None),
+            candidate("Norway", "http://no.example/ubuntu/", None),
+        ];
+        let mut asked: Vec<String> = Vec::new();
+        let widening = widen_if_empty(
+            &mut results,
+            Some(&rest),
+            &std::collections::HashSet::from([
+                candidate_key("http://lt.example/ubuntu/"),
+                candidate_key("http://lt2.example/ubuntu/"),
+            ]),
+            "Lithuania",
+            None,
+            MAX_CANDIDATES,
+            &mut |batch| {
+                asked.extend(batch.iter().map(|m| m.url.clone()));
+                batch
+                    .iter()
+                    .map(|m| (m.clone(), Ok(answer_at(&m.url, NOW))))
+                    .collect()
+            },
+        );
+        assert_eq!(widening, Widening::Widened { added: 2 });
+        assert_eq!(
+            asked,
+            ["http://de.example/ubuntu/", "http://no.example/ubuntu/"],
+            "only the other countries' mirrors are added"
+        );
+        assert_eq!(results.len(), 4, "one results vector holds the union");
+        assert_eq!(
+            set_note(&widening, false, false, "Lithuania", "LT", "Launchpad").as_deref(),
+            Some(
+                "note: no usable mirror in Lithuania (LT), so every country's mirrors were added and ranked together"
+            )
+        );
+    }
+
+    /// A widened run never probes a candidate twice: a mirror the country's own pass already saw is
+    /// skipped whatever its spelling, and a list that names the same mirror twice adds it once.
+    #[test]
+    fn a_widened_run_never_probes_a_candidate_twice() {
+        let mut results = vec![(
+            candidate("Lithuania", "http://lt.example/ubuntu/", None),
+            Err(probe::ProbeError::BadSample("no sample".to_string())),
+        )];
+        let rest = vec![
+            // The same mirror pass 1 probed, spelled without its trailing slash.
+            candidate("Lithuania", "http://lt.example/ubuntu", None),
+            // The same mirror listed twice under two countries, with a different case and a
+            // trailing slash: one entry, probed once.
+            candidate("Germany", "http://de.example/ubuntu/", None),
+            candidate("Germany", "http://DE.example/ubuntu", Some("1 Mbps")),
+        ];
+        let mut asked: Vec<String> = Vec::new();
+        let widening = widen_if_empty(
+            &mut results,
+            Some(&rest),
+            &std::collections::HashSet::from([candidate_key("http://lt.example/ubuntu/")]),
+            "Lithuania",
+            None,
+            MAX_CANDIDATES,
+            &mut |batch| {
+                asked.extend(batch.iter().map(|m| candidate_key(&m.url)));
+                batch
+                    .iter()
+                    .map(|m| (m.clone(), Ok(answer_at(&m.url, NOW))))
+                    .collect()
+            },
+        );
+        assert_eq!(widening, Widening::Widened { added: 1 });
+        assert_eq!(asked, [candidate_key("http://de.example/ubuntu/")]);
+        let keys: Vec<String> = results.iter().map(|(m, _)| candidate_key(&m.url)).collect();
+        let mut unique = keys.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            keys.len(),
+            "no candidate appears twice: {keys:?}"
+        );
+        assert!(
+            !asked.iter().any(|k| k.contains("lt.example")),
+            "the run's own country is never re-probed: {asked:?}"
+        );
+    }
+
+    /// A run whose only list is the one-country `mirrors.ubuntu.com` file cannot widen, and it says
+    /// so instead of silently ranking one country as if it were every country (SPEC step 4).
+    #[test]
+    fn a_run_whose_only_list_names_one_country_cannot_widen() {
+        let mut results = vec![(
+            candidate("Lithuania", "http://lt.example/ubuntu/", None),
+            Err(probe::ProbeError::BadSample("no sample".to_string())),
+        )];
+        let mut asked = 0;
+        let widening = widen_if_empty(
+            &mut results,
+            None,
+            &std::collections::HashSet::new(),
+            "Lithuania",
+            None,
+            MAX_CANDIDATES,
+            &mut |_batch| {
+                asked += 1;
+                Vec::new()
+            },
+        );
+        assert_eq!(widening, Widening::Impossible);
+        assert_eq!(asked, 0, "there is nothing to probe");
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            set_note(
+                &widening,
+                false,
+                true,
+                "Lithuania",
+                "LT",
+                "mirrors.ubuntu.com (unverified)"
+            )
+            .as_deref(),
+            Some(
+                "note: no usable mirror in Lithuania (LT), and the list from mirrors.ubuntu.com (unverified) names only that country, so there is nothing to widen to"
+            )
+        );
+        // The list the fallback branch hands back really is the one-country one.
+        let net = Canned(vec![
+            (LAUNCHPAD, Err(503)),
+            ("http://mirrors.ubuntu.com/LT.txt", Ok(LT_TXT)),
+        ]);
+        let LoadedCandidates { source, rest, .. } = load_candidates(
+            &net,
+            Some(Country {
+                cc: "LT",
+                name: "Lithuania",
+            }),
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(source, "mirrors.ubuntu.com (unverified)");
+        assert!(
+            rest.is_none(),
+            "this list names one country and nothing else"
+        );
+    }
+
+    /// `--any` never widens: its set already is every country, so an empty one means nothing usable
+    /// anywhere, and an empty widening would only cost a second pass and a false note.
+    #[test]
+    fn any_never_widens() {
+        assert_eq!(
+            set_note(
+                &Widening::NotAsked,
+                true,
+                false,
+                "Lithuania",
+                "LT",
+                "Launchpad"
+            ),
+            None
+        );
+        // The one line `--any` does owe: its only list named one country, so it is not "every
+        // country's mirrors" and must not read as if it were.
+        assert_eq!(
+            set_note(
+                &Widening::NotAsked,
+                true,
+                true,
+                "any",
+                "unknown",
+                "mirrors.ubuntu.com (unverified)"
+            )
+            .as_deref(),
+            Some(
+                "note: --any, but the list from mirrors.ubuntu.com (unverified) names only one country"
+            )
+        );
+    }
+
+    /// A set that is not narrowed to one country is capped by Launchpad's declared link speed,
+    /// descending, then by URL: the page names about 560 mirrors and probing them all is not a burst
+    /// any run makes (SPEC step 4). A mirror that declares no speed sorts last.
+    #[test]
+    fn the_global_selection_is_capped_by_declared_speed_then_url() {
+        let page = mirrors::parse_launchpad(&String::from_utf8_lossy(LAUNCHPAD_OK))
+            .expect("fixture parses");
+        let picked = global_selection(&page, MAX_CANDIDATES);
+        assert_eq!(picked.len(), MAX_CANDIDATES);
+        let speeds: Vec<Option<u64>> = picked
+            .iter()
+            .map(|m| mirrors::declared_speed_bps(m.speed.as_deref().unwrap_or("")))
+            .collect();
+        assert!(
+            speeds.windows(2).all(|pair| pair[0] >= pair[1]),
+            "declared speed descending: {speeds:?}"
+        );
+        let fastest = page
+            .iter()
+            .filter_map(|m| mirrors::declared_speed_bps(m.speed.as_deref().unwrap_or("")))
+            .max();
+        assert_eq!(speeds[0], fastest, "the fastest declared mirror is first");
+        // Two runs read the same page and probe the same mirrors.
+        assert_eq!(global_selection(&page, MAX_CANDIDATES), picked);
+
+        let tied = vec![
+            candidate("A", "http://b.example/ubuntu/", Some("10 Mbps")),
+            candidate("A", "http://a.example/ubuntu/", Some("10 Mbps")),
+            candidate("A", "http://z.example/ubuntu/", Some("100 Gbps")),
+            candidate("A", "http://u.example/ubuntu/", None),
+        ];
+        let picked_ties = global_selection(&tied, 3);
+        let urls: Vec<&str> = picked_ties.iter().map(|m| m.url.as_str()).collect();
+        assert_eq!(
+            urls,
+            [
+                "http://z.example/ubuntu/",
+                "http://a.example/ubuntu/",
+                "http://b.example/ubuntu/",
+            ],
+            "ties break by URL, and an unknown speed sorts last"
+        );
+        assert_eq!(
+            global_selection(&tied, 10).len(),
+            4,
+            "a cap above the set keeps it whole"
+        );
+    }
+
+    /// Under `--any` the country stays visible in the header and says it decides nothing: a run that
+    /// ignores the country must not read as one narrowed to it (SPEC step 4).
+    #[test]
+    fn any_is_not_a_constraint_on_the_header() {
+        assert_eq!(
+            origin_label(true, true, true),
+            "--country, not a constraint"
+        );
+        assert_eq!(
+            origin_label(true, true, false),
+            "detected, not a constraint"
+        );
+        assert_eq!(origin_label(true, false, false), "--any");
+        // Without `--any` the country is what narrowed the set, and the header says which won.
+        assert_eq!(origin_label(false, true, true), "--country");
+        assert_eq!(origin_label(false, true, false), "detected");
+        assert_eq!(
+            header_identity(
+                "0.1.0",
+                "Ubuntu 24.04 (noble)",
+                "Lithuania",
+                origin_label(true, true, true),
+                Painter::plain(),
+            ),
+            "apt-scout 0.1.0 · Ubuntu 24.04 (noble) · country: Lithuania (--country, not a constraint)"
+        );
+        assert_eq!(
+            header_identity(
+                "0.1.0",
+                "Ubuntu 24.04 (noble)",
+                "any",
+                origin_label(true, false, false),
+                Painter::plain(),
+            ),
+            "apt-scout 0.1.0 · Ubuntu 24.04 (noble) · country: any (--any)"
+        );
+    }
+
+    /// The recommendation names the **mirror's** country, not the run's: the two are the same value
+    /// only while every run is narrowed to its own country, so a widened or `--any` run would
+    /// otherwise report a country the selected mirror is not in (SPEC.md CLI).
+    #[test]
+    fn the_recommendation_names_the_mirrors_country() {
+        let best = probed(MIRROR, verify::SignatureStatus::verified_for_test());
+        let mut details = std::collections::HashMap::new();
+        details.insert(
+            MIRROR.to_string(),
+            Detail {
+                country: "Germany".to_string(),
+                security_date: None,
+                security_lag: None,
+                redirected_to: None,
+            },
+        );
+        // A Lithuanian run whose best mirror is German.
+        let country = recommendation_country(&details, MIRROR);
+        assert_eq!(country, "Germany");
+        assert_eq!(
+            recommendation(&best, country, None, Painter::plain()),
+            "  https://mirror.example/ubuntu/ — freshest verified, Germany, AS unknown, 0m lag, 1.0 MB/s, 10 ms"
+        );
+        // A mirror whose probe recorded no country still gets a word, never a blank.
+        assert_eq!(
+            recommendation_country(&details, "http://elsewhere.example/ubuntu/"),
+            "unknown"
+        );
+    }
+
     /// A run writes the selected mirror URI without the trailing slash the page spells
     /// (`probe::probe` trims it), so a later run must still recognize it: the roots of a German run
     /// name a Norwegian mirror at `/archive/`, and the URI that first run wrote is `/archive`. Checked
@@ -3025,8 +3987,19 @@ mod tests {
     #[test]
     fn a_mirror_a_run_wrote_stays_rewritable_under_a_country_change() {
         let net = Canned(vec![(LAUNCHPAD, Ok(LAUNCHPAD_OK))]);
-        let (_, src, roots) =
-            load_candidates(&net, "DE", "Germany", false, &mut Vec::new()).unwrap();
+        let LoadedCandidates {
+            source: src, roots, ..
+        } = load_candidates(
+            &net,
+            Some(Country {
+                cc: "DE",
+                name: "Germany",
+            }),
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .unwrap();
         assert_eq!(src, "Launchpad");
         assert!(
             roots

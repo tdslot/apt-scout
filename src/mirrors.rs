@@ -146,6 +146,41 @@ pub fn parse_launchpad(html: &str) -> Result<Vec<Mirror>, ParseError> {
     Ok(mirrors)
 }
 
+/// The bits per second a Launchpad `speed` cell declares (`128 Kbps`, `1 Mbps`, `10 Gbps`), or
+/// `None` for anything else, including the empty cell the page leaves for a mirror that declares no
+/// speed. Integer-suffix units only, because those are what the page prints: a value it does not
+/// print is not guessed, and an unknown speed sorts last instead of being read as a fast one
+/// (SPEC step 4).
+pub fn declared_speed_bps(speed: &str) -> Option<u64> {
+    let (number, unit) = speed.split_once(char::is_whitespace)?;
+    let multiplier: u64 = match unit.trim() {
+        "bps" => 1,
+        "Kbps" => 1_000,
+        "Mbps" => 1_000_000,
+        "Gbps" => 1_000_000_000,
+        _ => return None,
+    };
+    let (whole, fraction) = number.split_once('.').unwrap_or((number, ""));
+    if whole.is_empty() || !whole.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    if !fraction.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let mut bits = whole.parse::<u64>().ok()?.checked_mul(multiplier)?;
+    // The fraction contributes in whole bits only, and the page never carries more precision than a
+    // unit needs, so digits below one bit are dropped rather than rounded.
+    let mut scale = multiplier;
+    for digit in fraction.bytes() {
+        scale /= 10;
+        if scale == 0 {
+            break;
+        }
+        bits = bits.checked_add(u64::from(digit - b'0') * scale)?;
+    }
+    Some(bits)
+}
+
 /// Parse a `mirrors.ubuntu.com/<CC>.txt` list: one URL per line, in proximity order.
 /// Lines that are not http(s) URLs are ignored.
 pub fn parse_text_list(text: &str) -> Vec<String> {
@@ -420,6 +455,44 @@ mod tests {
         assert_eq!(
             parse_text_list("junk\nftp://x\n  http://a/  \n\n"),
             vec!["http://a/"]
+        );
+    }
+    /// The declared speed is what the cap sorts by, so it reads exactly the cells the page carries
+    /// and refuses anything else: a guessed value would reorder the candidates a run probes.
+    #[test]
+    fn declared_speed_parses_the_values_the_page_carries() {
+        assert_eq!(declared_speed_bps("128 Kbps"), Some(128_000));
+        assert_eq!(declared_speed_bps("1 Mbps"), Some(1_000_000));
+        assert_eq!(declared_speed_bps("10 Gbps"), Some(10_000_000_000));
+        assert_eq!(declared_speed_bps("100 Gbps"), Some(100_000_000_000));
+        // A fraction is read in whole bits and never rounds up to a speed the mirror did not declare.
+        assert_eq!(declared_speed_bps("0.5 Mbps"), Some(500_000));
+        for unknown in [
+            "",
+            "fast",
+            "10",
+            "10 Gb/s",
+            "Gbps",
+            "10 Gbps (shared)",
+            "-1 Mbps",
+        ] {
+            assert_eq!(declared_speed_bps(unknown), None, "{unknown:?}");
+        }
+    }
+
+    /// The parsed speed is the one the page's own cell holds, so a parser drift shows up here.
+    #[test]
+    fn the_page_s_declared_speeds_are_readable() {
+        let all = parse_launchpad(LAUNCHPAD).expect("fixture parses");
+        let declared: Vec<u64> = all
+            .iter()
+            .filter_map(|m| m.speed.as_deref())
+            .filter_map(declared_speed_bps)
+            .collect();
+        assert!(!declared.is_empty(), "the fixture carries speed cells");
+        assert!(
+            declared.contains(&10_000_000_000),
+            "the fixture carries a 10 Gbps mirror: {declared:?}"
         );
     }
 }
