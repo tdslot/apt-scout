@@ -660,6 +660,123 @@ impl Painter {
     }
 }
 
+/// Where a transient progress line goes. The shipped sink writes to standard error; a test records,
+/// so the phase sequence is asserted without a terminal anywhere and the no-terminal case is proven to
+/// be silent rather than merely unobserved.
+trait Sink {
+    /// Rewrite the one live line in place.
+    fn rewrite(&mut self, line: &str);
+
+    /// Erase the live line, leaving the cursor where it was: a warning that follows keeps its own line
+    /// (SPEC.md Output).
+    fn clear(&mut self);
+
+    /// Write the line that ends the progress and stays: it stops being transient.
+    fn settle(&mut self, line: &str);
+}
+
+/// The one real sink. `\r` returns to the start of the line and `\x1b[K` erases what was there, so a
+/// shorter line never leaves the tail of a longer one behind. A failed write is dropped rather than
+/// turned into an error: progress is a convenience, never a result.
+struct StderrSink<W: Write> {
+    err: W,
+}
+
+impl<W: Write> StderrSink<W> {
+    fn new(err: W) -> Self {
+        StderrSink { err }
+    }
+}
+
+impl<W: Write> Sink for StderrSink<W> {
+    fn rewrite(&mut self, line: &str) {
+        let _ = write!(self.err, "\r{line}\x1b[K");
+        let _ = self.err.flush();
+    }
+
+    fn clear(&mut self) {
+        let _ = write!(self.err, "\r\x1b[K");
+        let _ = self.err.flush();
+    }
+
+    fn settle(&mut self, line: &str) {
+        let _ = write!(self.err, "\r{line}\x1b[K\n");
+        let _ = self.err.flush();
+    }
+}
+
+/// The line that ends the progress and stays: the counts the ranked title carries, and the time from
+/// the loading phase to the end of ranking, with one decimal place (SPEC.md Output). Pure.
+fn done_line(usable: usize, rejected: usize, elapsed: Duration) -> String {
+    format!(
+        "done — {usable} usable, {rejected} rejected in {:.1} s",
+        elapsed.as_secs_f64()
+    )
+}
+
+/// The status line a run shows while it works: one line, on standard error, rewritten in place, and
+/// only when standard error is a terminal (SPEC.md Output). `enabled == false` makes every method
+/// return at once, so a piped run takes the same code path and writes nothing at all — no line and no
+/// "still working" notice.
+struct Progress<S: Sink> {
+    sink: S,
+    enabled: bool,
+    started: Instant,
+}
+
+impl<S: Sink> Progress<S> {
+    /// The clock starts here, so the summary spans the run's work and not only its last phase.
+    fn new(sink: S, enabled: bool) -> Self {
+        Progress {
+            sink,
+            enabled,
+            started: Instant::now(),
+        }
+    }
+
+    fn show(&mut self, line: String) {
+        if self.enabled {
+            self.sink.rewrite(&line);
+        }
+    }
+
+    /// The four phases SPEC.md Output names, in the order a run reaches them.
+    fn load(&mut self) {
+        self.show("loading the mirror list".to_string());
+    }
+
+    fn reference(&mut self) {
+        self.show("verifying the reference".to_string());
+    }
+
+    /// The candidates probed so far. `handle.join()` blocks in candidate order, so this is a lower
+    /// bound: a slow first candidate freezes the count instead of claiming more than is known.
+    fn probe(&mut self, done: usize, total: usize) {
+        let noun = if total == 1 { "mirror" } else { "mirrors" };
+        self.show(format!("probing {total} {noun}… {done}/{total}"));
+    }
+
+    fn ranked(&mut self) {
+        self.show("ranking".to_string());
+    }
+
+    /// Erase the live line before something that needs a line of its own, such as a warning.
+    fn clear(&mut self) {
+        if self.enabled {
+            self.sink.clear();
+        }
+    }
+
+    /// End the progress: called immediately before the report is printed, so no transient line
+    /// survives into it.
+    fn finish(&mut self, usable: usize, rejected: usize) {
+        if self.enabled {
+            let line = done_line(usable, rejected, self.started.elapsed());
+            self.sink.settle(&line);
+        }
+    }
+}
+
 /// The run's identity: version, release and the country the run used, with the source of the
 /// country, because `--country` is an override and the line says which one won (SPEC.md CLI).
 fn header_identity(
@@ -1292,8 +1409,13 @@ fn run() -> Result<u8, (u8, String)> {
         )
     })?;
 
+    // SPEC.md Output: progress is for a person watching the run work, so the sink is inert unless
+    // standard error is a terminal. The clock starts here, before the list loads, so the summary
+    // spans the four phases it names.
+    let mut progress = Progress::new(StderrSink::new(io::stderr()), io::stderr().is_terminal());
     let (mut cands, list_source, list_roots) =
         load_candidates(&net, &country, country_name, args.https_only)?;
+    progress.load();
     // Different list sources can name the same mirror twice (with and without a trailing slash).
     let mut seen = std::collections::HashSet::new();
     cands.retain(|m| seen.insert(m.url.trim_end_matches('/').to_ascii_lowercase()));
@@ -1340,13 +1462,18 @@ fn run() -> Result<u8, (u8, String)> {
                 .to_string(),
         );
         report.line(no_eligible_hint(list_source));
+        // No phase after the list load ran, so there is no summary to print: the line is erased and the
+        // report starts on its own (SPEC.md Output).
+        progress.clear();
         report.print();
         return no_eligible_uri(mode, &args, list_source);
     }
 
+    progress.reference();
     let reference = match probe::fetch_reference(&net, REFERENCE, &codename) {
         Ok(r) => Some(r),
         Err(probe::ReferenceError::NotFound(url)) => {
+            progress.clear();
             return Err((
                 4,
                 format!(
@@ -1355,6 +1482,9 @@ fn run() -> Result<u8, (u8, String)> {
             ));
         }
         Err(e) => {
+            // A warning keeps its own line: the live progress line is erased first, so the two never
+            // share one (SPEC.md Output).
+            progress.clear();
             eprintln!(
                 "warning: cannot read the reference release from {REFERENCE}: {e}. Using the newest mirror date as the baseline instead, so lag is relative to the best candidate."
             );
@@ -1375,7 +1505,8 @@ fn run() -> Result<u8, (u8, String)> {
         .collect();
     let mut results = Vec::new();
     let mut rejected: Vec<Rejected> = Vec::new();
-    for (m, handle) in cands.iter().zip(handles) {
+    let probing = cands.len();
+    for (joined, (m, handle)) in cands.iter().zip(handles).enumerate() {
         match handle.join() {
             Ok(done) => results.push(done),
             Err(_) => rejected.push(Rejected {
@@ -1384,6 +1515,7 @@ fn run() -> Result<u8, (u8, String)> {
                 why: "the probe crashed unexpectedly".to_string(),
             }),
         }
+        progress.probe(joined + 1, probing);
     }
 
     // Read-only ranking baseline (SPEC step 8): the canonical archive; when it was unreachable, the
@@ -1428,6 +1560,9 @@ fn run() -> Result<u8, (u8, String)> {
             Some("the server's AS is unknown, so no mirror can match it".to_string()),
         )
     } else {
+        // The AS lookup is not one of the four phases SPEC.md Output names, and it may print a note of
+        // its own; the live line goes first so a note keeps its own line.
+        progress.clear();
         resolve_mirror_asns(
             &results
                 .iter()
@@ -1477,6 +1612,7 @@ fn run() -> Result<u8, (u8, String)> {
         }
     }
     rejected.sort_by(|a, b| a.host.cmp(&b.host));
+    progress.ranked();
     let ranked = fresh::rank(probed);
     let rows = table_rows(
         &ranked,
@@ -1501,6 +1637,7 @@ fn run() -> Result<u8, (u8, String)> {
     }
     let Some(best) = ranked.first() else {
         report.block(rejected_lines(&rejected, args.verbose, ink));
+        progress.finish(0, rejected.len());
         report.print();
         return Err(no_fresh_mirror());
     };
@@ -1576,6 +1713,7 @@ fn run() -> Result<u8, (u8, String)> {
         report.block(planned);
     }
     report.block(rejected_lines(&rejected, args.verbose, ink));
+    progress.finish(ranked.len(), rejected.len());
     report.print();
 
     match mode {
@@ -4398,5 +4536,128 @@ mod tests {
         assert!(HELP.contains("NO_COLOR is unset"), "{HELP}");
         // The flag has no short form, so the help must not invent one beside it.
         assert!(!HELP.contains("-N, --no-color"), "{HELP}");
+    }
+
+    /// The test sink: what the run would have shown, in order, with no terminal anywhere.
+    #[derive(Default)]
+    struct RecordingSink {
+        lines: Vec<String>,
+        clears: usize,
+        settled: Vec<String>,
+    }
+
+    impl Sink for RecordingSink {
+        fn rewrite(&mut self, line: &str) {
+            self.lines.push(line.to_string());
+        }
+
+        fn clear(&mut self) {
+            self.clears += 1;
+        }
+
+        fn settle(&mut self, line: &str) {
+            self.settled.push(line.to_string());
+        }
+    }
+
+    /// The real sink's whole job: rewrite in place and erase what it leaves, so a shorter line never
+    /// leaves the tail of a longer one behind and the summary stops being transient.
+    #[test]
+    fn the_stderr_sink_rewrites_in_place_and_erases_what_it_leaves() {
+        let mut sink = StderrSink::new(Vec::new());
+        sink.rewrite("ranking");
+        sink.clear();
+        sink.settle("done — 1 usable, 0 rejected in 0.2 s");
+        assert_eq!(
+            String::from_utf8(sink.err).expect("ASCII"),
+            "\rranking\u{1b}[K\r\u{1b}[K\rdone — 1 usable, 0 rejected in 0.2 s\u{1b}[K\n"
+        );
+    }
+
+    /// A piped or logged stderr is silent: not a shorter line, not a "still working" notice, nothing
+    /// at all — and that is the same code path a terminal takes (SPEC.md Output).
+    #[test]
+    fn progress_writes_nothing_when_stderr_is_not_a_terminal() {
+        let mut progress = Progress::new(RecordingSink::default(), false);
+        progress.load();
+        progress.reference();
+        progress.probe(1, 3);
+        progress.probe(2, 3);
+        progress.probe(3, 3);
+        progress.ranked();
+        progress.clear();
+        progress.finish(4, 0);
+        assert!(progress.sink.lines.is_empty(), "{:?}", progress.sink.lines);
+        assert_eq!(progress.sink.clears, 0);
+        assert!(
+            progress.sink.settled.is_empty(),
+            "{:?}",
+            progress.sink.settled
+        );
+    }
+
+    /// At a terminal the run names each phase it is in and how far probing got, and it ends with the one
+    /// summary line: nothing transient survives into the report (SPEC.md Output).
+    #[test]
+    fn progress_names_each_phase_and_ends_with_the_summary() {
+        let mut progress = Progress::new(RecordingSink::default(), true);
+        progress.load();
+        progress.reference();
+        progress.probe(1, 3);
+        progress.probe(2, 3);
+        progress.probe(3, 3);
+        progress.ranked();
+        // A warning that lands mid-run erases the live line instead of sharing it.
+        progress.clear();
+        progress.finish(4, 0);
+        assert_eq!(
+            progress.sink.lines,
+            [
+                "loading the mirror list",
+                "verifying the reference",
+                "probing 3 mirrors… 1/3",
+                "probing 3 mirrors… 2/3",
+                "probing 3 mirrors… 3/3",
+                "ranking",
+            ]
+        );
+        assert_eq!(progress.sink.clears, 1);
+        assert_eq!(
+            progress.sink.settled.len(),
+            1,
+            "one summary, and nothing after it"
+        );
+        let summary = &progress.sink.settled[0];
+        let number = summary
+            .strip_prefix("done — 4 usable, 0 rejected in ")
+            .and_then(|rest| rest.strip_suffix(" s"))
+            .unwrap_or_else(|| panic!("not the summary line: {summary}"));
+        assert!(number.parse::<f64>().is_ok(), "{summary}");
+    }
+
+    /// One candidate is not "1 mirrors": the line counts the way a person says it.
+    #[test]
+    fn a_single_candidate_is_not_plural() {
+        let mut progress = Progress::new(RecordingSink::default(), true);
+        progress.probe(1, 1);
+        assert_eq!(progress.sink.lines, ["probing 1 mirror… 1/1"]);
+    }
+
+    /// The one line that survives, with one decimal place, as SPEC.md Output spells it.
+    #[test]
+    fn the_summary_line_has_one_decimal_place() {
+        assert_eq!(
+            done_line(4, 0, Duration::from_millis(3_100)),
+            "done — 4 usable, 0 rejected in 3.1 s"
+        );
+        assert_eq!(
+            done_line(2, 7, Duration::from_millis(59_940)),
+            "done — 2 usable, 7 rejected in 59.9 s"
+        );
+        // The counts come from the ranked title, which a run with nothing usable still carries.
+        assert_eq!(
+            done_line(0, 0, Duration::from_millis(40)),
+            "done — 0 usable, 0 rejected in 0.0 s"
+        );
     }
 }
