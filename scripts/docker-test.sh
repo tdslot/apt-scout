@@ -927,16 +927,34 @@ else
   fail "W31 target replaced behind the backup's back -> exit $rc: $(echo "$got" | head -10)"
 fi
 
-# W32 (S10) Offline: the interactive confirmation, answered yes. The same restore as W27 without
-#   `--yes`, so the path a person actually takes runs: the run names the backup it reads, the files
-#   it writes and the backup it creates, asks once, and a `y` on standard input writes the plan it
-#   printed. The block after the prompt is the one `--yes` prints, so the prompt's own path is
-#   covered and not only the flag's. Standard input is a pipe, so the answer is not echoed and the
-#   block's heading lands on the prompt's line; that glue is what this asserts.
+# W32 (S10) Offline: the interactive confirmation, answered yes, proves the prompt named the plan
+#   that was written. It is the same restore as W27 without `--yes`, so the path a person actually
+#   takes runs: the run names the backup it reads, the files it writes and the backup it creates,
+#   asks once, and a `y` on standard input writes the plan it printed. Between the printed prompt
+#   and the answer the case lands a newer, valid backup: its own id, a copy whose bytes differ from
+#   the confirmed backup's, and a manifest whose digest matches that copy. A run that re-derived
+#   the plan after the answer would pick that backup and write its bytes, so `digests=unchanged`
+#   proves the confirmed backup's bytes are the ones on disk and the `Restore backup
+#   20261112T000000Z` line proves the block names that backup. Standard input is a pipe, so the
+#   answer is not echoed and the block's heading lands on the prompt's line; that glue is what this
+#   asserts.
 rc=0; got=$(WCASE_DIGESTS=/etc/apt/sources.list.d/ubuntu.sources wcase ubuntu:24.04 "$FIX_DEB822" \
-  "/apt-scout __write-harness apply-pop >/dev/null 2>&1 && printf 'y\\n' | /apt-scout --restore" 2>&1) || rc=$?
+  '/apt-scout __write-harness apply-pop >/dev/null 2>&1 || exit 1
+{ i=0
+  while [ "$i" -lt 200 ] && ! grep -q "Restore this backup?" /tmp/out; do i=$((i+1)); sleep 0.05; done
+  grep -q "Restore this backup?" /tmp/out || { echo PROMPT-MISSING >&2; exit 1; }
+  newer=20991231T235959Z
+  cp -a /var/backups/apt-scout/20261112T000000Z "/var/backups/apt-scout/$newer"
+  printf "a backup that landed after the prompt\n" > "/var/backups/apt-scout/$newer/sources.list.d/ubuntu.sources"
+  old=$(sha256sum /var/backups/apt-scout/20261112T000000Z/sources.list.d/ubuntu.sources | cut -d" " -f1)
+  sum=$(sha256sum "/var/backups/apt-scout/$newer/sources.list.d/ubuntu.sources" | cut -d" " -f1)
+  sed -i "s/$old/$sum/; s/^id .*/id $newer/" "/var/backups/apt-scout/$newer/MANIFEST"
+  echo landed-a-valid-newer-backup-after-the-prompt >&2
+  printf "y\n"
+} | /apt-scout --restore' 2>&1) || rc=$?
 if [ "$rc" -eq 0 ] \
   && printf '%s\n' "$got" | grep -qx 'rc=0' \
+  && [[ "$got" == *"landed-a-valid-newer-backup-after-the-prompt"* ]] \
   && printf '%s\n' "$got" | grep -qxF 'Restore backup 20261112T000000Z' \
   && printf '%s\n' "$got" | grep -qxF '  write /etc/apt/sources.list.d/ubuntu.sources' \
   && printf '%s\n' "$got" | grep -qxF '  remove /etc/apt/sources.list.d/system-security.sources' \
