@@ -38,7 +38,7 @@
 
 **Manifest**: The record inside a backup that lists, for each changed apt source file, its original path, SHA-256 digest, mode and owner, so a restore re-derives what to write from the backup instead of being told.
 
-**Plan**: The validated description of a pending apt change: the exact bytes of every file to write and the proof that they come from verified data. The run builds and validates it, it is never a file, and it never crosses a process boundary.
+**Plan**: The validated description of a pending apt change: the exact bytes of every file to write, and what authorizes them — the verified mirror that was chosen, or the backup the bytes were re-derived from. The run builds and validates it, it is never a file, and it never crosses a process boundary.
 
 **Privileged phase**: The part of a run that holds root. It validates the plan against the state on disk and performs the file operations; nothing else runs there.
 
