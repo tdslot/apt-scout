@@ -2371,12 +2371,14 @@ fn run() -> Result<u8, (u8, String)> {
 }
 
 /// The restore mode, from the parsed flags and the uid: the one line for a non-root run, then — as
-/// root — re-derive the newest backup, confirm once unless `--yes`, restore it and report.
+/// root — re-derive the newest backup, confirm once unless `--yes`, write exactly that plan and
+/// report.
 ///
-/// The plan is built here for the confirmation and built once more inside `restore::run`, which
-/// re-reads the backup and hands its own plan to the writer: the prompt is a safety rail, not a
-/// control, and the second derivation re-checks every record it is about to write, so a backup that
-/// changed after the prompt is refused or re-derived, never written unchecked.
+/// One derivation, one plan value: `restore::build` is called here and nowhere else on this path, so
+/// the plan the confirmation prints is the plan `restore::run` writes, and the block afterwards names
+/// the backup that was actually put back even if the backup root changed while the person was
+/// deciding. The prompt is a safety rail, not a control: the guarantee is the re-derivation this plan
+/// carries and the writer's own validation of it.
 fn run_restore(args: &Args, ink: Painter, root: bool, ask: bool) -> Result<u8, (u8, String)> {
     if !root {
         // SPEC.md CLI: a non-root restore prints the one line and exits 3 before the backup is
@@ -2421,10 +2423,14 @@ fn run_restore(args: &Args, ink: Painter, root: bool, ask: bool) -> Result<u8, (
             }
         }
     }
-    let outcome =
-        restore::run(backup_root, apt_root, now).map_err(|e| (e.exit_code(), e.to_string()))?;
+    // The plan the confirmation prints is the plan the writer is handed: nothing re-derives it
+    // between the answer and the write, so a backup that appears or vanishes while the person is
+    // deciding cannot change what is written.
+    let outcome = restore::run(&plan, now).map_err(|e| (e.exit_code(), e.to_string()))?;
     let mut report = Report::default();
     report.line(ink.bold("Restore"));
+    // `backup` is read from the plan above — the plan that was written — so the block names the
+    // backup that was actually put back.
     report.block(restore_lines(backup, &plan, &outcome, args.verbose));
     report.print();
     Ok(0)
@@ -2440,9 +2446,12 @@ fn restore_confirm_lines(
     let mut lines = vec![format!("Restore backup {}", restored.as_str())];
     for write in plan.writes() {
         let path = format!("{}/{}", apply::APT_DIR, write.target.relative().display());
-        let verb = match write.effect {
-            plan::Effect::Remove => "remove",
-            plan::Effect::Create | plan::Effect::Replace => "write",
+        // A restore plan carries no creation: `Plan::for_restore` sets no platform, so `validate`
+        // refuses one, and a write it does carry is a replacement or a removal.
+        let verb = if matches!(write.effect, plan::Effect::Remove) {
+            "remove"
+        } else {
+            "write"
         };
         lines.push(format!("  {verb} {path}"));
     }
@@ -2466,9 +2475,12 @@ fn restore_lines(
     let mut lines = vec![format!("  backup: {}", restored.as_str())];
     for touched in &outcome.touched {
         let path = format!("{}/{}", apply::APT_DIR, touched.target.relative().display());
-        let verb = match touched.effect {
-            plan::Effect::Remove => "removed",
-            plan::Effect::Create | plan::Effect::Replace => "wrote",
+        // As in the confirmation: a restore removes a file it is undoing the creation of, and
+        // writes every other one. A creation is not in a restore plan at all.
+        let verb = if matches!(touched.effect, plan::Effect::Remove) {
+            "removed"
+        } else {
+            "wrote"
         };
         lines.push(format!("  {verb} {path}"));
         if !verbose {
@@ -2480,13 +2492,18 @@ fn restore_lines(
         let Some(write) = plan.writes().iter().find(|w| w.target == touched.target) else {
             continue;
         };
+        // `validate` refuses a replacement or a removal without the state it replaces, so the mode
+        // and owner printed here are the record's own and no fallback is invented for them.
+        let Some(original) = &write.original else {
+            continue;
+        };
         if !matches!(touched.effect, plan::Effect::Remove) {
             lines.push(format!(
                 "    now sha256:{} mode {:04o} owner {}:{}",
                 digest::hex(&write.digest),
-                write.original.as_ref().map_or(0, |s| s.mode),
-                write.original.as_ref().map_or(0, |s| s.uid),
-                write.original.as_ref().map_or(0, |s| s.gid),
+                original.mode,
+                original.uid,
+                original.gid,
             ));
         }
         if let Some(original) = &write.original {
