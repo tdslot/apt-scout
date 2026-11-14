@@ -2,13 +2,15 @@
 
 **Mirror**: A server that hosts a copy of the official Ubuntu archive and is listed on Launchpad.
 
-**Candidate**: A mirror selected for probing after country filtering and capping.
+**Candidate**: A mirror selected for probing: the run's own country's mirrors, every country's when `--any` is given, and both once a run has widened.
 
 **Probe**: The timed requests made to one candidate: the `InRelease` files of `<codename>-updates` and `<codename>-security` (freshness) and a ranged `Packages.xz` sample (throughput), plus time to first byte of the `-updates` request.
 
 **Reference**: The canonical `archive.ubuntu.com` `InRelease` files; the baseline for freshness.
 
 **Lag**: How much older a mirror's `InRelease` `Date` is than the reference for the same pocket.
+
+**Widened run**: A run whose own country produced no usable mirror, so the mirrors of every other country were added to its candidate set once and ranked together. It prints why it widened, and a run that found a usable mirror in its own country never becomes one.
 
 **Freshness**: A mirror is fresh when its `<codename>-updates` lag is within `MAX_LAG` (24 hours). The release pocket is not compared and `-security` lag is informational. Stale mirrors are rejected; lagging but fresh mirrors rank lower.
 
