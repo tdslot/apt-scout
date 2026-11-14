@@ -217,22 +217,28 @@ rc=0; got=$(run bridge ubuntu:24.04 sh -c 'rm -f /etc/apt/sources.list; rm -rf /
 #    so their absence is still what proves the early stop.
 if [ "$rc" = 0 ] && printf '%s\n' "$got" | grep -q '^Sources ' && [[ "$got" == *"packages.example.org"* ]] && [[ "$got" == *"is not an official Ubuntu archive mirror"* ]] && [[ "$got" == *"No official Ubuntu apt source URI can be changed"* ]] && [[ "$got" != *"reference:"* ]] && [[ "$got" != *"Ranked"* ]]; then pass "third-party-only apt sources -> stop before probes"; else fail "third-party-only sources -> exit $rc: $(echo "$got" | head -8)"; fi
 
-# The `notes` column is the table's last one and is printed only when a shown row has a fact for
-# it, so a ranked row ends either at its `sig` cell or at up to two note tokens: `sec:<n>m` for a
-# -security lag, `redir:<host>` for a redirect, either alone or both. Anchoring the tail to that
-# grammar is what keeps `  ok$` a claim about the `sig` cell: any other tail misses, and a row whose
-# signature is not `ok` misses too.
-notes_tail='(  (sec:[0-9]+m|redir:[^ ]+|sec:[0-9]+m redir:[^ ]+))?$'
+# The `notes` column is the table's last one and is printed only when a shown row redirected, so a
+# ranked row ends either at its `verified` cell or at one `redir:<host>` token. Anchoring the tail to
+# that grammar is what keeps `  yes$` a claim about the `verified` cell: any other tail misses, and a
+# row whose signature could not be checked misses too. The `-security` lag this cell used to carry is
+# `--verbose`'s now — `Detail` prints the pocket's date and lag in full — so no default row may end in
+# a `sec:` token, and the grammar below has no arm for one. The spaces before the token are the
+# `verified` cell's own padding: the cell is as wide as its heading word, so the note starts under
+# `notes` and the gap is wider than the one blank column the old `sig` cell left.
+notes_tail='( +redir:[^ ]+)?$'
 
-# 11. Live: missing gpgv keeps ranking read-only usable but marks signatures unavailable.
+# 11. Live: missing gpgv keeps ranking read-only usable but marks every signature `?`.
 #     The case is about the ranking, and a root run without `--list` would try to write, so `--list`
 #     keeps it on the read-only path it was written for.
-rc=0; got=$(run bridge ubuntu:24.04 sh -c 'mv /usr/bin/gpgv /usr/bin/gpgv.disabled 2>/dev/null || true; /apt-scout --list --no-geo --country LT --top 2' 2>&1) || rc=$?
-#    The `sig` cell reads `unavailable` for every row, and `--no-geo` is the run that has no AS data,
-#    so the one note under the table is the run's own reason rather than a column of `unknown`. A row
-#    may end at a `notes` cell (a live mirror can lag on -security or redirect); the anchor admits
-#    only that grammar.
-if [ "$rc" = 0 ] && printf '%s\n' "$got" | grep -qE "^ +[0-9]+ +https?://.*  unavailable${notes_tail}" && [[ "$got" == *"note: AS data unavailable (--no-geo skips every AS lookup)"* ]]; then pass "missing gpgv -> unavailable signatures, AS note says why, ranking still works"; else fail "missing gpgv -> exit $rc: $(echo "$got" | head -8)"; fi
+#     `--verbose` is what this case needs for its second control: the table's AS column, and with it
+#     the note explaining a run without AS data, is `--verbose`'s alone, and the default report has
+#     neither. Both controls are still asserted, and either one disappearing still fails the case.
+rc=0; got=$(run bridge ubuntu:24.04 sh -c 'mv /usr/bin/gpgv /usr/bin/gpgv.disabled 2>/dev/null || true; /apt-scout --list --no-geo --country LT --top 2 --verbose' 2>&1) || rc=$?
+#    The `verified` cell reads `?` for every row — verification could not run, which is never a `yes`
+#    — and `--no-geo` is the run that has no AS data, so the one note under the table is the run's own
+#    reason rather than a column of `unknown`. A row may end at a `notes` cell (a live mirror can
+#    redirect); the anchor admits only that grammar, and `  ?` must be the cell itself.
+if [ "$rc" = 0 ] && printf '%s\n' "$got" | grep -qE "^ +[0-9]+ +https?://.*  \?${notes_tail}" && [[ "$got" == *"note: AS data unavailable (--no-geo skips every AS lookup)"* ]]; then pass "missing gpgv -> ? signatures, AS note says why, ranking still works"; else fail "missing gpgv -> exit $rc: $(echo "$got" | head -8)"; fi
 
 # 12. Live (needs internet): real Launchpad + real mirrors, every supported Ubuntu release.
 #    Checks shape, not specific mirrors: a ranked table with at least one fresh mirror. `--list` is
@@ -252,13 +258,16 @@ done
 rc=0; got=$(run bridge ubuntu:24.04 sh -c 'apt-get update -qq >/dev/null 2>&1; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gpgv ubuntu-keyring >/dev/null 2>&1 || { echo DEPENDENCY_INSTALL_FAILED; exit 9; }; /apt-scout --list --no-geo --country LT --top 3' 2>&1) || rc=$?
 #    The positive path is two lines of the new report, each anchored so the other cannot stand in
 #    for it: the context line says the freshness reference verified, and at least one ranked row's
-#    `sig` cell reads `ok`, the only cell value a verified `-updates` InRelease produces. A run with
-#    no keyring prints `unverified (...)` in that cell and `(unverified (...))` on the context line,
-#    so both patterns miss; an empty or unrelated report matches neither either, because both are
-#    anchored to the start and the end of the line they read. The row's end is its `sig` cell or a
-#    `notes` cell after it, and only the note grammar above may stand there.
-if [ "$rc" = 0 ] && printf '%s\n' "$got" | grep -qE "^ +[0-9]+ +https?://.*  ok${notes_tail}" \
-  && printf '%s\n' "$got" | grep -qE '^server AS.*reference: archive\.ubuntu\.com \(verified\)$'; then
+#    `verified` cell reads `yes`, the only cell value a verified `-updates` InRelease produces. A run
+#    with no keyring prints `?` in that cell and `(unverified (...))` on the context line, so both
+#    patterns miss; an empty or unrelated report matches neither either, because both are anchored to
+#    the start and the end of the line they read. The row's end is its `verified` cell or a `notes`
+#    cell after it, and only the note grammar above may stand there. The context line is the default
+#    one, so it keeps `mirrors:` and `reference:` and carries no server AS: naming one there would
+#    mean the proof had leaked into the default report.
+if [ "$rc" = 0 ] && printf '%s\n' "$got" | grep -qE "^ +[0-9]+ +https?://.*  yes${notes_tail}" \
+  && printf '%s\n' "$got" | grep -qE '^mirrors: .*reference: archive\.ubuntu\.com \(verified\)$' \
+  && ! printf '%s\n' "$got" | grep -qE '^server AS'; then
   pass "live LT -> reference and at least one mirror verified"
 else
   fail "live LT verified row -> exit $rc: $(echo "$got" | head -12)"
@@ -284,11 +293,11 @@ fi
 
 # W2 (S16) Offline, plain binary: the harness option is an ordinary unknown argument, so the
 # shipped binary cannot be driven into a write case by name. The help's own shape is asserted here
-# too: the sections a user reads, the `--verbose` flag, and the rule that only `ok` authorizes a
+# too: the sections a user reads, the `--verbose` flag, and the rule that only `yes` authorizes a
 # write (it used to repeat under every ranked table).
 rc=0; got=$(run none ubuntu:24.04 sh -c '/apt-scout --help; echo HELP_END; /apt-scout __write-harness apply; echo rc=$?' 2>&1) || rc=$?
 help_out=${got%%HELP_END*}; plain_out=${got#*HELP_END}
-if [ "$rc" -eq 0 ] && [[ "$help_out" != *"write-harness"* ]] && [[ "$help_out" == *"USAGE"* ]] && [[ "$help_out" == *"EXIT CODES"* ]] && [[ "$help_out" == *"--verbose"* ]] && [[ "$help_out" == *"only ok may authorize a write"* ]] && [[ "$plain_out" == *"unknown option '__write-harness'"* ]] && [[ "$plain_out" == *"rc=2"* ]]; then
+if [ "$rc" -eq 0 ] && [[ "$help_out" != *"write-harness"* ]] && [[ "$help_out" == *"USAGE"* ]] && [[ "$help_out" == *"EXIT CODES"* ]] && [[ "$help_out" == *"--verbose"* ]] && [[ "$help_out" == *"Only yes may authorize a write"* ]] && [[ "$plain_out" == *"unknown option '__write-harness'"* ]] && [[ "$plain_out" == *"rc=2"* ]]; then
   pass "W2 plain binary -> no harness in --help, __write-harness is an unknown option (exit 2)"
 else
   fail "W2 plain binary -> exit $rc: help='$(echo "$help_out" | head -3)' run='$(echo "$plain_out" | head -3)'"
