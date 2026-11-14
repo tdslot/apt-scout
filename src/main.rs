@@ -453,9 +453,20 @@ fn reread(_path: &Path, on_disk: Vec<u8>) -> Vec<u8> {
     on_disk
 }
 
-/// The one confirmation before a write. The prompt is a safety rail, not a security control: the
-/// guarantee is the plan's validation, and no answer here can bypass it.
-fn confirm_write(input: &mut impl BufRead, prompt: &str) -> Result<(), (u8, String)> {
+/// What the user answered at the one confirmation.
+///
+/// `No` is a decision, not a failure: the mode that asked decides what it means, and the mirror
+/// write treats it as a refusal while a restore treats it as a successful no-op. A question that
+/// could not be asked or answered is the `Err`, which no answer can turn into a `Yes`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Answer {
+    Yes,
+    No,
+}
+
+/// The one confirmation. The prompt is a safety rail, not a security control: the guarantee is the
+/// plan's validation, and no answer here can bypass it.
+fn confirm(input: &mut impl BufRead, prompt: &str) -> Result<Answer, (u8, String)> {
     print!("{prompt}");
     io::stdout().flush().map_err(|e| {
         (
@@ -473,13 +484,21 @@ fn confirm_write(input: &mut impl BufRead, prompt: &str) -> Result<(), (u8, Stri
         )
     })?;
     match answer.trim().to_ascii_lowercase().as_str() {
-        "y" | "yes" => Ok(()),
+        "y" | "yes" => Ok(Answer::Yes),
         "" => Err((
             1,
             "no answer on standard input, so nothing was written. Re-run with --yes to skip the confirmation."
                 .to_string(),
         )),
-        _ => Err((
+        _ => Ok(Answer::No),
+    }
+}
+
+/// The confirmation a write asks: the only answer it accepts is a yes.
+fn confirm_write(input: &mut impl BufRead, prompt: &str) -> Result<(), (u8, String)> {
+    match confirm(input, prompt)? {
+        Answer::Yes => Ok(()),
+        Answer::No => Err((
             1,
             "cancelled at the confirmation, so nothing was written.".to_string(),
         )),
