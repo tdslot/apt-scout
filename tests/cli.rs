@@ -1,9 +1,10 @@
 //! The binary itself, as a subprocess: the answers that exit before a run starts. Those are the
 //! only ones that can be checked this way on any machine — `--version` and `--help` read no file,
-//! open no socket and never look at the uid, so they answer the same for every user. The child
-//! inherits the uid of whoever runs the tests, which is non-root on a laptop and in CI and root in
-//! a container: the flag answering in all three is the "any uid" property, and no case here needs
-//! the write matrix.
+//! open no socket and never look at the uid, so they answer the same for every user. What a case
+//! here establishes is that answer from outside the process: the child runs under the uid of whoever
+//! runs the tests, and no case compares uids or drops privileges, so "any uid" is a property of the
+//! answer's own code path and not something this file demonstrates. That is also why no case here
+//! needs the write matrix, which is where a uid would decide something.
 
 use std::process::{Command, Output};
 
@@ -30,7 +31,7 @@ fn assert_version(output: &Output, argv: &str) {
         "{argv} exits 0: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8(output.stdout.clone()).expect("stdout is UTF-8");
+    let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
     assert_eq!(stdout, expected(), "{argv}");
     assert_eq!(
         stdout.lines().count(),
