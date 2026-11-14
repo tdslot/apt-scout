@@ -16,6 +16,18 @@ usage() {
 
 die() { echo "error: $*" >&2; exit 1; }
 
+# Every packaging field lives in one place: Cargo.toml. They are read, never repeated below, so a
+# change to [package.metadata.deb] reaches the .deb this script builds.
+metadata() { sed -n "s/^$1 = \"\(.*\)\"\$/\1/p" Cargo.toml | head -n 1; }
+# A field dpkg-deb requires and the manifest must supply: its absence stops the build, it never
+# falls back to a default here.
+meta_required() {
+  local value
+  value=$(metadata "$1")
+  [ -n "$value" ] || die "cannot read [package.metadata.deb] $1 from Cargo.toml"
+  printf '%s\n' "$value"
+}
+
 case ${1:-} in
   -h|--help) usage; exit 0 ;;
   -*) echo "unknown option '$1'; try --help" >&2; exit 2 ;;
@@ -24,7 +36,7 @@ if [ "$#" -gt 1 ]; then echo "too many arguments; try --help" >&2; exit 2; fi
 
 version=${1:-}
 if [ -z "$version" ]; then
-  version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+  version=$(metadata version)
   [ -n "$version" ] || die "cannot read the version from Cargo.toml; pass it as the first argument"
 fi
 # The version becomes part of the output file name, so only characters Debian allows may reach it.
@@ -32,10 +44,11 @@ case $version in
   *[!A-Za-z0-9.+~:-]*) die "invalid version '$version': use only letters, digits and . + ~ : -" ;;
 esac
 
-# The name and the synopsis each live in one place: the crate manifest.
-maintainer=$(sed -n 's/^maintainer = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
-[ -n "$maintainer" ] || die "cannot read [package.metadata.deb] maintainer from Cargo.toml"
-synopsis=$(sed -n 's/^description = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+maintainer=$(meta_required maintainer)
+depends=$(meta_required depends)
+section=$(meta_required section)
+priority=$(meta_required priority)
+synopsis=$(metadata description)
 [ -n "$synopsis" ] || die "cannot read the description from Cargo.toml"
 
 binary=target/docker/apt-scout-plain
@@ -71,9 +84,9 @@ control="$stage/DEBIAN/control"
   printf 'Architecture: amd64\n'
   printf 'Maintainer: %s\n' "$maintainer"
   printf 'Installed-Size: %s\n' "$installed_size"
-  printf 'Depends: gpgv, ubuntu-keyring\n'
-  printf 'Section: admin\n'
-  printf 'Priority: optional\n'
+  printf 'Depends: %s\n' "$depends"
+  printf 'Section: %s\n' "$section"
+  printf 'Priority: %s\n' "$priority"
   printf 'Description: %s\n' "$synopsis"
   printf ' Detects the server country and autonomous system, fetches the Launchpad mirror\n'
   printf ' list, probes freshness and speed, ranks the candidates, and rewrites the apt\n'
