@@ -204,19 +204,6 @@ fn sudo_command(args: &Args) -> String {
     line
 }
 
-/// What `build_plan` found (SPEC.md Apply): either the writes a run must make, or that every
-/// eligible URI already points at the selected mirror — which is success, not an error, so that
-/// re-running a run whose write already happened does not fail.
-#[derive(Debug)]
-struct PlannedChange {
-    /// `None` when there is nothing to change: `Plan::validate` refuses an empty plan, and an empty
-    /// plan is the one case that is not an error.
-    plan: Option<plan::Plan>,
-    /// Every file, stanza and URI the rewrite refused, with its reason, for the caller to report
-    /// whatever the mode (SPEC.md Apply: report each skipped entry and why).
-    skipped: Vec<String>,
-}
-
 /// True when `file` already carries the selected mirror as an eligible URI: `rewrite_source` then
 /// replaces that URI with itself, so the file yields no write and the run has nothing to do.
 fn already_at_mirror(file: &sources::FileReport, selected_uri: &str) -> bool {
@@ -235,15 +222,19 @@ fn already_at_mirror(file: &sources::FileReport, selected_uri: &str) -> bool {
 /// inspected file is rewritten purely, the bytes on disk are captured as the `FileState` the
 /// writer re-checks before its first byte, and the whole set goes through `Plan::for_apply`, which
 /// refuses a mirror without a verified `-updates` proof. A file that would not change produces no
-/// write: when every eligible URI already points at the selected mirror the plan is empty and that is
-/// reported as success, and when nothing eligible exists at all the plan is refused.
+/// write: when every eligible URI already points at the selected mirror the answer is `None` and that
+/// is reported as success, and when nothing eligible exists at all the plan is refused.
+///
+/// The skips it collects are read here and nowhere else: they name the refusal in the error, and
+/// `Sources` has already listed them per entry before probing (SPEC.md Apply), so the report repeats
+/// none of them.
 fn build_plan(
     root: &Path,
     inventory: &sources::Inventory,
     roots: &[sources::MirrorRoot],
     selected: &fresh::Probed,
     platform: plan::Platform,
-) -> Result<PlannedChange, (u8, String)> {
+) -> Result<Option<plan::Plan>, (u8, String)> {
     let nothing_written = "Nothing was written.";
     let mut writes = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
@@ -343,10 +334,7 @@ fn build_plan(
             .iter()
             .any(|file| already_at_mirror(file, selected.url.as_str()))
         {
-            return Ok(PlannedChange {
-                plan: None,
-                skipped,
-            });
+            return Ok(None);
         }
         let why = if skipped.is_empty() {
             "no eligible official archive URI was found".to_string()
@@ -371,10 +359,7 @@ fn build_plan(
             format!("cannot write {}: {other}. {nothing_written}", selected.url),
         ),
     })?;
-    Ok(PlannedChange {
-        plan: Some(plan),
-        skipped,
-    })
+    Ok(Some(plan))
 }
 
 /// `st_mode` also carries the file-type bits, and the writer records and compares
@@ -1024,6 +1009,9 @@ fn rejected_detail(rejected: &[Rejected], ink: Painter) -> Vec<String> {
 /// The `Rejected` section, or nothing at all: a run that rejected nobody prints no heading and no
 /// `0` count (SPEC.md Output). `Report::block` skips an empty section, so the caller needs no case.
 fn rejected_lines(rejected: &[Rejected], verbose: bool, ink: Painter) -> Vec<String> {
+    if rejected.is_empty() {
+        return Vec::new();
+    }
     if verbose {
         rejected_detail(rejected, ink)
     } else {
@@ -1219,16 +1207,16 @@ fn plan_changes(
     out
 }
 
-/// The body of the `Planned change` section for a plan that will be written: the URI pairs, the
-/// backup directory the write creates, the alternatives, and — when this run may write — the files it
-/// leaves alone. `backup` is `None` for a `--list` run, which creates no backup directory; `skipped`
-/// is empty when the plan refused nothing.
+/// The body of the `Planned change` section for a plan that will be written: the URI pairs and the
+/// backup directory the write creates. `backup` is `None` for a `--list` run, which creates no backup
+/// directory. What the write leaves alone is not here: `Sources` already reported every skip, and the
+/// confirmation repeats none of them (SPEC.md CLI). Alternatives appear only when the run has some,
+/// and this run has none — extra mirrors as comments are a TUI option.
 fn planned_change_lines(
     root: &Path,
     inventory: &sources::Inventory,
     plan: &plan::Plan,
     backup: Option<&manifest::BackupId>,
-    skipped: &[String],
     ink: Painter,
 ) -> Vec<String> {
     let mut out = plan_changes(root, inventory, plan, ink);
@@ -1238,12 +1226,6 @@ fn planned_change_lines(
             apply::BACKUP_ROOT,
             id.as_str()
         ));
-        out.push("  alternatives: none (extra mirrors as comments are a TUI option)".to_string());
-        // The confirmation lists what the write leaves alone, too: the user is confirming the whole
-        // change, not only the files that move.
-        for reason in skipped {
-            out.push(format!("  keep as is  {reason}"));
-        }
     }
     out
 }
@@ -1568,14 +1550,13 @@ fn run() -> Result<u8, (u8, String)> {
             best,
             platform,
         ) {
-            Ok(change) => match change.plan {
+            Ok(wanted) => match wanted {
                 Some(plan) => {
                     planned.extend(planned_change_lines(
                         Path::new(apply::APT_DIR),
                         &apt_sources,
                         &plan,
                         write_timing.as_ref().map(|(_, id)| id),
-                        &change.skipped,
                         ink,
                     ));
                     pending = Some(plan);
@@ -2861,42 +2842,100 @@ mod tests {
             plan::Platform::Ubuntu,
         )
         .expect("a run whose write already happened must not fail");
-        assert!(change.plan.is_none(), "nothing to change, so no plan");
-        assert!(change.skipped.is_empty(), "{:?}", change.skipped);
+        assert!(change.is_none(), "nothing to change, so no plan");
         // Success is still a run that writes nothing.
         assert_eq!(apt.read("sources.list"), current);
     }
 
+    /// Every entry the plan refuses is still reported to the user — in the `Sources` section, before
+    /// probing, which is where SPEC.md Apply puts it — and the confirmation that follows repeats none
+    /// of them (SPEC.md CLI). The two reports read the same apt files, so a skip cannot fall between
+    /// them.
     #[test]
-    fn the_plan_reports_every_skipped_entry_with_its_reason() {
+    fn a_skip_is_named_in_sources_and_never_again_in_the_confirmation() {
         let apt = TempApt::new("skipped");
         apt.write(
             "sources.list",
             "deb http://archive.ubuntu.com/ubuntu noble main\ndeb https://security.ubuntu.com/ubuntu noble-security main\n",
         );
-        // Not valid UTF-8: the inventory reports the file instead of dropping it, and the plan has to
-        // pass that report on (SPEC.md Apply: every skipped file with its reason).
+        // Not valid UTF-8: the inventory reports the file instead of dropping it (SPEC.md Apply:
+        // every skipped file with its reason).
         std::fs::write(apt.0.join("sources.list.d/bad.list"), [0xff, 0xfe]).expect("fixture file");
         let hosts = listed(&["archive.ubuntu.com", "mirror.example"]);
         let inventory = sources::inventory(&apt.0, &hosts, false);
-        let change = build_plan(
+        let plan = build_plan(
             &apt.0,
             &inventory,
             &hosts,
             &probed(MIRROR, verify::SignatureStatus::verified_for_test()),
             plan::Platform::Ubuntu,
         )
-        .expect("one URI is rewritable");
-        assert!(change.plan.is_some(), "the archive URI is rewritten");
-        let skipped = change.skipped.join("\n");
+        .expect("one URI is rewritable")
+        .expect("the archive URI is rewritten");
+        let sources = sources_section(&apt.0, &inventory, Painter::plain()).join("\n");
         assert!(
-            skipped.contains("bad.list: file is not valid UTF-8"),
-            "{skipped}"
+            sources.contains("bad.list                   skip     file is not valid UTF-8"),
+            "{sources}"
         );
         assert!(
-            skipped.contains("https://security.ubuntu.com/ubuntu was not changed"),
-            "{skipped}"
+            sources.contains("security.ubuntu.com — security suite is never rewritten"),
+            "{sources}"
         );
+        let confirmation = planned_change_lines(
+            &apt.0,
+            &inventory,
+            &plan,
+            Some(&manifest::BackupId::from_secs(1_700_000_000).expect("a valid backup id")),
+            Painter::plain(),
+        )
+        .join("\n");
+        assert!(!confirmation.contains("bad.list"), "{confirmation}");
+        assert!(!confirmation.contains("security"), "{confirmation}");
+    }
+
+    /// The confirmation names the files, the URI pairs and the backup directory it will create — and
+    /// nothing it would only repeat. `Sources` already listed every skip, alternatives appear only
+    /// when the run has some, and this run has none (SPEC.md CLI).
+    #[test]
+    fn the_planned_change_names_the_uri_pairs_and_the_backup_and_no_skip() {
+        let apt = TempApt::new("planned");
+        apt.write(
+            "sources.list.d/ubuntu.sources",
+            "# noble\nTypes: deb\nURIs: http://archive.ubuntu.com/ubuntu\nSuites: noble noble-updates\nComponents: main\n\nTypes: deb\nURIs: http://security.ubuntu.com/ubuntu\nSuites: noble-security\nComponents: main\n",
+        );
+        let hosts = listed(&["archive.ubuntu.com", "mirror.example"]);
+        let inventory = sources::inventory(&apt.0, &hosts, false);
+        let plan = build_plan(
+            &apt.0,
+            &inventory,
+            &hosts,
+            &probed(MIRROR, verify::SignatureStatus::verified_for_test()),
+            plan::Platform::Ubuntu,
+        )
+        .expect("the archive stanza is rewritable")
+        .expect("one file changes");
+        let id = manifest::BackupId::from_secs(1_700_000_000).expect("a valid backup id");
+        let lines = planned_change_lines(&apt.0, &inventory, &plan, Some(&id), Painter::plain());
+        assert_eq!(
+            lines,
+            [
+                "  sources.list.d/ubuntu.sources:2".to_string(),
+                "    - http://archive.ubuntu.com/ubuntu".to_string(),
+                "    + https://mirror.example/ubuntu/".to_string(),
+                format!(
+                    "  backup: {}/{} (every replaced file is copied there, mode 0700, before the first write)",
+                    apply::BACKUP_ROOT,
+                    id.as_str()
+                ),
+            ]
+        );
+        let text = lines.join("\n");
+        assert!(!text.contains("keep as is"), "{text}");
+        assert!(!text.contains("was not changed"), "{text}");
+        assert!(!text.contains("alternatives"), "{text}");
+        // A `--list` run creates no backup directory, so it prints the URI pairs and no backup line.
+        let listed = planned_change_lines(&apt.0, &inventory, &plan, None, Painter::plain());
+        assert_eq!(listed, lines[..3].to_vec());
     }
 
     #[test]
@@ -3039,7 +3078,6 @@ mod tests {
             plan::Platform::Ubuntu,
         )
         .expect("both inspected files have a rewritable URI")
-        .plan
         .expect("both inspected files are written");
         assert_eq!(plan.selected_uri(), MIRROR);
         assert_eq!(plan.proof().seconds(), 1000);
@@ -3106,7 +3144,6 @@ mod tests {
             plan::Platform::PopOs,
         )
         .expect("the Pop!_OS split is planned")
-        .plan
         .expect("the Pop!_OS split is written");
         assert_eq!(plan.writes().len(), 2);
         let created = plan
@@ -3599,6 +3636,20 @@ mod tests {
         );
     }
 
+    /// Nothing was rejected, so there is no `Rejected — 0` heading: a section with nothing to say
+    /// prints nothing at all, no heading and no `0` count (SPEC.md Output).
+    #[test]
+    fn a_report_with_no_rejection_prints_no_rejected_heading() {
+        assert!(rejected_lines(&[], false, Painter::plain()).is_empty());
+        assert!(rejected_lines(&[], true, Painter::plain()).is_empty());
+        // The report it feeds gains no line and no gap for it: `Report::block` skips an empty section,
+        // so nothing needs a case here.
+        let mut report = Report::default();
+        report.line("apt-scout 0.1.0 · Ubuntu 24.04 (noble)".to_string());
+        report.block(rejected_lines(&[], false, Painter::plain()));
+        assert_eq!(report.0, ["apt-scout 0.1.0 · Ubuntu 24.04 (noble)"]);
+    }
+
     /// The recommendation's reason carries every fact SPEC.md CLI asks for in it, and it names the
     /// AS the tie-break used: the bare match word cannot be checked against the table.
     #[test]
@@ -3961,7 +4012,6 @@ mod tests {
             plan::Platform::Ubuntu,
         )
         .expect("the archive stanza is rewritable")
-        .plan
         .expect("one file changes");
         let verified = verify::SignatureStatus::verified_for_test();
         let unverified = verify::SignatureStatus::Unavailable("no gpgv in this image".into());
@@ -4133,7 +4183,6 @@ mod tests {
             plan::Platform::Ubuntu,
         )
         .expect("the archive stanza is rewritable")
-        .plan
         .expect("one file changes");
         (apt, inventory, plan)
     }
