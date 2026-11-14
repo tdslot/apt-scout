@@ -759,8 +759,8 @@ impl<S: Sink> Progress<S> {
         self.show("verifying the reference".to_string());
     }
 
-    /// The candidates probed so far. `handle.join()` blocks in candidate order, so this is a lower
-    /// bound: a slow first candidate freezes the count instead of claiming more than is known.
+    /// The candidates probed **so far** (SPEC.md Output): `done` is how many probes have finished,
+    /// which `await_probes` reads from the probes themselves rather than from the joins.
     fn probe(&mut self, done: usize, total: usize) {
         let noun = if total == 1 { "mirror" } else { "mirrors" };
         self.show(format!("probing {total} {noun}… {done}/{total}"));
@@ -786,6 +786,39 @@ impl<S: Sink> Progress<S> {
             self.sink.settle(&line);
         }
     }
+}
+
+/// How often the probing line is redrawn while probes are in flight: short enough that the count keeps
+/// up with the mirrors landing, long enough that waiting costs nothing.
+const PROBE_POLL: Duration = Duration::from_millis(50);
+
+/// Wait for every probe with the line counting the probes that have **finished**, and hand back the
+/// joins in candidate order. `handle.join()` blocks in candidate order, so a loop that joins first
+/// would count the joins: a slow first mirror would freeze the line while the other twenty-eight are
+/// already done, which is not "the candidates probed so far" (SPEC.md Output). Polling the probes
+/// redraws as each one lands, and the results still come back in candidate order, so nothing
+/// downstream depends on which probe answered first.
+fn await_probes<T, S: Sink>(
+    handles: Vec<thread::JoinHandle<T>>,
+    progress: &mut Progress<S>,
+) -> Vec<thread::Result<T>> {
+    let total = handles.len();
+    // The line goes up before the first wait, so the probing phase is visible from its first
+    // millisecond instead of after the first probe comes back.
+    progress.probe(0, total);
+    let mut shown = 0;
+    loop {
+        let done = handles.iter().filter(|h| h.is_finished()).count();
+        if done != shown {
+            progress.probe(done, total);
+            shown = done;
+        }
+        if done == total {
+            break;
+        }
+        thread::sleep(PROBE_POLL);
+    }
+    handles.into_iter().map(|h| h.join()).collect()
 }
 
 /// The run's identity: version, release and the country the run used, with the source of the
@@ -1515,9 +1548,8 @@ fn run() -> Result<u8, (u8, String)> {
         .collect();
     let mut results = Vec::new();
     let mut rejected: Vec<Rejected> = Vec::new();
-    let probing = cands.len();
-    for (joined, (m, handle)) in cands.iter().zip(handles).enumerate() {
-        match handle.join() {
+    for (m, joined) in cands.iter().zip(await_probes(handles, &mut progress)) {
+        match joined {
             Ok(done) => results.push(done),
             Err(_) => rejected.push(Rejected {
                 host: m.url.trim_end_matches('/').to_string(),
@@ -1525,7 +1557,6 @@ fn run() -> Result<u8, (u8, String)> {
                 why: "the probe crashed unexpectedly".to_string(),
             }),
         }
-        progress.probe(joined + 1, probing);
     }
 
     // Read-only ranking baseline (SPEC step 8): the canonical archive; when it was unreachable, the
@@ -4812,6 +4843,37 @@ mod tests {
         let mut progress = Progress::new(RecordingSink::default(), true);
         progress.probe(1, 1);
         assert_eq!(progress.sink.lines, ["probing 1 mirror… 1/1"]);
+    }
+
+    /// "The candidates probed so far" (SPEC.md Output): the count comes from the probes that have
+    /// finished, not from the joins, so it starts at the truth and moves while the slow ones run —
+    /// with the first probe slow, a join-driven count would sit on `1/2` while `2/2` was the truth.
+    #[test]
+    fn the_probe_count_follows_the_probes_that_finished() {
+        let slow = thread::spawn(|| thread::sleep(Duration::from_millis(60)));
+        let quick = thread::spawn(|| ());
+        let mut progress = Progress::new(RecordingSink::default(), true);
+        assert_eq!(await_probes(vec![slow, quick], &mut progress).len(), 2);
+        let frames = &progress.sink.lines;
+        // The first frame is honest: nothing has finished yet, so it does not claim one.
+        assert_eq!(
+            frames.first().map(String::as_str),
+            Some("probing 2 mirrors… 0/2")
+        );
+        let counts: Vec<usize> = frames
+            .iter()
+            .map(|frame| {
+                frame
+                    .split_once('/')
+                    .and_then(|(left, _)| left.split_whitespace().next_back())
+                    .and_then(|n| n.parse().ok())
+                    .unwrap_or_else(|| panic!("not a counting frame: {frame}"))
+            })
+            .collect();
+        assert!(counts.len() >= 2, "{frames:?}");
+        // Each frame counts one more probe, so the line never claims a probe that is not done.
+        assert!(counts.windows(2).all(|w| w[0] < w[1]), "{frames:?}");
+        assert_eq!(counts.last(), Some(&2));
     }
 
     /// The one line that survives, with one decimal place, as SPEC.md Output spells it.
