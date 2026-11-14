@@ -24,6 +24,17 @@ Country detection contacts Canonical geoip, ifconfig.co, ipinfo.io, and Cloudfla
 
 See [SPEC.md](SPEC.md) for implemented behavior and planned milestones. See [AGENTS.md](AGENTS.md) for contributor checks.
 
+## Packaging
+
+```sh
+scripts/docker-test.sh --build-only   # leaves the static binary at target/docker/apt-scout-plain
+./scripts/build-deb.sh                # writes dist/apt-scout_<version>_amd64.deb
+```
+
+`build-deb.sh` reads the version from `Cargo.toml` unless you pass one, packages the static binary with its README, a `copyright` file carrying the MIT licence text, a `changelog.gz` generated from that version, and the man page when `man/apt-scout.1` exists, then checks the result with `dpkg-deb -I` and `dpkg-deb -c`. It uses `dpkg-deb` when the host has it and otherwise builds in an `ubuntu:24.04` container, so a Mac needs Docker. The package's maintainer, its `gpgv` and `ubuntu-keyring` dependencies, its section and its priority are read from `[package.metadata.deb]` in `Cargo.toml`, so that block stays the one place they are declared; a missing one stops the build. The output is one file, `dist/apt-scout_<version>_amd64.deb`. `scripts/build-deb.sh --self-test` checks the Cargo.toml readers without packaging anything.
+
+One package covers every supported Ubuntu release rather than one per release: the binary is linked against musl, so it has no `libc6` dependency and no glibc ABI to match, and `gpgv` and `ubuntu-keyring` keep the same names and paths from 20.04 to 26.04. The split is by architecture (`amd64` today, `arm64` later), never by release. The Docker matrix is the compatibility evidence, and it is as wide as this: two cases run on every supported release - the offline release-codename detection and the live ranked-table run that needs the network - on 20.04, 22.04, 24.04 and 26.04; the legacy-layout refusal runs on 22.04 and the Debian refusal on `debian:12`; every other case runs on the pinned 24.04 image. The script makes two builds and reports two digests, the plain binary mounted in the read-only cases and the harness binary in the write cases, and the same pair runs in every image.
+
 ## License
 
 MIT OR Apache-2.0
