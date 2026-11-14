@@ -1839,7 +1839,8 @@ fn plan_changes(
                             plan::Authority::Mirror { uri, .. } => {
                                 out.push(ink.green(&format!("    + {uri}")));
                             }
-                            // a restore plan has no mirror URI; D11b prints its own block
+                            // A restore plan carries bytes and no mirror URI: `run_restore` prints
+                            // its own block, and a restore never reaches this diff.
                             plan::Authority::Restore { .. } => {}
                         }
                         shown = true;
@@ -2356,7 +2357,8 @@ fn run() -> Result<u8, (u8, String)> {
                      {uri}.\nNext: run 'apt update' to refresh the package lists.",
                     touched.join(", ")
                 ),
-                // a restore plan has no mirror URI; D11b prints its own block
+                // A restore plan has no mirror URI: `run_restore` prints its own block and never
+                // reaches this match with a restore plan.
                 plan::Authority::Restore { .. } => {}
             }
             Ok(0)

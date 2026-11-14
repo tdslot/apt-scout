@@ -228,8 +228,9 @@ fn token(err: &ApplyError) -> &'static str {
         ApplyError::Exists { .. } => "Exists",
         ApplyError::Backup { .. } => "Backup",
         ApplyError::Write { .. } => "Write",
-        // No container case reaches the restore reader until D11b, but the token must name it: a
-        // refusal the matrix cannot produce would otherwise print no token at all.
+        // The restore reader is reached by the CLI, not by this harness: its container cases are
+        // W27–W33. The token must still name it, because this mapping is what a refusal printed
+        // through the harness carries.
         ApplyError::Restore { .. } => "Restore",
         ApplyError::Time { .. } => "Time",
     }
