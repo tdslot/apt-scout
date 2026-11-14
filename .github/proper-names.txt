@@ -1,0 +1,8 @@
+# Proper names the English-only guard must not police.
+#
+# The guard exists so that project text (docs, code, comments, metadata) is written in
+# English. A person's name is not project text: transliterating it would misspell it. One
+# name per line, matched literally, and a scan hit whose line contains one of these is
+# removed before the guard decides. Add a line only for a real person or account name.
+
+Tadas Lotužas
