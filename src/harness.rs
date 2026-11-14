@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use crate::apply::{self, APT_DIR, ApplyError};
 use crate::digest::sha256;
 use crate::fresh::{self, Probed};
-use crate::plan::{FileState, Plan, PlanError, PlannedWrite, Platform, SourceName, Target};
+use crate::plan::{Effect, FileState, Plan, PlanError, PlannedWrite, Platform, SourceName, Target};
 use crate::verify::{self, SignatureStatus, VerifiedDate};
 
 /// The `now_secs` every case hands `apply::apply`: 2026-11-12T00:00:00Z.
@@ -350,7 +350,7 @@ fn writes_for(case: Case) -> Result<Vec<PlannedWrite>, Fault> {
         new_bytes,
         digest,
         original: Some(original),
-        create_new: false,
+        effect: Effect::Replace,
     };
     match case {
         // Creations run first, so the security source is the plan's first write.
@@ -372,7 +372,7 @@ fn security_sources() -> Result<PlannedWrite, Fault> {
         digest: sha256(&new_bytes),
         new_bytes,
         original: None,
-        create_new: true,
+        effect: Effect::Create,
     })
 }
 
