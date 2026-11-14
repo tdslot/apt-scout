@@ -2487,6 +2487,12 @@ fn load_with_progress<S: Sink>(
 /// `narrow` is false under `--any`, where the country stops constraining the candidate set: `found`
 /// is then every kept mirror the list names, whatever country it puts it in (SPEC step 4).
 ///
+/// A Launchpad page that parsed is a loaded list even when the country filter kept nothing: `found`
+/// is then empty and `rest` is every other country's entry, so a run whose own country the page does
+/// not name reaches the one widening of SPEC step 4 instead of failing with no list at all. The
+/// `<CC>.txt` fallback still has its turn first (SPEC step 3), and only a fallback that names
+/// nothing of its own hands the page back.
+///
 /// The lines this load has to tell the user are pushed onto `notes` instead of written here, because
 /// the caller owns a live progress line that has to be erased before the first of them lands
 /// (SPEC.md Output). A note is produced whether the load succeeds or not, so the caller prints them
@@ -2508,7 +2514,12 @@ fn load_candidates(
     let keep =
         |m: &mirrors::Mirror| mirrors::validate_url(&m.url).is_ok() && (!https_only || m.https);
     let mut failures = Vec::new();
-
+    // A page that answered stays in hand even when the country filter kept nothing, because a country
+    // with no entry at all is exactly the case SPEC step 4's widening exists for and that page names
+    // every other country. It is held, not returned: the fallback below still has its turn (SPEC step
+    // 3 reads it when Launchpad returns no mirror for the country), and this page is what the run
+    // falls back to when the fallback yields nothing.
+    let mut answered_by_launchpad: Option<LoadedCandidates> = None;
     match net.get(LAUNCHPAD, http::MAX_PAGE, None) {
         Ok(page) => match mirrors::parse_launchpad(&String::from_utf8_lossy(&page.body)) {
             Ok(all) => {
@@ -2542,11 +2553,25 @@ fn load_candidates(
                     }
                     _ => "Launchpad lists no usable mirrors".to_string(),
                 });
+                // The country kept nothing while the page names mirrors somewhere: those mirrors are
+                // every country but this run's, so the page is what a widening would add.
+                if !kept.is_empty() {
+                    answered_by_launchpad = Some(LoadedCandidates {
+                        found,
+                        source: "Launchpad",
+                        roots,
+                        rest: Some(kept),
+                    });
+                }
             }
             Err(e) => failures.push(format!("cannot read {LAUNCHPAD}: {e}")),
         },
         Err(e) => failures.push(format!("cannot load the Launchpad mirror list: {e}")),
     }
+
+    // Anything the fallback pushed here belongs to a list this run does not end up using, so it goes
+    // when the page that already answered is the answer.
+    let notes_before_fallback = notes.len();
 
     // `mirrors.ubuntu.com` names one country per run and no run fetches another country's file, so
     // without a country there is no file to ask for and nothing to widen to (SPEC step 4). The list
@@ -2595,6 +2620,12 @@ fn load_candidates(
             failures.push(format!("{url} has no usable mirrors"));
         }
         Err(e) => failures.push(format!("cannot load {url}: {e}")),
+    }
+    // Neither list gave this run a candidate, but one of them answered with the whole world: the run
+    // ranks it after its one widening instead of failing on a country the page happens not to name.
+    if let Some(page) = answered_by_launchpad {
+        notes.truncate(notes_before_fallback);
+        return Ok(page);
     }
     Err((1, no_mirror_list(&failures)))
 }
@@ -3843,6 +3874,90 @@ mod tests {
             rest.is_none(),
             "this list names one country and nothing else"
         );
+    }
+
+    /// The case the feature exists for: a country Launchpad has no section for. The page that
+    /// answered is still a loaded list, the fallback that names one country has nothing, and the run
+    /// widens from that page and ranks the other countries' mirrors — without a second fetch and
+    /// without the "no mirror list is available" exit (SPEC step 4).
+    #[test]
+    fn a_country_the_page_does_not_name_widens_from_the_page_in_hand() {
+        // The fixture's country sections do not include Iceland, and nothing is canned for
+        // `mirrors.ubuntu.com/IS.txt`, so the fallback answers as it does for an empty file.
+        let net = Canned(vec![(LAUNCHPAD, Ok(LAUNCHPAD_OK))]);
+        let LoadedCandidates {
+            found: own,
+            source,
+            rest,
+            ..
+        } = load_candidates(
+            &net,
+            Some(Country {
+                cc: "IS",
+                name: "Iceland",
+            }),
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .expect("a page that answered is a loaded list, even with no entry for the country");
+        assert!(own.is_empty(), "no Icelandic mirror is listed: {own:?}");
+        assert_eq!(source, "Launchpad");
+        let rest = rest.expect("the page names every other country, so the run can widen to them");
+        assert!(
+            rest.iter().any(|m| m.country == "Germany"),
+            "the un-narrowed page is what the widening reads"
+        );
+
+        // One widening from that page, exactly as `run()` makes it: an empty candidate set, the page
+        // in hand, and every answer appended to the same results vector.
+        let mut results = Vec::new();
+        let widening = widen_if_empty(
+            &mut results,
+            Some(&rest),
+            &std::collections::HashSet::new(),
+            "Iceland",
+            None,
+            MAX_CANDIDATES,
+            &mut |batch| {
+                batch
+                    .iter()
+                    .map(|m| (m.clone(), Ok(answer_at(&m.url, NOW))))
+                    .collect()
+            },
+        );
+        assert!(
+            matches!(widening, Widening::Widened { added } if added > 0),
+            "the empty country is what triggers the widening: {widening:?}"
+        );
+        let countries: std::collections::BTreeSet<&str> =
+            results.iter().map(|(m, _)| m.country.as_str()).collect();
+        assert!(
+            !countries.is_empty(),
+            "the union is what ranks, not the empty set"
+        );
+        assert!(
+            !countries.contains("Iceland"),
+            "a widened set is the other countries: {countries:?}"
+        );
+        // The union is ranked as one set, which is the only thing the table is built from.
+        let ranked = fresh::rank(
+            results
+                .iter()
+                .filter_map(|(_, answer)| answer.as_ref().ok())
+                .map(|o| fresh::Probed {
+                    url: o.url.clone(),
+                    updates_date: o.updates_date,
+                    verified_updates: o.verified_updates,
+                    lag_secs: 0,
+                    throughput_bps: o.throughput_bps,
+                    latency_ms: o.latency_ms,
+                    same_as: false,
+                    signature: o.updates_signature.clone(),
+                })
+                .collect(),
+        );
+        assert_eq!(ranked.len(), results.len(), "every widened mirror ranks");
     }
 
     /// `--any` never widens: its set already is every country, so an empty one means nothing usable
