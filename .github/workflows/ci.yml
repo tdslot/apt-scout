@@ -126,7 +126,19 @@ jobs:
           # Lithuanian letters as Unicode escapes so this file does not match itself.
           # rg exit codes: 0 = match (fail), 1 = no match (pass), 2 = error (fail).
           rc=0
-          rg -n --hidden --glob '!.git' --glob '*.{md,rs,toml,yml}' '[\x{0104}\x{0105}\x{010C}\x{010D}\x{0116}-\x{0119}\x{012E}\x{012F}\x{0160}\x{0161}\x{016A}\x{016B}\x{0172}\x{0173}\x{017D}\x{017E}]' . || rc=$?
+          rg -n --hidden --glob '!.git' --glob '*.{md,rs,toml,yml}' '[\x{0104}\x{0105}\x{010C}\x{010D}\x{0116}-\x{0119}\x{012E}\x{012F}\x{0160}\x{0161}\x{016A}\x{016B}\x{0172}\x{0173}\x{017D}\x{017E}]' . > /tmp/guard-hits.txt || rc=$?
           if [ "$rc" -eq 1 ]; then exit 0; fi
-          [ "$rc" -eq 0 ] && echo "Found Lithuanian characters. All project artifacts must be English only (see AGENTS.md)." >&2
-          exit 1
+          if [ "$rc" -ne 0 ]; then echo "the English-only guard could not run (rg exit $rc)" >&2; exit 1; fi
+          # Proper names are not project text: a hit whose line carries a name from
+          # .github/proper-names.txt is dropped before the guard decides. Transliterating a
+          # name would misspell it, and the guard is about language, not about people.
+          while IFS= read -r name; do
+            case "$name" in ''|'#'*) continue ;; esac
+            grep -F -v -- "$name" /tmp/guard-hits.txt > /tmp/guard-hits.keep || true
+            mv /tmp/guard-hits.keep /tmp/guard-hits.txt
+          done < .github/proper-names.txt
+          if [ -s /tmp/guard-hits.txt ]; then
+            cat /tmp/guard-hits.txt >&2
+            echo "Found Lithuanian characters. All project artifacts must be English only (see AGENTS.md)." >&2
+            exit 1
+          fi
