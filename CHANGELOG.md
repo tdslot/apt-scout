@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. Generated from Conventional Commits by the "Prepare release" workflow.
 
+## 1.1.0 - 2026-11-15
+
+### Added
+
+- paint the report structure in Ubuntu orange (#78)
+
 ## 1.0.0 - 2026-11-15
 
 ### Added
