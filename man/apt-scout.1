@@ -400,6 +400,78 @@ its derivatives; an architecture other than \fBamd64\fR or \fBi386\fR, because
 \fIports.ubuntu.com\fR has no mirror choice; or a codename that
 archive.ubuntu.com answers 404 for, because the release moved to
 \fIold\-releases.ubuntu.com\fR, which has no mirrors.
+.SH ERRORS
+Every message names what failed, the path, URL or value it failed on, the
+reason underneath kept verbatim, and what to do next; the exit status says
+which kind of failure it was. The ones a run produces most often:
+.TP
+.B cannot tell which country you are in
+.br
+Every geolocation source failed or was skipped, so no country could be
+detected. Pass one: \fB\-\-country CC\fR, or \fB\-\-any\fR, which needs no
+country at all. Exit 2.
+.TP
+.B no mirror list is available
+.br
+Launchpad and, after it, \fImirrors.ubuntu.com/<CC>.txt\fR both failed, and
+each failure is named with its source and its reason. There is no retry, no
+cache and no snapshot behind them: fix the network, or try another country
+with \fB\-\-country\fR. Exit 1.
+.TP
+.B Cannot read os\-release
+.br
+Neither \fI/etc/os\-release\fR nor \fI/usr/lib/os\-release\fR could be read,
+so the Ubuntu release is unknown. There is no \fBlsb_release\fR path and no
+flag that passes a codename. Exit 1.
+.TP
+.B unsupported distribution
+.br
+\fBID\fR and \fBID_LIKE\fR name neither Ubuntu nor a derivative. Debian is
+out of scope because it has a different mirror list. Exit 4.
+.TP
+.B no mirror passed the freshness and reachability checks
+.br
+Every candidate was stale, unreachable, answered non-200, or carried no
+usable \fI\-updates\fR date. \fB\-\-verbose\fR prints every rejection in
+full, and \fB\-\-any\fR starts from every country's mirrors instead of one.
+Exit 1.
+.TP
+.B No official Ubuntu apt source URI can be changed
+.br
+No file holds a URI whose host and path a mirror list names: the sources are
+a PPA, a third-party repository, a \fImirror://\fR line, or a host no list
+names. \fB\-\-list\fR prints every file with the reason it was skipped. Exit
+1, or 3 for a non-root run that would have written.
+.TP
+.B answered 404: <codename> is no longer on archive.ubuntu.com
+.br
+The release moved to \fIold\-releases.ubuntu.com\fR, which has no mirrors to
+choose from, so the run stops before probing. Nothing on this host fixes it.
+Exit 4.
+.TP
+.B every verified cell reading ?
+.br
+\fBgpgv\fR or the Ubuntu archive keyring is missing or unusable, so no
+signature can be checked and no write is allowed. Install both with
+\fBsudo apt install gpgv ubuntu\-keyring\fR; ranking works meanwhile, and
+\fB\-\-verbose\fR prints the reason it could not run.
+.TP
+.B a backup, a write or a plan that failed
+.br
+The message names the target and the reason: a target that is not a regular
+file, a file that changed since it was read, a backup directory that already
+exists for that second, a read-only mount, or a mismatch the writer refused.
+Nothing under \fI/etc/apt\fR is left half-written, and a failed backup writes
+nothing at all. Exit 1.
+.TP
+.B an unknown option, a value the flag cannot use
+.br
+Usage errors are reported before any request is made and before any backup is
+opened: an unknown flag (\fB\-\-refresh\fR, \fB\-\-tui\fR and the reserved
+\fB\-R\fR among them), a \fB\-\-top\fR that is not a positive number,
+\fB\-\-no\-geo\fR with neither \fB\-\-country\fR nor \fB\-\-any\fR, a
+country code Launchpad does not list, or a \fB\-\-restore\fR run given a flag
+of the mirror pipeline. Exit 2. \fBEXIT STATUS\fR lists them.
 .SH FILES
 \fI/etc/apt/sources.list\fR, \fI/etc/apt/sources.list.d/*.list\fR and
 \fI/etc/apt/sources.list.d/*.sources\fR are read for the source inventory and
@@ -479,6 +551,24 @@ installed setuid: privilege comes only from the user running it as root.
 .PP
 The confirmation prompt is a safety rail, not a security control. \fB\-\-yes\fR
 removes only the prompt; the guarantee is the validation above.
+.SH PRIVACY
+Country detection contacts Canonical geoip, \fBifconfig.co\fR,
+\fBipinfo.io\fR and the Cloudflare trace, in that order, until the country,
+the public IP and the AS are known; Team Cymru's DNS provides the AS lookups
+for the server and for each candidate mirror host. Those services, and the
+configured resolver, can therefore observe the server's public IP, and the
+DNS queries carry mirror addresses during AS ranking. The mirror list comes
+from Launchpad over https or from \fImirrors.ubuntu.com\fR over http, and the
+reference archive and any http candidate are fetched without TLS, which is
+what the signature check is for. Proxies are ignored.
+.PP
+\fB\-\-no\-geo\fR with \fB\-\-country\fR, or with \fB\-\-any\fR, removes
+the geolocation and AS lookups, so no such provider learns the server's
+address; the mirror list still needs the network. Nothing else is uploaded
+and no telemetry is collected. The local reads are the apt sources,
+\fI/etc/os\-release\fR and, when it is absent, \fI/usr/lib/os\-release\fR,
+\fI/etc/resolv.conf\fR, the Ubuntu archive keyring, and the two programs run
+by fixed path, \fI/usr/bin/dpkg\fR and \fI/usr/bin/gpgv\fR.
 .SH EXAMPLES
 .nf
 .RS 4
@@ -491,6 +581,48 @@ sudo apt\-scout \-v \-t 10  # the proof behind the report, 10 rows
 sudo apt\-scout \-r      # put the newest backup back
 .RE
 .fi
+.SH USAGE RECIPES
+.TP
+.B Look before anything is written
+\fBapt\-scout \-l \-v\fR prints the ranked table, the plan a write would
+make and the proof behind every row. It never writes, whatever the uid, and
+exits 0 even when it stops because nothing may be rewritten.
+.TP
+.B Write the best mirror now
+\fBsudo apt\-scout\fR is the same run under root: one confirmation, then the
+write. \fB\-\-yes\fR is the unattended form, for a provisioning run where
+nobody is there to answer.
+.TP
+.B A host whose country cannot be detected
+\fBsudo apt\-scout \-\-no\-geo \-\-country DE\fR skips every geolocation and
+AS lookup and uses the country it is given. The mirror list itself still
+needs the network.
+.TP
+.B A country whose list is thin or slow
+\fBsudo apt\-scout \-\-any\fR ranks every country's mirrors together, capped
+at the 30 with the fastest declared link speed, and says in the header that
+the country constrains nothing.
+.TP
+.B Undo a rewrite
+\fBsudo apt\-scout \-\-restore\fR puts the newest backup back through the same
+writer, after one confirmation. A non-root run prints the \fBsudo\fR line and
+exits 3.
+.TP
+.B Why a source file was skipped
+Read the \fBSources\fR block of \fBapt\-scout \-l \-v\fR: every file, every
+URI it holds, and the reason each was rewritten or skipped, with the full text
+under \fB\-v\fR.
+.TP
+.B Restore a backup by hand
+When \fB\-\-restore\fR refuses a backup, copy the file back yourself as root so
+its owner and mode survive. That is also the only way back for a file the
+manifest records as created, which the restore removes instead of writing.
+.RS 4
+.nf
+sudo cp \-p /var/backups/apt\-scout/<id>/sources.list /etc/apt/sources.list
+sudo apt update
+.fi
+.RE
 .SH LIMITATIONS
 \fB\-\-tui\fR and \fB\-\-refresh\fR are not implemented yet: a run given one
 of them, or given the reserved \fB\-R\fR, fails as an unknown option with exit
