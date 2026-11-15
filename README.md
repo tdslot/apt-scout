@@ -30,6 +30,7 @@ The release tarball holds the binary, the two licences, this file and the manual
 ```sh
 tar -xzf apt-scout-v<version>-x86_64-unknown-linux-musl.tar.gz
 sudo install -m 0755 apt-scout-v<version>-x86_64-unknown-linux-musl/apt-scout /usr/local/bin/
+sudo install -m 0644 apt-scout-v<version>-x86_64-unknown-linux-musl/apt-scout.1 /usr/share/man/man1/
 sudo apt install gpgv ubuntu-keyring
 ```
 
@@ -49,7 +50,7 @@ The published release runs this same script: `.github/workflows/release.yml` bui
 ## Quick start
 
 ```sh
-apt-scout                                  # preview: the ranked table and a recommendation, nothing written
+apt-scout                                  # non-root: the ranked table and a recommendation, nothing written
 apt-scout --list --verbose                 # the same, plus the proof behind every row
 sudo apt-scout                            # back up, ask once, then rewrite the sources
 sudo apt-scout --yes                      # unattended: no prompt
@@ -77,7 +78,7 @@ A non-root mirror run never writes. It prints the recommendation and one line, `
 The report is one block, printed once when the probing and the ranking are done:
 
 - the identity line — `apt-scout <version> · Ubuntu <release> (<codename>) · country: <name> (<source>)`;
-- `Sources`, the directory scanned, then one line per source file with `rewrite` or `skip`, the line number, the host and, when skipped, the reason;
+- `Sources`, the directory scanned, then one line per file and per URI it holds, with `rewrite` or `skip`, the line number, the host and, when skipped, the reason, `no active entries` for a file it read and found nothing to act on in, and `no apt source files found` when `/etc/apt` holds none;
 - the context line, `mirrors:` naming the list source and `reference:` naming the freshness baseline;
 - `Ranked`, with the legend and the table, and `Detail` in a `--verbose` run only: the facts behind each row;
 - `Recommendation`, the chosen mirror with its reason, then `Planned change`, the diff a write would make or the note that nothing is written;
@@ -139,7 +140,7 @@ The uid decides whether a run writes; no flag makes it write and no answer to th
 | --- | --- |
 | 0 | Success, including `--list`, a restore the confirmation cancelled (nothing was written), and a root run that found the sources already pointing at the best mirror. |
 | 1 | Refusal or failure: no mirror passed the freshness and reachability checks, no source URI can be rewritten, a backup or a write failed. Nothing was written. |
-| 2 | Usage error: an unknown option, a country code that is not two letters or that Launchpad does not list, `--no-geo` without `--country` or `--any`, a `--top` that is not positive, `--restore` combined with a mirror flag. Nothing was probed and no backup was opened. |
+| 2 | Usage error: an unknown option, a country code that is not two letters or that Launchpad does not list, `--no-geo` without `--country` or `--any`, a `--top` that is not positive, `--restore` combined with a mirror flag, a run that could not tell which country it is in and was given neither `--country` nor `--any`. Nothing was probed and no backup was opened. |
 | 3 | This run would write and this uid may not. The `sudo` line is on stdout. |
 | 4 | Unsupported distribution or architecture, or a release that has left `archive.ubuntu.com`. Nothing was written. |
 
@@ -159,7 +160,7 @@ end 1
 
 One line per file: its path under `/etc/apt/`, `replace` or `create`, the SHA-256 of the bytes, the mode in decimal (`420` is 0644), the uid and the gid. Both the uid and the gid are 0: a backup is only ever written by root, for files root owns.
 
-`sudo apt-scout --restore` puts the newest backup back. It reads the manifest, checks every copy and every target against the record, asks once (the prompt names the backup it reads, the files it writes and the backup it creates; `--yes` skips it), and writes through the same validated path an apply uses. A finished restore prints its own block under a `Restore` heading rather than the mirror report: the backup it put back, each file it wrote, each file it removed, and the backup it created for what it replaced. A non-root run prints only `sudo apt-scout --restore` and exits 3, before it opens the backup. It names no mirror and takes no discovery flag, so `--country`, `--any`, `--top`, `--https-only`, `--list` and `--no-geo` with it are usage errors. The file a write created is removed by the restore, and a second restore is refused rather than guessed, because the newest backup names a file that is no longer there.
+`sudo apt-scout --restore` puts the newest backup back. It reads the manifest, checks every copy and every target against the record, asks once (the prompt names the backup it reads, the files it writes and the backup it creates; `--yes` skips it), and writes through the same validated path an apply uses. A finished restore prints its own block under a `Restore` heading rather than the mirror report: the backup it put back, each file it wrote, each file it removed, and the backup it created for what it replaced. A non-root run prints only `sudo apt-scout --restore` and exits 3, before it opens the backup. It names no mirror and takes no discovery flag, so `--country`, `--any`, `--top`, `--https-only`, `--list` and `--no-geo` with it are usage errors. The file a write created is removed by the restore, and a second restore is then refused rather than guessed, because the newest backup names a file that is no longer there. That refusal is the create case: a write that created nothing — every layout but the Pop!_OS `-security` split, which includes Ubuntu 24.04 and later, where `sources.list` and `ubuntu.sources` both already exist — leaves nothing missing, so the first restore's own backup becomes the newest one and a second restore puts back what the first one replaced, the mirror pointers, and exits 0.
 
 To restore by hand, copy the file back from the backup directory, as root, so the owner and the mode survive:
 
@@ -174,7 +175,7 @@ Repeat for each file the manifest lists. That copy path is still the fallback fo
 
 Country detection contacts Canonical geoip, `ifconfig.co`, `ipinfo.io` and the Cloudflare trace in that order until the country, the public IP and the AS are found. Team Cymru DNS provides the AS lookups, for the server and for candidate mirror hosts. Those services, and the configured DNS resolver, can observe the server's public IP, and the DNS queries carry mirror IP addresses during AS ranking. The mirror list comes from Launchpad over `https` or from `mirrors.ubuntu.com` over `http`; the reference release and any `http` candidate are fetched without TLS, which is what the signature check is for. Proxies are ignored, so the environment cannot route a request through one. The signature check runs `/usr/bin/gpgv` with a cleared environment and a private, empty homedir, so no user GnuPG configuration can influence the answer.
 
-`--no-geo --country CC`, or `--no-geo --any`, skips this run's geolocation and AS lookups, so no geolocation or AS provider learns the server's address; the mirror list itself still needs the network. Nothing else is uploaded and no telemetry is collected. The local reads are the apt sources, `/etc/os-release`, `/etc/resolv.conf`, the Ubuntu archive keyring, and the two programs invoked at fixed paths, `/usr/bin/dpkg` and `/usr/bin/gpgv`.
+`--no-geo --country CC`, or `--no-geo --any`, skips this run's geolocation and AS lookups, so no geolocation or AS provider learns the server's address; the mirror list itself still needs the network. Nothing else is uploaded and no telemetry is collected. The local reads are the apt sources, `/etc/os-release` and `/usr/lib/os-release` (the second when the first is absent), `/etc/resolv.conf`, the Ubuntu archive keyring, and the two programs invoked at fixed paths, `/usr/bin/dpkg` and `/usr/bin/gpgv`.
 
 ## Troubleshooting
 
