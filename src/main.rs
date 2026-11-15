@@ -646,16 +646,64 @@ fn next_step_hint() -> &'static str {
     "Next: run 'sudo apt update' to refresh the package lists."
 }
 
+/// The path one touched target names, under `/etc/apt`. The one spelling the closing sentence is
+/// given: a sentence names files, and the verb belongs to the per-file line above it.
+fn touched_path(touched: &apply::Touched) -> String {
+    format!("{}/{}", apply::APT_DIR, touched.target.relative().display())
+}
+
+/// The per-file line a write prints for one touched target: `wrote <path>` for a creation or a
+/// replacement, `removed <path>` for a removal. Built from the same [`touched_path`] the closing
+/// sentence gets, so the two cannot disagree about a path — and the sentence never receives this
+/// line's verb as part of it.
+fn touched_line(touched: &apply::Touched) -> String {
+    let path = touched_path(touched);
+    match touched.effect {
+        plan::Effect::Remove => format!("removed {path}"),
+        plan::Effect::Create | plan::Effect::Replace => format!("wrote {path}"),
+    }
+}
+
 /// The closing block a finished mirror write prints: the `changed …` sentence and the next step, as
 /// the one string the write path hands to `println!`. Separated from that `println!` so a unit test
 /// can hold the line a write ends with as a whole and not the hint on its own: a test of the
 /// sentence alone cannot tell whether that line still carries it (SPEC.md Output).
-fn write_closing_block(touched: &[String], uri: &str) -> String {
+///
+/// It takes the touched list itself and not the per-file lines, so a sentence handed `wrote <path>`
+/// is not a mistake a caller can make: the write path and its test hand it the same list, and a
+/// regression has to happen here, where the test looks. Handed the lines it printed `changed wrote
+/// <path>`, naming each path with a verb the sentence has no room for.
+fn write_closing_block(touched: &[apply::Touched], uri: &str) -> String {
+    let paths: Vec<String> = touched.iter().map(touched_path).collect();
     format!(
         "\nchanged {}: every eligible official archive URI in those files now points at {uri}.\n{}",
-        touched.join(", "),
+        paths.join(", "),
         next_step_hint()
     )
+}
+
+/// Whether the report prints the no-eligible hint itself, so that no run prints it twice. A run
+/// that stops without an error — `--list`, or a non-root run that prints the `sudo` line — has no
+/// message to carry the hint, so the report does. A root write stops with a refusal, and a refusal
+/// must say how to fix what it reports (SPEC.md Errors), so that message carries it and the report
+/// leaves it out. One hint per run, whichever run it is.
+fn hint_in_report(mode: Mode) -> bool {
+    !matches!(mode, Mode::Write { .. } | Mode::Restore { .. })
+}
+
+/// The lines a run that found no rewritable URI adds to its report before it stops: the fact, and the
+/// hint when nothing else is going to print one. Returning them instead of printing them keeps the
+/// hint in one place the caller cannot reach around: [`no_eligible_uri`] carries it for a root write,
+/// so a run cannot print it from both, and a test can hold the two halves against each other.
+fn no_eligible_report(mode: Mode, list_source: &str) -> Vec<String> {
+    let mut lines = vec![
+        "No official Ubuntu apt source URI can be changed; stopping before mirror probes."
+            .to_string(),
+    ];
+    if hint_in_report(mode) {
+        lines.push(no_eligible_hint(list_source));
+    }
+    lines
 }
 
 /// No apt source file holds an official Ubuntu archive URI, so the run stops before probing. SPEC.md
@@ -674,8 +722,10 @@ fn no_eligible_uri(mode: Mode, args: &Args, list_source: &str) -> Result<u8, (u8
         }
         Mode::Write { .. } | Mode::Restore { .. } => Err((
             1,
+            // The hint ends in its own full stop and the sentence after it starts a new one: this
+            // message once re-punctuated it and printed `run again..`.
             format!(
-                "no official Ubuntu apt source URI can be changed, so the write has nothing to do. Nothing was written. {}. Run with --list to see every file that was inspected.",
+                "no official Ubuntu apt source URI can be changed, so the write has nothing to do. Nothing was written. {} Run with --list to see every file that was inspected.",
                 no_eligible_hint(list_source)
             ),
         )),
@@ -1660,8 +1710,9 @@ fn table_rows<'a>(
 /// words for the two numbers. The chosen mirror's AS and its match are proof that the tie-break was
 /// auditable, not facts a reader acts on when choosing a mirror, so only a `--verbose` run names them
 /// (SPEC.md Output). The signature is the same split: the default line names the column and its cell
-/// — `verified yes`, `verified no`, `verified ?` — and the exact status the cell stands for is
-/// `--verbose`'s, because it is the proof and not the decision (SPEC.md Output).
+/// — `verified yes`, `verified no`, `verified ?` — and the reason a check that did not pass did not
+/// pass is `--verbose`'s, added after that cell, because it is the proof and not the decision
+/// (SPEC.md Output).
 fn recommendation(
     best: &fresh::Probed,
     country: &str,
@@ -1679,10 +1730,17 @@ fn recommendation(
     } else {
         "closest"
     };
-    let signature = if verbose {
-        format!("{freshness} {}", signature_words(&best.signature))
-    } else {
-        format!("{freshness}, verified {}", signature_cell(&best.signature))
+    // The cell is the default line's whole signature fact and it stays in the verbose line too:
+    // `--verbose` adds to the default report instead of replacing any part of it (SPEC.md Output),
+    // so what it adds is the reason a check that did not pass did not pass, after the cell that says
+    // it did not. The verbatim replacement `freshest verified` was a defect: it dropped the cell's
+    // value and the punctuation that separates the facts.
+    let signature = match (verbose, signature_reason(&best.signature)) {
+        (true, Some(reason)) => format!(
+            "{freshness}, verified {} ({reason})",
+            signature_cell(&best.signature)
+        ),
+        _ => format!("{freshness}, verified {}", signature_cell(&best.signature)),
     };
     format!(
         "  {} — {signature}, {country}{as_fact}, {}m behind, {:.1} MB/s, {} ms latency",
@@ -2168,11 +2226,9 @@ fn run() -> Result<u8, (u8, String)> {
         ink,
     ));
     if !apt_sources.has_rewritable_uri() {
-        report.line(
-            "No official Ubuntu apt source URI can be changed; stopping before mirror probes."
-                .to_string(),
-        );
-        report.line(no_eligible_hint(list_source));
+        for line in no_eligible_report(mode, list_source) {
+            report.line(line);
+        }
         // No phase after the list load ran, so there is no summary to print: the line is erased and the
         // animation joined, so the report that follows starts on its own line and nothing can draw
         // over it (SPEC.md Output).
@@ -2473,23 +2529,12 @@ fn run() -> Result<u8, (u8, String)> {
                 apply::BACKUP_ROOT,
                 outcome.backup_id.as_str()
             );
-            let touched: Vec<String> = outcome
-                .touched
-                .iter()
-                .map(|t| {
-                    let path = format!("{}/{}", apply::APT_DIR, t.target.relative().display());
-                    match t.effect {
-                        plan::Effect::Remove => format!("removed {path}"),
-                        plan::Effect::Create | plan::Effect::Replace => format!("wrote {path}"),
-                    }
-                })
-                .collect();
-            for line in &touched {
+            for line in outcome.touched.iter().map(touched_line) {
                 println!("{line}");
             }
             match plan.authority() {
                 plan::Authority::Mirror { uri, .. } => {
-                    println!("{}", write_closing_block(&touched, uri))
+                    println!("{}", write_closing_block(&outcome.touched, uri))
                 }
                 // A restore plan has no mirror URI: `run_restore` prints its own block and never
                 // reaches this match with a restore plan.
@@ -2718,14 +2763,26 @@ fn signature_cell_painted(status: &verify::SignatureStatus, ink: Painter) -> Str
     }
 }
 
-/// The same status in words, for `--verbose` alone: the exact status is the proof behind the table's
-/// `yes`/`no`/`?`, and proof is what `-v` adds (SPEC.md Output). A default run asks
-/// `signature_cell` for the column's word instead.
-fn signature_words(status: &verify::SignatureStatus) -> &'static str {
+/// Why a check that is not a pass is not one, in the one wording both places that need it read: the
+/// `--verbose` recommendation appends it after the table's cell, and [`signature_words`] wraps it for
+/// the `Detail` panel. `Verified` has no reason: `verified yes` is the whole of what `gpgv` reported,
+/// so `--verbose` adds nothing there and the default line stands unchanged (SPEC.md Output).
+fn signature_reason(status: &verify::SignatureStatus) -> Option<&'static str> {
     match status {
-        verify::SignatureStatus::Verified(_) => "verified",
-        verify::SignatureStatus::Invalid(_) => "unverified (invalid signature)",
-        verify::SignatureStatus::Unavailable(_) => "unverified (signature unavailable)",
+        verify::SignatureStatus::Verified(_) => None,
+        verify::SignatureStatus::Invalid(_) => Some("invalid signature"),
+        verify::SignatureStatus::Unavailable(_) => Some("signature unavailable"),
+    }
+}
+
+/// The same status in words, for the facts that carry no cell in front of them: the `Detail` panel's
+/// `signature:` line and the context line's reference. A default recommendation asks
+/// `signature_cell` for the column's word instead, and a `--verbose` one asks
+/// [`signature_reason`], because there the cell is already on the line.
+fn signature_words(status: &verify::SignatureStatus) -> String {
+    match signature_reason(status) {
+        None => "verified".to_string(),
+        Some(reason) => format!("unverified ({reason})"),
     }
 }
 
@@ -5408,6 +5465,60 @@ mod tests {
         assert_eq!(apt.read("sources.list"), original);
     }
 
+    /// A root write that finds nothing to write says the remedy once, and does not re-punctuate a
+    /// sentence that already ends in a full stop. A container run printed `and run again..` and the
+    /// same hint twice, because the report had already printed it two lines above.
+    #[test]
+    fn the_no_eligible_hint_is_printed_once_and_its_full_stop_is_not_doubled() {
+        let args = parse_args_from(["--country", "LT"].into_iter().map(str::to_string)).unwrap();
+        let hint = no_eligible_hint("Launchpad");
+        let (code, msg) = no_eligible_uri(Mode::Write { confirm: true }, &args, "Launchpad")
+            .expect_err("a root run with nothing to write must fail");
+        assert_eq!(code, 1);
+        // The refusal keeps the remedy, because a refusal has to say how to fix what it reports
+        // (SPEC.md Errors) — exactly once:
+        assert_eq!(msg.matches(&hint).count(), 1, "{msg}");
+        // …and a hint that stops is followed by a new sentence, never by a second full stop.
+        assert!(hint.ends_with('.'), "{hint}");
+        assert!(!msg.contains(".."), "{msg}");
+        assert!(
+            msg.contains("run again. Run with --list"),
+            "one full stop between the two sentences: {msg}"
+        );
+        // The report leaves the hint out exactly when the refusal carries it, so no run prints it
+        // twice, and a run that stops without a message still gets it. Both halves are the shipped
+        // ones: the report lines come from `no_eligible_report`, which is what the run prints.
+        let report = |mode: Mode| no_eligible_report(mode, "Launchpad").join("\n");
+        for mode in [
+            Mode::Write { confirm: true },
+            Mode::Restore { confirm: false },
+        ] {
+            let (code, msg) = no_eligible_uri(mode, &args, "Launchpad")
+                .expect_err("a root run with nothing to write must fail");
+            assert_eq!(code, 1);
+            assert!(!hint_in_report(mode), "{mode:?}");
+            assert!(
+                !report(mode).contains(&hint),
+                "{mode:?}: the report repeats what the refusal says: {}",
+                report(mode)
+            );
+            assert_eq!(
+                format!("{}\n{msg}", report(mode)).matches(&hint).count(),
+                1,
+                "{mode:?}: the hint is printed once per run"
+            );
+        }
+        for mode in [Mode::List, Mode::Recommend] {
+            assert!(hint_in_report(mode), "{mode:?}");
+            assert_eq!(
+                report(mode).matches(&hint).count(),
+                1,
+                "{mode:?}: a run that stops without a refusal still says it: {}",
+                report(mode)
+            );
+        }
+    }
+
     #[test]
     fn the_run_level_exit_codes_are_pinned() {
         let args = parse_args_from(["--country", "LT"].into_iter().map(str::to_string)).unwrap();
@@ -5483,6 +5594,71 @@ mod tests {
         }
     }
 
+    /// Every path a write names, named once, and the sentence that names it given no verb. A
+    /// container run printed `changed wrote /etc/apt/sources.list.d/ubuntu.sources`, because the
+    /// block was handed the per-file lines instead of the paths. Both the check here and the write
+    /// path hand `write_closing_block` the same `Touched` list the writer returns, so the sentence
+    /// cannot be given a line one way and a path the other, and a regression fails this test rather
+    /// than only a root run in a container.
+    #[test]
+    fn a_write_names_each_path_once_and_the_changed_sentence_carries_no_verb() {
+        let target = |name: &str| plan::Target::parse(name).expect("a target the plan accepts");
+        let touched = [
+            apply::Touched {
+                target: target("sources.list"),
+                effect: plan::Effect::Replace,
+            },
+            apply::Touched {
+                target: target("sources.list.d/ubuntu.sources"),
+                effect: plan::Effect::Create,
+            },
+            apply::Touched {
+                target: target("sources.list.d/system-security.sources"),
+                effect: plan::Effect::Remove,
+            },
+        ];
+        // The per-file lines keep the verb, one per file, and say which way the file moved.
+        assert_eq!(
+            touched.iter().map(touched_line).collect::<Vec<_>>(),
+            [
+                "wrote /etc/apt/sources.list",
+                "wrote /etc/apt/sources.list.d/ubuntu.sources",
+                "removed /etc/apt/sources.list.d/system-security.sources",
+            ]
+        );
+        // The closing sentence names the same three paths, once each, and none of the verbs: that
+        // is the `changed …` line README.md and the man page promise, not `changed wrote …`.
+        let block = write_closing_block(&touched, "http://mirror.example/ubuntu/");
+        assert!(
+            block.starts_with(
+                "\nchanged /etc/apt/sources.list, /etc/apt/sources.list.d/ubuntu.sources, /etc/apt/sources.list.d/system-security.sources:"
+            ),
+            "{block}"
+        );
+        for verb in ["wrote", "removed"] {
+            assert!(
+                !block.contains(verb),
+                "the closing sentence carries `{verb}`: {block}"
+            );
+        }
+        // The sentence names the three paths and nothing else: once each, in the order they were
+        // written. `sources.list` occurs inside the two `sources.list.d` paths, so the list is
+        // compared as a list and not by substring.
+        let listed = block
+            .trim_start()
+            .lines()
+            .next()
+            .and_then(|line| line.strip_prefix("changed "))
+            .and_then(|rest| rest.split_once(": "))
+            .map(|(names, _)| names)
+            .unwrap_or_default();
+        assert_eq!(
+            listed.split(", ").collect::<Vec<_>>(),
+            touched.iter().map(touched_path).collect::<Vec<_>>(),
+            "{block}"
+        );
+    }
+
     /// The last line a write prints names a command the reader can run from the shell they are back
     /// in. The write was made by a root run started as `sudo apt-scout …`, which has exited, so a
     /// bare `apt update` fails with permission denied where they stand. What is held here is the
@@ -5491,7 +5667,10 @@ mod tests {
     /// the path.
     #[test]
     fn the_next_step_after_a_write_names_a_command_an_unprivileged_shell_can_run() {
-        let touched = ["/etc/apt/sources.list".to_string()];
+        let touched = [apply::Touched {
+            target: plan::Target::parse("sources.list").expect("a target the plan accepts"),
+            effect: plan::Effect::Replace,
+        }];
         let block = write_closing_block(&touched, "http://mirror.example/ubuntu/");
         assert!(block.ends_with(next_step_hint()), "{block}");
         assert!(block.contains("'sudo apt update'"), "{block}");
@@ -6193,7 +6372,8 @@ mod tests {
             "  https://mirror.example/ubuntu/ — freshest, verified yes, Lithuania, 0m behind, 1.0 MB/s, 10 ms latency"
         );
         // The same mirror under --verbose names the AS the tie-break used: the bare match word
-        // cannot be checked against the table.
+        // cannot be checked against the table. Every fact of the default line is still there, in the
+        // same words.
         assert_eq!(
             recommendation(
                 &best,
@@ -6202,7 +6382,7 @@ mod tests {
                 true,
                 Painter::plain()
             ),
-            "  https://mirror.example/ubuntu/ — freshest verified, Lithuania, AS 12929 same, 0m behind, 1.0 MB/s, 10 ms latency"
+            "  https://mirror.example/ubuntu/ — freshest, verified yes, Lithuania, AS 12929 same, 0m behind, 1.0 MB/s, 10 ms latency"
         );
         // A mirror one generation behind says so instead of claiming to be the freshest.
         let mut lagging = best;
@@ -6213,7 +6393,7 @@ mod tests {
         );
         assert_eq!(
             recommendation(&lagging, "Lithuania", None, true, Painter::plain()),
-            "  https://mirror.example/ubuntu/ — closest verified, Lithuania, AS unknown, 360m behind, 1.0 MB/s, 10 ms latency"
+            "  https://mirror.example/ubuntu/ — closest, verified yes, Lithuania, AS unknown, 360m behind, 1.0 MB/s, 10 ms latency"
         );
     }
 
@@ -6252,15 +6432,79 @@ mod tests {
             .map(signature_cell),
             ["?", "no", "yes"]
         );
-        // Not one exact status in either default line, and both in the `--verbose` ones.
-        for (status, phrase) in [
-            (unchecked, "unverified (signature unavailable)"),
-            (invalid, "unverified (invalid signature)"),
+        // Not one reason in either default line, and both in the `--verbose` ones, each after the
+        // cell it explains: `--verbose` adds the proof, it never replaces the word the table uses.
+        for (status, cell, reason) in [
+            (unchecked, "?", "signature unavailable"),
+            (invalid, "no", "invalid signature"),
         ] {
             let plain = line(status, false);
-            assert!(!plain.contains(phrase), "the proof leaked: {plain}");
+            assert!(!plain.contains(reason), "the proof leaked: {plain}");
             assert!(!plain.contains("unverified"), "the proof leaked: {plain}");
-            assert!(line(status, true).contains(phrase), "{status:?}");
+            let verbose = line(status, true);
+            assert!(
+                verbose.contains(&format!("verified {cell} ({reason})")),
+                "{status:?}: {verbose}"
+            );
+        }
+    }
+
+    /// `-v` adds to the default report instead of replacing any part of it (SPEC.md Output). The two
+    /// renderings are compared to each other, never each to a copy of itself. A `--verbose` run
+    /// printed `freshest verified` where the default printed `freshest, verified yes`, so the cell's
+    /// value and the comma that separates the freshness word from it were replaced rather than added
+    /// to; both checks below fail on that shape.
+    #[test]
+    fn the_verbose_recommendation_keeps_every_word_of_the_default_one() {
+        /// The words of a line, with the commas the sentence puts between facts cut off: where a
+        /// fact is added, the commas around it move, and that is not a word changing.
+        fn words(line: &str) -> Vec<&str> {
+            line.split_whitespace()
+                .map(|word| word.trim_end_matches(','))
+                .collect()
+        }
+        /// Every word of `kept` appears in `line`, in the order `kept` has them.
+        fn keeps_in_order(kept: &[&str], line: &[&str]) -> bool {
+            let mut rest = line.iter();
+            kept.iter().all(|word| rest.any(|next| next == word))
+        }
+        for status in [
+            verify::SignatureStatus::verified_for_test(),
+            verify::SignatureStatus::Invalid("altered".into()),
+            verify::SignatureStatus::Unavailable("no gpgv in this image".into()),
+        ] {
+            let best = probed(MIRROR, status.clone());
+            let plain = recommendation(
+                &best,
+                "Lithuania",
+                Some("12929 same"),
+                false,
+                Painter::plain(),
+            );
+            let verbose = recommendation(
+                &best,
+                "Lithuania",
+                Some("12929 same"),
+                true,
+                Painter::plain(),
+            );
+            // Not one word of the default line is lost, and none is reordered. The cell's value is
+            // the word `freshest verified` dropped.
+            assert!(
+                keeps_in_order(&words(&plain), &words(&verbose)),
+                "a default word is missing from the verbose line for {status:?}:\n{plain}\n{verbose}"
+            );
+            // Nor does the seam it was replaced at move: the freshness word, then a comma, then the
+            // column's word and its cell, in both lines.
+            let seam = format!("freshest, verified {}", signature_cell(&status));
+            assert!(plain.contains(&seam), "{plain}");
+            assert!(verbose.contains(&seam), "{verbose}");
+            // The one fact it adds, added where the default line keeps its country.
+            assert!(verbose.contains(", AS 12929 same"), "{verbose}");
+            assert_ne!(
+                plain, verbose,
+                "a `--verbose` line that added nothing is not the proof: {verbose}"
+            );
         }
     }
 
