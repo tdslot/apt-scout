@@ -1,19 +1,27 @@
 #!/usr/bin/env bash
-# Build an installable .deb from the static binary scripts/docker-test.sh --build-only produces.
-# Usage: scripts/build-deb.sh [version]
+# Build an installable .deb from a static binary: by default the one scripts/docker-test.sh
+# --build-only produces, or the file --binary names.
+# Usage: scripts/build-deb.sh [--binary <path>] [version]
 set -euo pipefail
+# This script's own path, absolute, resolved before the cd below: "$0" is relative to the caller's
+# working directory, so `bash ../apt-scout/scripts/build-deb.sh --self-test` from somewhere else
+# stops resolving once this script has moved. The self-test copies this file, so it needs this.
+self=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+self=$self/$(basename -- "$0")
 cd "$(dirname "$0")/.."
 
 usage() {
-  echo "Usage: scripts/build-deb.sh [version]"
+  echo "Usage: scripts/build-deb.sh [--binary <path>] [version]"
   echo
-  echo "  version  package version; defaults to the version in Cargo.toml"
+  echo "  version          package version; defaults to the version in Cargo.toml"
+  echo "  --binary <path>  the static binary to package; defaults to target/docker/apt-scout-plain"
   echo
-  echo "Writes dist/apt-scout_<version>_amd64.deb from target/docker/apt-scout-plain."
-  echo "That binary comes from scripts/docker-test.sh --build-only; this script never builds it."
+  echo "Writes dist/apt-scout_<version>_amd64.deb from target/docker/apt-scout-plain, or from the file"
+  echo "--binary names, which must be a regular executable file. The default comes from"
+  echo "scripts/docker-test.sh --build-only; this script never builds a binary."
   echo "Builds with dpkg-deb on the host, or in an ubuntu:24.04 container when the host has none."
   echo
-  echo "  --self-test  check the Cargo.toml readers against a scratch manifest and exit"
+  echo "  --self-test  check the Cargo.toml readers and the --binary packaging run, then exit"
 }
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -64,7 +72,8 @@ meta_required() {
 }
 
 # The reader contract, checked against a manifest built to break it: a key in the wrong section is
-# never the answer, whichever direction it comes from. Run with --self-test.
+# never the answer, whichever direction it comes from. Then --binary and the packaging run it feeds,
+# built for real against a scratch tree and a fake binary. Run with --self-test.
 self_test() {
   local dir bad=0
   dir=$(mktemp -d "${TMPDIR:-/tmp}/apt-scout-metadata.XXXXXX") || die "cannot create a scratch directory"
@@ -80,6 +89,8 @@ maintainer = "shadow in package <shadow@example.invalid>"
 maintainer = "real <real@example.invalid>"
 section = "admin"
 version = "9.9.9"
+depends = "gpgv, ubuntu-keyring"
+priority = "optional"
 EOF
   check() {
     if [ "$2" = "$3" ]; then echo "PASS $1"; else echo "FAIL $1: expected '$2', got '$3'"; bad=1; fi
@@ -89,19 +100,102 @@ EOF
   check "deb_field maintainer ignores the [package] copy" "real <real@example.invalid>" "$(deb_field maintainer)"
   check "package_field maintainer is [package]'s own" "shadow in package <shadow@example.invalid>" "$(package_field maintainer)"
   check "package_field description is [package]'s own" "from the package table" "$(package_field description)"
-  check "a key in neither section reads empty" "" "$(deb_field depends)"
+  check "a key in neither section reads empty" "" "$(deb_field homepage)"
+
+  # Then the packaging run itself, for real: a scratch copy of the tree (this script, the scratch
+  # manifest, the two files a run installs) is packaged with --binary pointing at a fake binary, and
+  # the archive's own usr/bin/apt-scout is compared with that file byte for byte. The other half is
+  # the three refusals, each with its own exit status and its own message: a path that is not there,
+  # a directory that is executable but is not a file — the one case only `-f` catches, because `-x`
+  # passes on a directory — and a regular file without the execute bit.
+  local repo=$dir/repo fake=$dir/fake-binary deb extract=$dir/extract out status
+  deb=$repo/dist/apt-scout_9.9.9_amd64.deb
+  mkdir -p "$repo/scripts"
+  cp "$self" "$repo/scripts/build-deb.sh"
+  chmod 0755 "$repo/scripts/build-deb.sh"
+  cp "$manifest" "$repo/Cargo.toml"
+  cp README.md LICENSE-MIT "$repo/"
+  printf '#!/bin/sh\nexit 0\n' > "$fake"
+  chmod 0755 "$fake"
+  # Read a file back out of a built archive with whichever tool built it, the same two choices the
+  # build has: dpkg-deb on the host, or the container. --user keeps the extracted tree removable by
+  # the user that owns the scratch directory it sits in.
+  deb_extract() {
+    if command -v dpkg-deb >/dev/null 2>&1; then
+      dpkg-deb -x "$1" "$2"
+    else
+      docker run --rm --platform linux/amd64 --user "$(id -u):$(id -g)" -v "$dir":/t \
+        ubuntu:24.04 dpkg-deb -x "/t${1#"$dir"}" "/t${2#"$dir"}"
+    fi
+  }
+  if out=$("$repo/scripts/build-deb.sh" --binary "$dir/not-there" 9.9.9 2>&1); then
+    echo "FAIL --binary with a path that is not there exits 0"; bad=1
+  else
+    case $out in
+      *"$dir/not-there"*) echo "PASS --binary with a path that is not there stops the build naming it" ;;
+      *) echo "FAIL --binary with a path that is not there does not name it: $out"; bad=1 ;;
+    esac
+  fi
+  # The case the `-f` guard exists for: a directory has the execute bit, so `-x` passes on it and a
+  # build without the `-f` check reaches the staging `install` instead of stopping here.
+  status=0
+  out=$("$repo/scripts/build-deb.sh" --binary "$dir" 9.9.9 2>&1) || status=$?
+  if [ "$status" -ne 1 ]; then
+    echo "FAIL --binary with a directory exits $status, not 1"; bad=1
+  else
+    case $out in
+      *"$dir is not a regular file"*) echo "PASS --binary with a directory says it is not a regular file" ;;
+      *) echo "FAIL --binary with a directory does not say it is not a regular file: $out"; bad=1 ;;
+    esac
+  fi
+  # The third truth: a regular file that is there and lacks the execute bit is neither missing nor a
+  # directory, and says so instead of borrowing either message.
+  printf '#!/bin/sh\nexit 0\n' > "$dir/not-executable"
+  chmod 0644 "$dir/not-executable"
+  status=0
+  out=$("$repo/scripts/build-deb.sh" --binary "$dir/not-executable" 9.9.9 2>&1) || status=$?
+  if [ "$status" -ne 1 ]; then
+    echo "FAIL --binary with a regular file that is not executable exits $status, not 1"; bad=1
+  else
+    case $out in
+      *"$dir/not-executable is not executable"*) echo "PASS --binary with a file that is not executable says so" ;;
+      *) echo "FAIL --binary with a file that is not executable does not say so: $out"; bad=1 ;;
+    esac
+  fi
+  if ! "$repo/scripts/build-deb.sh" --binary "$fake" 9.9.9 >/dev/null; then
+    echo "FAIL --binary did not build a package from the given file"; bad=1
+  elif [ ! -f "$deb" ]; then
+    echo "FAIL --binary built no ${deb##*/}"; bad=1
+  elif deb_extract "$deb" "$extract" && cmp -s "$fake" "$extract/usr/bin/apt-scout"; then
+    echo "PASS --binary puts the given file's bytes at usr/bin/apt-scout"
+  else
+    echo "FAIL usr/bin/apt-scout is not the file --binary named"; bad=1
+  fi
+
   rm -rf "$dir"
-  [ "$bad" = 0 ] || die "the metadata readers do not separate [package] from [package.metadata.deb]"
+  [ "$bad" = 0 ] || die "the self-test failed: the lines marked FAIL above say which check"
 }
 
-case ${1:-} in
-  -h|--help) usage; exit 0 ;;
-  --self-test) self_test; exit 0 ;;
-  -*) echo "unknown option '$1'; try --help" >&2; exit 2 ;;
-esac
-if [ "$#" -gt 1 ]; then echo "too many arguments; try --help" >&2; exit 2; fi
-
-version=${1:-}
+# The default binary is the one scripts/docker-test.sh --build-only writes; --binary is how a caller
+# with its own build directory (CI, whose cross build lands under target/<triple>) points the same
+# builder at its own file.
+binary=target/docker/apt-scout-plain
+version=
+while [ "$#" -gt 0 ]; do
+  case $1 in
+    -h|--help) usage; exit 0 ;;
+    --self-test) self_test; exit 0 ;;
+    --binary)
+      [ "$#" -ge 2 ] || { echo "--binary needs a path; try --help" >&2; exit 2; }
+      binary=$2
+      shift ;;
+    -*) echo "unknown option '$1'; try --help" >&2; exit 2 ;;
+    *)
+      [ -z "$version" ] || { echo "too many arguments; try --help" >&2; exit 2; }
+      version=$1 ;;
+  esac
+  shift
+done
 if [ -z "$version" ]; then
   version=$(package_field version)
   [ -n "$version" ] || die "cannot read the version from Cargo.toml; pass it as the first argument"
@@ -124,8 +218,15 @@ priority=$(meta_required priority)
 synopsis=$(package_field description)
 [ -n "$synopsis" ] || die "cannot read the description from Cargo.toml"
 
-binary=target/docker/apt-scout-plain
-[ -f "$binary" ] || die "$binary is missing; build it with scripts/docker-test.sh --build-only"
+# Three different truths get three different messages: a path that is not there, a path that is
+# there but is not a regular file (a directory passes `-x`, so `-f` is the guard that catches it),
+# and a regular file without the execute bit. Same exit code, no wrong message for a real path.
+if [ ! -f "$binary" ]; then
+  if [ -e "$binary" ]; then
+    die "$binary is not a regular file; --binary names the file to package, and a directory is not one"
+  fi
+  die "$binary is missing; build it with scripts/docker-test.sh --build-only"
+fi
 [ -x "$binary" ] || die "$binary is not executable; rebuild it with scripts/docker-test.sh --build-only"
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/apt-scout-deb.XXXXXX") || die "cannot create a staging directory"
