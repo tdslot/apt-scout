@@ -236,7 +236,7 @@ DISPLAY
 
 EXIT CODES
   0 success    1 refusal or failure    2 usage    3 not root
-  4 unsupported distribution or architecture
+  4 unsupported distribution or architecture, or the release moved to old-releases.ubuntu.com
 
 EXAMPLES
   apt-scout --list --country LT       preview only
@@ -5445,6 +5445,42 @@ mod tests {
             msg.contains("no mirror passed the freshness and reachability checks"),
             "{msg}"
         );
+    }
+
+    /// Exit code 4 answers two questions of a run, and both tables used to name only one of them.
+    /// The first is the preflight: a distribution that is not Ubuntu, and an architecture with no
+    /// mirror choice. The second is Pipeline 8's reference reply: the `<codename>-updates`
+    /// `InRelease` answered 404 because the release moved to `old-releases.ubuntu.com`, which has no
+    /// mirrors. A reader who met 4 for the second case and looked it up learned the first, so the
+    /// one line this block gives a code has to carry both meanings, in the words that tell them
+    /// apart (SPEC.md Non-functional, Pipeline 8).
+    #[test]
+    fn the_help_line_for_exit_code_four_names_both_meanings() {
+        let line = HELP
+            .lines()
+            .find(|line| line.trim_start().starts_with("4 "))
+            .expect("`--help` has a line for exit code 4");
+        // The preflight half, in the words the table already used.
+        assert!(
+            line.contains("unsupported distribution or architecture"),
+            "the distribution and architecture half is missing from the line for 4: {line}"
+        );
+        // The Pipeline 8 half: the release is no longer on `archive.ubuntu.com`. The host is the
+        // word that makes it recognisable, because a run that exits 4 here and a run that exits 4
+        // there share no other fact.
+        assert!(
+            line.contains("old-releases.ubuntu.com"),
+            "the release-moved half is missing from the line for 4: {line}"
+        );
+        // Both on the one line a code gets, not one here and one elsewhere: each meaning is spelled
+        // exactly once in `--help`, so a reader meets the whole meaning of 4 in one place.
+        for meaning in ["unsupported distribution", "old-releases.ubuntu.com"] {
+            assert_eq!(
+                HELP.lines().filter(|l| l.contains(meaning)).count(),
+                1,
+                "{meaning} is spelled once, on the line for exit code 4:\n{HELP}"
+            );
+        }
     }
 
     /// The last line a write prints names a command the reader can run from the shell they are back
