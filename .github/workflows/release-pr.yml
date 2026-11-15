@@ -15,7 +15,7 @@ jobs:
     if: "startsWith(github.event.head_commit.message, 'chore(release): v')"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Open develop -> main PR
         env:
           GH_TOKEN: ${{ github.token }}
