@@ -156,8 +156,34 @@ jobs:
             notes.md
           if-no-files-found: error
 
-  publish:
+  verify:
     needs: build
+    # The artifact contract, checked on every run that builds one — not only on the run that publishes
+    # it. This is the job a dry run exercises: before it existed, `download-artifact` and the sums were
+    # first exercised by a real release, which is how a missing checkout reached main.
+    if: needs.build.outputs.skip != 'true'
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-artifacts
+          path: .
+      - name: Check what would be published
+        run: |
+          set -euo pipefail
+          test -f notes.md
+          grep -q 'apt-scout' notes.md
+          cd dist
+          ls -l
+          sha256sum --check SHA256SUMS
+          dpkg-deb -c ./*.deb | awk '{print $1, $3, $6}' | grep -q 'usr/share/man/man1/apt-scout.1'
+          tar -tzf ./*.tar.gz | grep -q 'apt-scout.1'
+          echo 'artifact contract holds'
+
+  publish:
+    needs: [build, verify]
     environment: release
     # The only path to a tag or a release: a push to main, or a dispatch on main with the box
     # unticked. Everything else stops at the build job, which holds no write token.
