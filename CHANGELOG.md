@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here. Generated from Conventional Commits by the "Prepare release" workflow.
 
+## 1.1.2 - 2026-11-15
+
+### Added
+
+- count each rejected class, as the contract already said (#100)
+
+### Fixed
+
+- name each written path once, and keep the default words under -v (#98)
+
 ## 1.1.1 - 2026-11-15
 
 ### Fixed
