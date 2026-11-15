@@ -75,6 +75,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets --locked -- -D warnings
+      # `src/harness.rs` is compiled only under this cfg, so without this step nothing in CI
+      # type-checks it and a syntax error there keeps every required check green. Measured: with a
+      # deliberate syntax error in that file the line above reports 0 errors and this one 3.
+      - run: cargo clippy --all-targets --locked -- -D warnings
+        env:
+          RUSTFLAGS: --cfg apt_scout_write_harness
       - run: cargo test --locked
       - run: cargo build --release --locked
 
