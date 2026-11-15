@@ -35,7 +35,7 @@ Task order, task states, merged PRs, and verification evidence live in `ROADMAP.
 - Every claim about a control names a `SPEC.md` section or an S1–S17 test ID.
 - A control that exists is cited `path:line`; a control that must still be built is written as `must`, in the voice of the S tests, and says plainly that it does not exist yet. A present-tense sentence with no citation is a claim about shipped code, and a claim the code cannot support is a defect.
 - `rg -n "OPEN — needs a human ruling" docs/threat-model.md` returns nothing; a gap left open with that marker, or a ruling that reads as if it answered a different question, is a defect.
-- The ruling count is one number in the record and in `ROADMAP.md`: `rg -no '^- \*\*7\.[1-9]' docs/threat-model.md | wc -l` returns 9, `rg -no '^\*\*G[1-3]' docs/threat-model.md | wc -l` returns 3, and `rg -ni "twelve rulings" docs/threat-model.md ROADMAP.md` returns one hit in each file. A different count anywhere is a defect.
+- The ruling count is one number in the record and in `ROADMAP.md`: `rg -no '^- \*\*7\.[1-9]' docs/threat-model.md | wc -l` returns 9, `rg -no '^\*\*G[1-3]' docs/threat-model.md | wc -l` returns 3, and `rg -ni "twelve rulings" docs/threat-model.md ROADMAP.md` returns five lines across those two files — one in the record and four in `ROADMAP.md` (D6e, D9d, the D50 entry and the log line at the end of the file). A different count anywhere is a defect.
 - `rg -n "^[0-9]+\. \*\*(APPLIED|PENDING)" docs/threat-model.md` lists the ledger; review it for an item that carries no state.
 - `rg -n "^## " docs/threat-model.md` lists the record's sections; a ruling in the decision record that gates a write must point at least one S-ID.
 
