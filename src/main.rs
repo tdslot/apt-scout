@@ -725,8 +725,33 @@ impl Report {
     }
 }
 
+/// The two forms the accent takes (SPEC.md Output). `#E95420` is Ubuntu's orange, and it is a 24-bit
+/// colour, so it has to be named in one of two ways: `TrueColor` when the terminal says it can render
+/// it, and `EightBit` otherwise. Naming the fallback rather than letting a terminal drop the sequence
+/// is what keeps the degrade honest — `38;2` is silently ignored or misdrawn by a term that does not
+/// support it, so a single unconditional truecolor escape would leave the accent invisible on exactly
+/// the terms this fallback serves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Accent {
+    /// `38;2;233;84;32`: `#E95420` itself.
+    TrueColor,
+    /// `38;5;166`: the xterm-256 cube's orange, `#D75F00`, which is the nearest a terminal without
+    /// truecolor renders.
+    EightBit,
+}
+
+impl Accent {
+    /// The SGR parameters that turn the accent on, whichever form it takes.
+    fn code(self) -> &'static str {
+        match self {
+            Accent::TrueColor => "38;2;233;84;32",
+            Accent::EightBit => "38;5;166",
+        }
+    }
+}
+
 /// The inks the report uses: the whole vocabulary of SPEC.md Output, so no render site can invent a
-/// sixth one. Display only — a decision, a comparison, an ordering, a path, a written byte and an
+/// seventh one. Display only — a decision, a comparison, an ordering, a path, a written byte and an
 /// exit code never read it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Style {
@@ -735,6 +760,9 @@ enum Style {
     Yellow,
     Red,
     Dim,
+    /// The one brand ink: the identity line, every section heading and the spinner's frame. It carries
+    /// its form, because the accent is the only ink whose exact bytes depend on the terminal.
+    Accent(Accent),
 }
 
 impl Style {
@@ -746,6 +774,7 @@ impl Style {
             Style::Yellow => "33",
             Style::Red => "31",
             Style::Dim => "2",
+            Style::Accent(accent) => accent.code(),
         }
     }
 }
@@ -759,9 +788,34 @@ fn colour_enabled(stdout_is_terminal: bool, no_color_flag: bool, no_color_set: b
 
 /// The one environment read colour makes. `var_os`, because SPEC.md Output counts `NO_COLOR` as set
 /// whatever its value is, the empty one included, and a non-UTF-8 value is still a value. It reaches
-/// no decision, no path, no written byte and no exit code.
+/// no decision, no path, no written byte and no exit code. `accent_from_env` below is the second and
+/// last display-only read colour makes, and the same sentence constrains it.
 fn no_color_from_env() -> bool {
     std::env::var_os("NO_COLOR").is_some()
+}
+
+/// The second, and last, environment read colour makes (SPEC.md Output): which form the accent takes.
+/// It is a capability report and not an input — it reaches no decision, no path, no written byte and
+/// no exit code, so two runs that differ only in `COLORTERM` print the same words, write the same
+/// bytes and exit with the same code, and only the accent's escape differs. A non-UTF-8 value names
+/// no capability this crate knows, so it takes the fallback rather than failing.
+fn accent_from_env() -> Accent {
+    accent_for(
+        std::env::var_os("COLORTERM")
+            .as_deref()
+            .and_then(std::ffi::OsStr::to_str),
+    )
+}
+
+/// The rule, pure so a test proves both branches without a terminal (SPEC.md Output): `COLORTERM`
+/// reading `truecolor` or `24bit`, in any case, means the exact colour, and everything else — a bare
+/// `COLORTERM`, a `256`, a value from another program, and unset itself — means the 256-colour cube.
+fn accent_for(colourterm: Option<&str>) -> Accent {
+    match colourterm {
+        Some(value) if value.eq_ignore_ascii_case("truecolor") => Accent::TrueColor,
+        Some(value) if value.eq_ignore_ascii_case("24bit") => Accent::TrueColor,
+        _ => Accent::EightBit,
+    }
 }
 
 /// `text` in `style`, or `text` unchanged when colour is off. The only place an escape sequence is
@@ -777,21 +831,32 @@ fn paint(style: Style, text: &str, enabled: bool) -> String {
 /// The style set one run paints its report with, threaded into every render site. The plain one
 /// returns its input, so a render function needs no branch of its own and the plain text cannot
 /// drift from the coloured one. A styled cell is always painted **after** it is padded: `{:<44.44}`
-/// counts bytes, so painting first would break every column.
+/// counts bytes, so painting first would break every column. `accent` is decided once with `colour`
+/// and never read again, so an escape cannot be one form on one line and the other on the next.
 #[derive(Clone, Copy)]
 struct Painter {
     colour: bool,
+    accent: Accent,
 }
 
 impl Painter {
-    fn new(colour: bool) -> Self {
-        Painter { colour }
+    fn new(colour: bool, accent: Accent) -> Self {
+        Painter { colour, accent }
     }
 
     /// What a piped run and every test use: no escapes, ever.
     #[cfg(test)]
     fn plain() -> Self {
-        Painter { colour: false }
+        Painter {
+            colour: false,
+            accent: Accent::EightBit,
+        }
+    }
+
+    /// The accent ink: the identity line, every section heading and the spinner's frame, and nothing
+    /// else (SPEC.md Output).
+    fn accent(&self, text: &str) -> String {
+        paint(Style::Accent(self.accent), text, self.colour)
     }
 
     fn bold(&self, text: &str) -> String {
@@ -895,9 +960,11 @@ fn spinner_frame(elapsed: Duration) -> char {
 }
 
 /// The one line the animation draws: the frame and the phase's own text, so the probing count rides
-/// inside the same frame instead of becoming a second line (SPEC.md Output). Pure.
-fn spinner_line(elapsed: Duration, text: &str) -> String {
-    format!("{} {text}", spinner_frame(elapsed))
+/// inside the same frame instead of becoming a second line (SPEC.md Output). The frame is the accent
+/// and the text beside it is not: the Braille cell is the one thing on the line that is the tool's
+/// own mark, and a coloured phase would be a second vocabulary for the words. Pure.
+fn spinner_line(elapsed: Duration, text: &str, ink: Painter) -> String {
+    format!("{} {text}", ink.accent(&spinner_frame(elapsed).to_string()))
 }
 
 /// What the run tells the animation. Both drawing messages carry an acknowledgement, so the caller
@@ -929,14 +996,14 @@ enum Wake {
 /// of count — the whole point of the ticker: a phase that runs for five seconds visibly moves — and a
 /// long run still opens every phase on the first cell (SPEC.md Output). A frame does nothing but
 /// draw, so no probe's timeout, measurement, rejection or join order changes because one was drawn.
-fn run_ticker<S: Sink>(sink: &mut S, mut wait: impl FnMut(Duration) -> Wake) {
+fn run_ticker<S: Sink>(sink: &mut S, ink: Painter, mut wait: impl FnMut(Duration) -> Wake) {
     let mut text: Option<String> = None;
     // The draw a message asked for, whose sender is released once the line is on the screen.
     let mut ack: Option<mpsc::SyncSender<()>> = None;
     let mut elapsed = Duration::ZERO;
     loop {
         if let Some(text) = text.as_deref() {
-            sink.rewrite(&spinner_line(elapsed, text));
+            sink.rewrite(&spinner_line(elapsed, text, ink));
         }
         if let Some(ack) = ack.take() {
             let _ = ack.send(());
@@ -1003,14 +1070,16 @@ struct Ticker {
 impl Ticker {
     /// Start the animation over the run's sink. Standard library only: a thread, a channel, the
     /// mutex and the clock, so no terminal or progress crate is added for one cell of Braille.
-    fn start<S: Sink + Send + 'static>(sink: Arc<Mutex<S>>) -> Self {
+    fn start<S: Sink + Send + 'static>(sink: Arc<Mutex<S>>, ink: Painter) -> Self {
         let (tx, rx) = mpsc::channel();
         let handle = thread::spawn(move || {
             let mut locked = Locked { sink };
-            run_ticker(&mut locked, |interval| match rx.recv_timeout(interval) {
-                Ok(message) => Wake::Message(message),
-                Err(mpsc::RecvTimeoutError::Timeout) => Wake::Timeout,
-                Err(mpsc::RecvTimeoutError::Disconnected) => Wake::Closed,
+            run_ticker(&mut locked, ink, |interval| {
+                match rx.recv_timeout(interval) {
+                    Ok(message) => Wake::Message(message),
+                    Err(mpsc::RecvTimeoutError::Timeout) => Wake::Timeout,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => Wake::Closed,
+                }
             });
         });
         Ticker {
@@ -1099,10 +1168,12 @@ struct Progress<S: Sink + Send + 'static> {
 
 impl<S: Sink + Send + 'static> Progress<S> {
     /// The clock starts here, so the summary spans the run's work and not only its last phase.
-    /// `enabled` is whether standard error is a terminal: false starts no thread at all.
-    fn new(sink: S, enabled: bool) -> Self {
+    /// `enabled` is whether standard error is a terminal: false starts no thread at all, and `ink` is
+    /// the run's one painter, so the frame is coloured by the same decision as the report and carries
+    /// no gate of its own.
+    fn new(sink: S, enabled: bool, ink: Painter) -> Self {
         let sink = Arc::new(Mutex::new(sink));
-        let ticker = enabled.then(|| Ticker::start(Arc::clone(&sink)));
+        let ticker = enabled.then(|| Ticker::start(Arc::clone(&sink), ink));
         Progress {
             sink,
             ticker,
@@ -1302,7 +1373,8 @@ fn recommendation_country<'a>(
 }
 
 /// The run's identity: version, release and the country the run used, with the source of the
-/// country, because `--country` is an override and the line says which one won (SPEC.md CLI).
+/// country, because `--country` is an override and the line says which one won (SPEC.md CLI). It is
+/// the accent, so the first line a run prints is the one that says whose tool this is.
 fn header_identity(
     version: &str,
     distro: &str,
@@ -1310,7 +1382,7 @@ fn header_identity(
     origin: &str,
     ink: Painter,
 ) -> String {
-    ink.bold(&format!(
+    ink.accent(&format!(
         "apt-scout {version} · {distro} · country: {country} ({origin})"
     ))
 }
@@ -1342,13 +1414,14 @@ fn header_context(
 }
 
 /// A section title with an annotation on the right, so a heading can state the rule it follows
-/// without a sentence underneath the table. The heading is bold, and painted after its padding so the
-/// annotation stays in its column.
+/// without a sentence underneath the table. The heading is the accent — the one ink every
+/// `titled()` heading shares — and is painted after its padding so the annotation stays in its
+/// column.
 fn titled(left: &str, right: &str, ink: Painter) -> String {
     if right.is_empty() {
-        ink.bold(left)
+        ink.accent(left)
     } else {
-        format!("{}  {right}", ink.bold(&format!("{left:<45}")))
+        format!("{}  {right}", ink.accent(&format!("{left:<45}")))
     }
 }
 
@@ -1665,7 +1738,7 @@ fn rejected_section(rejected: &[Rejected], ink: Painter) -> Vec<String> {
         };
         groups.entry(r.kind.label()).or_default().push(item);
     }
-    let mut out = vec![ink.bold(&format!("Rejected — {}", rejected.len()))];
+    let mut out = vec![ink.accent(&format!("Rejected — {}", rejected.len()))];
     for (label, items) in groups {
         out.push(ink.red(&format!("  {label:<17} {}", items.join(", "))));
     }
@@ -1674,7 +1747,7 @@ fn rejected_section(rejected: &[Rejected], ink: Painter) -> Vec<String> {
 
 /// `--verbose` says why for each mirror on its own line, instead of grouping.
 fn rejected_detail(rejected: &[Rejected], ink: Painter) -> Vec<String> {
-    let mut out = vec![ink.bold(&format!("Rejected — {}", rejected.len()))];
+    let mut out = vec![ink.accent(&format!("Rejected — {}", rejected.len()))];
     for r in rejected {
         out.push(ink.red(&format!(
             "  {:<40} {:<17} {}",
@@ -1714,7 +1787,7 @@ fn detail_section(
     resolved: &std::collections::HashMap<String, ResolvedAs>,
     ink: Painter,
 ) -> Vec<String> {
-    let mut out = vec![ink.bold("Detail")];
+    let mut out = vec![ink.accent("Detail")];
     for (i, row) in rows.iter().enumerate() {
         out.push(format!("  {}  {}", i + 1, row.url));
         let detail = details.get(row.url);
@@ -1922,11 +1995,14 @@ fn run() -> Result<u8, (u8, String)> {
     // SPEC.md Output: colour is decided once, at startup, from the three inputs that all have to
     // agree. Nothing below re-reads a terminal or an environment variable, so a report cannot be
     // half painted.
-    let ink = Painter::new(colour_enabled(
-        io::stdout().is_terminal(),
-        args.no_color,
-        no_color_from_env(),
-    ));
+    let ink = Painter::new(
+        colour_enabled(
+            io::stdout().is_terminal(),
+            args.no_color,
+            no_color_from_env(),
+        ),
+        accent_from_env(),
+    );
     // The uid decides whether this run may write (SPEC.md CLI). `require_root` is the writer's own
     // check, so the decision and the writer can never disagree about what root is.
     let root = apply::require_root().is_ok();
@@ -2000,7 +2076,7 @@ fn run() -> Result<u8, (u8, String)> {
     // SPEC.md Output: progress is for a person watching the run work, so the sink is inert unless
     // standard error is a terminal. The clock starts here, before the list loads, so the summary
     // spans the four phases it names.
-    let mut progress = Progress::new(StderrSink::new(), io::stderr().is_terminal());
+    let mut progress = Progress::new(StderrSink::new(), io::stderr().is_terminal(), ink);
     let LoadedCandidates {
         found,
         source: list_source,
@@ -2266,7 +2342,7 @@ fn run() -> Result<u8, (u8, String)> {
     // CLI), and the two differ once a run is not narrowed to one country.
     let best_country = recommendation_country(&details, &best.url);
     report.block(vec![
-        ink.bold("Recommendation"),
+        ink.accent("Recommendation"),
         recommendation(best, best_country, best_cell.as_deref(), args.verbose, ink),
     ]);
 
@@ -2465,7 +2541,7 @@ fn run_restore(args: &Args, ink: Painter, root: bool, ask: bool) -> Result<u8, (
     // deciding cannot change what is written.
     let outcome = restore::run(&plan, now).map_err(|e| (e.exit_code(), e.to_string()))?;
     let mut report = Report::default();
-    report.line(ink.bold("Restore"));
+    report.line(ink.accent("Restore"));
     // `backup` is read from the plan above — the plan that was written — so the block names the
     // backup that was actually put back.
     report.block(restore_lines(backup, &plan, &outcome, args.verbose));
@@ -3981,7 +4057,7 @@ mod tests {
             ]),
             trace: trace.clone(),
         };
-        let mut progress = Progress::new(TracingSink(trace.clone()), true);
+        let mut progress = Progress::new(TracingSink(trace.clone()), true, Painter::plain());
         let LoadedCandidates {
             found: cands,
             source: src,
@@ -6558,7 +6634,7 @@ mod tests {
             report.block(detail_section(&rows, &details, &mirror_asn, ink));
         }
         report.block(vec![
-            ink.bold("Recommendation"),
+            ink.accent("Recommendation"),
             recommendation(
                 &ranked[0],
                 "United States",
@@ -6980,7 +7056,7 @@ mod tests {
             ink,
         ));
         report.block(vec![
-            ink.bold("Recommendation"),
+            ink.accent("Recommendation"),
             recommendation(
                 &probed(MIRROR, verify::SignatureStatus::verified_for_test()),
                 "United States",
@@ -7046,13 +7122,48 @@ mod tests {
         assert_eq!(plain.yellow("?"), "?");
         assert_eq!(plain.red("- old"), "- old");
         assert_eq!(plain.dim("behind"), "behind");
-        assert_eq!(paint(Style::Bold, "x", false), "x");
+        // The accent too: a run with colour off makes no escape whichever form it would have taken.
+        assert_eq!(plain.accent("Sources"), "Sources");
+        assert_eq!(paint(Style::Accent(Accent::TrueColor), "x", false), "x");
+    }
+
+    /// The accent's two forms, each pinned as its own literal, and `accent_for` choosing between them
+    /// (SPEC.md Output). The two sides of the `assert_ne!` are two separately written expectations, so
+    /// collapsing the branch — returning `TrueColor` for everything, or `EightBit` for everything —
+    /// fails an `accent_for` assertion below instead of passing both.
+    #[test]
+    fn the_accent_is_truecolor_only_when_the_terminal_says_it_can_render_it() {
+        assert_eq!(
+            paint(Style::Accent(Accent::TrueColor), "\u{280b}", true),
+            "\u{1b}[38;2;233;84;32m\u{280b}\u{1b}[0m"
+        );
+        assert_eq!(
+            paint(Style::Accent(Accent::EightBit), "\u{280b}", true),
+            "\u{1b}[38;5;166m\u{280b}\u{1b}[0m"
+        );
+        assert_ne!(
+            paint(Style::Accent(Accent::TrueColor), "\u{280b}", true),
+            paint(Style::Accent(Accent::EightBit), "\u{280b}", true),
+            "the two forms are one escape, and a fallback that shares it is decorative"
+        );
+
+        // `COLORTERM` naming a capability: the two spellings real terminals export, in either case.
+        assert_eq!(accent_for(Some("truecolor")), Accent::TrueColor);
+        assert_eq!(accent_for(Some("24bit")), Accent::TrueColor);
+        assert_eq!(accent_for(Some("TrueColor")), Accent::TrueColor);
+        // Everything else is the cube, and unset is what a pipe and a bare term both give.
+        assert_eq!(accent_for(None), Accent::EightBit);
+        assert_eq!(accent_for(Some("256")), Accent::EightBit);
+        assert_eq!(accent_for(Some("yes")), Accent::EightBit);
+        assert_eq!(accent_for(Some("")), Accent::EightBit);
+        // A value that is not UTF-8 never reaches the rule as text, so it is the same fallback.
+        assert_eq!(accent_for(None), Accent::EightBit);
     }
 
     /// The ink table, and that `paint` is the only function that makes an escape.
     #[test]
     fn an_enabled_painter_wraps_the_text_in_one_escape() {
-        let ink = Painter::new(true);
+        let ink = Painter::new(true, Accent::EightBit);
         assert_eq!(ink.bold("Section"), "\u{1b}[1mSection\u{1b}[0m");
         assert_eq!(ink.green("yes"), "\u{1b}[32myes\u{1b}[0m");
         assert_eq!(ink.yellow("?"), "\u{1b}[33m?\u{1b}[0m");
@@ -7078,11 +7189,12 @@ mod tests {
             (true, true, false),
             (true, false, true),
         ] {
-            let ink = Painter::new(colour_enabled(
-                stdout_is_terminal,
-                no_color_flag,
-                no_color_set,
-            ));
+            // The accent is the exact colour here, so the gate is proved to win over it: a run with
+            // colour off makes no escape whichever form the accent would have taken.
+            let ink = Painter::new(
+                colour_enabled(stdout_is_terminal, no_color_flag, no_color_set),
+                Accent::TrueColor,
+            );
             assert_eq!(
                 painted_report(ink, &apt, &inventory, &plan),
                 plain,
@@ -7103,27 +7215,56 @@ mod tests {
     fn a_coloured_report_differs_from_the_plain_one_only_by_escapes() {
         let (apt, inventory, plan) = sample_plan("colour-escapes");
         let plain = painted_report(Painter::plain(), &apt, &inventory, &plan);
-        let coloured = painted_report(Painter::new(true), &apt, &inventory, &plan);
+        let coloured = painted_report(
+            Painter::new(true, Accent::EightBit),
+            &apt,
+            &inventory,
+            &plan,
+        );
         assert_ne!(coloured, plain, "something must be painted");
         let stripped: Vec<String> = coloured.iter().map(|line| strip_escapes(line)).collect();
         assert_eq!(stripped, plain);
 
-        // Site by site (SPEC.md Output): bold for the identity line, section headings and the
-        // recommended host; green `yes` and `+` lines; yellow `no` and `?`; red rejection reasons and
-        // `-` lines; dim `behind`, `speed` and `latency`.
+        // Site by site (SPEC.md Output): the accent on the identity line and every section heading,
+        // bold on the recommended host; green `yes` and `+` lines; yellow `no` and `?`; red rejection
+        // reasons and `-` lines; dim `behind`, `speed` and `latency`.
         let any = |needle: &str| coloured.iter().any(|line| line.contains(needle));
         assert!(
-            coloured[0].starts_with("\u{1b}[1mapt-scout 0.1.0"),
+            coloured[0].starts_with("\u{1b}[38;5;166mapt-scout 0.1.0"),
             "{}",
             coloured[0]
         );
-        assert!(any("\u{1b}[1mSources "));
-        assert!(any("\u{1b}[1mRanked — "));
-        assert!(any("\u{1b}[1mDetail\u{1b}[0m"));
-        assert!(any("\u{1b}[1mRecommendation\u{1b}[0m"));
-        assert!(any("\u{1b}[1mRejected — 1\u{1b}[0m"));
-        assert!(any("\u{1b}[1mPlanned change "));
+        assert!(any("\u{1b}[38;5;166mSources "));
+        assert!(any("\u{1b}[38;5;166mRanked — "));
+        assert!(any("\u{1b}[38;5;166mDetail\u{1b}[0m"));
+        assert!(any("\u{1b}[38;5;166mRecommendation\u{1b}[0m"));
+        assert!(any("\u{1b}[38;5;166mRejected — 1\u{1b}[0m"));
+        assert!(any("\u{1b}[38;5;166mPlanned change "));
+        // No heading is bold any more: the accent replaced that, and both inks on one heading would
+        // be a fourth vocabulary nobody asked for.
+        assert!(!any("\u{1b}[1mSources"), "{coloured:?}");
+        assert!(!any("\u{1b}[1mRanked"), "{coloured:?}");
+        // The recommended host keeps bold.
         assert!(any("\u{1b}[1mhttps://mirror.example/ubuntu/\u{1b}[0m"));
+        // And the accent stays off every semantic cell: a table cell, a diff line, a rejection reason
+        // and a dim column heading keep the ink SPEC.md Output gives them and gain nothing.
+        for cell in [
+            "\u{1b}[38;5;166myes",
+            "\u{1b}[38;5;166mno",
+            "\u{1b}[38;5;166m?",
+            "\u{1b}[38;5;166mbehind",
+            "\u{1b}[38;5;166mspeed",
+            "\u{1b}[38;5;166mlatency",
+            "\u{1b}[38;5;166m404",
+            "\u{1b}[38;5;166m- ",
+            "\u{1b}[38;5;166m+ ",
+            "\u{1b}[38;5;166m12929",
+        ] {
+            assert!(
+                !any(cell),
+                "the accent reached the semantic cell {cell}: {coloured:?}"
+            );
+        }
         assert!(any("\u{1b}[2mbehind\u{1b}[0m"));
         assert!(any("\u{1b}[2m     speed\u{1b}[0m"));
         assert!(any("\u{1b}[2m  latency\u{1b}[0m"));
@@ -7240,7 +7381,7 @@ mod tests {
     /// one, so the silence is structural rather than a branch inside the loop (SPEC.md Output).
     #[test]
     fn progress_writes_nothing_when_stderr_is_not_a_terminal() {
-        let mut progress = Progress::new(RecordingSink::default(), false);
+        let mut progress = Progress::new(RecordingSink::default(), false, Painter::plain());
         assert!(progress.ticker.is_none(), "no terminal, no animation");
         progress.load();
         progress.reference();
@@ -7261,7 +7402,7 @@ mod tests {
     /// summary line: nothing transient survives into the report (SPEC.md Output).
     #[test]
     fn progress_names_each_phase_and_ends_with_the_summary() {
-        let mut progress = Progress::new(RecordingSink::default(), true);
+        let mut progress = Progress::new(RecordingSink::default(), true, Painter::plain());
         progress.load();
         progress.reference();
         progress.probe(1, 3);
@@ -7308,7 +7449,7 @@ mod tests {
     fn the_probe_count_follows_the_probes_that_finished() {
         let slow = thread::spawn(|| thread::sleep(Duration::from_millis(60)));
         let quick = thread::spawn(|| ());
-        let mut progress = Progress::new(RecordingSink::default(), true);
+        let mut progress = Progress::new(RecordingSink::default(), true, Painter::plain());
         assert_eq!(await_probes(vec![slow, quick], &mut progress).len(), 2);
         let frames = drawn(&progress);
         // The first frame is honest: nothing has finished yet, so it does not claim one.
@@ -7340,7 +7481,7 @@ mod tests {
     /// probed **so far** in the run).
     #[test]
     fn the_probe_count_continues_into_the_widening_pass() {
-        let mut progress = Progress::new(RecordingSink::default(), true);
+        let mut progress = Progress::new(RecordingSink::default(), true, Painter::plain());
         assert_eq!(
             await_probes(
                 vec![thread::spawn(|| ()), thread::spawn(|| ())],
@@ -7395,7 +7536,7 @@ mod tests {
     /// candidate set has no count to show: no `0/0` line that a viewer reads as a stuck run.
     #[test]
     fn an_empty_candidate_set_shows_no_probing_line() {
-        let mut progress = Progress::new(RecordingSink::default(), true);
+        let mut progress = Progress::new(RecordingSink::default(), true, Painter::plain());
         let none: Vec<thread::JoinHandle<()>> = Vec::new();
         assert!(await_probes(none, &mut progress).is_empty());
         assert!(drawn(&progress).is_empty(), "{:?}", drawn(&progress));
@@ -7430,13 +7571,82 @@ mod tests {
     #[test]
     fn the_frame_line_carries_the_probing_count() {
         assert_eq!(
-            spinner_line(Duration::from_millis(200), &probing_line(2, 3)),
+            spinner_line(
+                Duration::from_millis(200),
+                &probing_line(2, 3),
+                Painter::plain()
+            ),
             "⠹ probing 3 mirrors… 2/3"
         );
         // One line, whatever it carries: no newline, and the frame is the first cell.
-        let line = spinner_line(Duration::ZERO, "ranking");
+        let line = spinner_line(Duration::ZERO, "ranking", Painter::plain());
         assert_eq!(line, "⠋ ranking");
         assert_eq!(line.lines().count(), 1);
+    }
+
+    /// The spinner's frame is the accent and the phase's words beside it are not (SPEC.md Output):
+    /// the Braille cell is painted, the text is left exactly as a plain run prints it, and the two
+    /// accent forms differ on the same frame.
+    #[test]
+    fn the_accent_paints_the_spinner_frame_and_not_the_phase_text() {
+        let eight = spinner_line(
+            Duration::ZERO,
+            "loading the mirror list",
+            Painter::new(true, Accent::EightBit),
+        );
+        assert_eq!(eight, "\u{1b}[38;5;166m⠋\u{1b}[0m loading the mirror list");
+        let (_, text) = eight.split_once(' ').expect("the frame, a space, the text");
+        assert!(
+            !text.contains('\u{1b}'),
+            "the phase text is painted: {text}"
+        );
+        assert_eq!(strip_escapes(&eight), "⠋ loading the mirror list");
+
+        let true_color = spinner_line(
+            Duration::ZERO,
+            "loading the mirror list",
+            Painter::new(true, Accent::TrueColor),
+        );
+        assert_eq!(
+            true_color,
+            "\u{1b}[38;2;233;84;32m⠋\u{1b}[0m loading the mirror list"
+        );
+        assert_ne!(eight, true_color);
+
+        // Colour off on the very line the animation draws: the bytes a pipe and a log see.
+        assert_eq!(
+            spinner_line(Duration::ZERO, "ranking", Painter::plain()),
+            "⠋ ranking"
+        );
+    }
+
+    /// The painting reaches the real sink through the ticker: `Progress` starts with the run's one
+    /// painter, so the first frame a terminal would show is the accented one and nothing else on the
+    /// line is.
+    #[test]
+    fn the_progress_line_carries_the_accent_when_colour_is_on() {
+        let mut progress = Progress::new(
+            RecordingSink::default(),
+            true,
+            Painter::new(true, Accent::EightBit),
+        );
+        progress.load();
+        progress.stop();
+        let sink = lock(&progress.sink);
+        let first = sink.lines.first().expect("the loading phase drew a frame");
+        assert_eq!(first, "\u{1b}[38;5;166m⠋\u{1b}[0m loading the mirror list");
+        assert!(
+            sink.lines
+                .iter()
+                .all(|line| line.contains("loading the mirror list")),
+            "every frame carries the phase text: {:?}",
+            sink.lines
+        );
+        assert!(
+            sink.settled.is_empty(),
+            "a run that stopped before ranking prints no summary: {:?}",
+            sink.settled
+        );
     }
 
     /// The animation's loop with no thread and no sleep: a synthetic phase of three ticks draws four
@@ -7454,7 +7664,7 @@ mod tests {
             Wake::Message(Tick::Stop),
         ];
         let mut waits = script.into_iter();
-        run_ticker(&mut sink, move |_| {
+        run_ticker(&mut sink, Painter::plain(), move |_| {
             waits.next().expect("the script ends with Stop")
         });
         assert_eq!(
@@ -7507,7 +7717,7 @@ mod tests {
             Wake::Message(Tick::Stop),
         ];
         let mut waits = script.into_iter();
-        run_ticker(&mut sink, move |_| {
+        run_ticker(&mut sink, Painter::plain(), move |_| {
             waits.next().expect("the script ends with Stop")
         });
         assert_eq!(
@@ -7544,7 +7754,7 @@ mod tests {
             Wake::Message(Tick::Stop),
         ];
         let mut waits = script.into_iter();
-        run_ticker(&mut sink, move |_| {
+        run_ticker(&mut sink, Painter::plain(), move |_| {
             waits.next().expect("the script ends with Stop")
         });
         assert_eq!(sink.events.len(), 3, "{:?}", sink.events);
@@ -7561,7 +7771,7 @@ mod tests {
     /// of sharing it, and the animation draws again for the phase that follows.
     #[test]
     fn progress_hands_the_live_line_back_before_a_warning() {
-        let mut progress = Progress::new(RecordingSink::default(), true);
+        let mut progress = Progress::new(RecordingSink::default(), true, Painter::plain());
         progress.load();
         progress.clear();
         progress.ranked();
@@ -7589,7 +7799,7 @@ mod tests {
     /// frame can land on the summary or on the report's first line (SPEC.md Output).
     #[test]
     fn progress_stops_its_ticker_before_the_done_line() {
-        let mut progress = Progress::new(RecordingSink::default(), true);
+        let mut progress = Progress::new(RecordingSink::default(), true, Painter::plain());
         progress.load();
         progress.ranked();
         progress.finish(4, 0);
@@ -7617,7 +7827,7 @@ mod tests {
     #[test]
     fn stopping_the_animation_joins_it() {
         let sink = Arc::new(Mutex::new(RecordingSink::default()));
-        let mut ticker = Ticker::start(Arc::clone(&sink));
+        let mut ticker = Ticker::start(Arc::clone(&sink), Painter::plain());
         ticker.text("ranking".to_string());
         ticker.hide();
         let drawn_before = lock(&sink).events.len();
@@ -7635,7 +7845,7 @@ mod tests {
     /// earlier shape, and it left the report's first line at the mercy of a frame.
     #[test]
     fn an_early_stop_joins_the_animation_before_the_report() {
-        let mut progress = Progress::new(RecordingSink::default(), true);
+        let mut progress = Progress::new(RecordingSink::default(), true, Painter::plain());
         progress.load();
         progress.stop();
         let stopped = lock(&progress.sink).events.clone();
@@ -7666,7 +7876,7 @@ mod tests {
     /// A piped run has no animation to stop, and stopping one is neither an error nor a line.
     #[test]
     fn stopping_a_piped_run_writes_nothing() {
-        let mut progress = Progress::new(RecordingSink::default(), false);
+        let mut progress = Progress::new(RecordingSink::default(), false, Painter::plain());
         progress.stop();
         let sink = lock(&progress.sink);
         assert!(sink.events.is_empty(), "{:?}", sink.events);
