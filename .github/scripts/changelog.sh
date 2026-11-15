@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Print a CHANGELOG section for <version> built from Conventional Commits since the last tag.
 # Usage: changelog.sh <version>
+#
+# The section is read by somebody deciding whether to install this, so it carries what they can act
+# on: what is new (feat), what broke (fix) and any breaking change. refactor, perf, docs, chore and
+# test subjects stay in git log, where they describe how the code got there rather than what changed
+# for a user.
 set -euo pipefail
 version=${1:?usage: changelog.sh <version>}
 # Tags sit on main merge commits, which are not ancestors of develop, so describe cannot find them.
@@ -16,8 +21,6 @@ section() { # <title> <subject regex>
 section "Breaking changes" '^[a-z]+(\([^)]*\))?!:'
 section "Added" '^feat(\([^)]*\))?:'
 section "Fixed" '^fix(\([^)]*\))?:'
-section "Changed" '^(perf|refactor)(\([^)]*\))?:'
-section "Documentation" '^docs(\([^)]*\))?:'
 [ -n "$body" ] || body=$'\nNo user-facing changes.\n'
 
 printf '## %s - %s\n%s' "$version" "$(date -u +%F)" "$body"
