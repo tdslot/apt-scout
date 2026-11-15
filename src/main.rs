@@ -1806,9 +1806,12 @@ fn rejection(error: &probe::ProbeError) -> Reject {
     }
 }
 
-/// `Rejected — 7` and one line per reason with the hosts and their numbers (SPEC step 8: every
-/// rejected mirror with the reason it was rejected). Sorted by reason, so two runs that saw the
-/// same answers print the same section.
+/// `Rejected — 7` and one line per class of reason, with the count of mirrors that failed that way
+/// and the hosts themselves (SPEC.md Output: the `Rejected` counts grouped by class; step 8: every
+/// rejected mirror with the reason it was rejected). The count is the class's own, and it sits
+/// between the class and the hosts it counts, so "how many mirrors failed this way" is read instead
+/// of counted off a list. Sorted by reason, so two runs that saw the same answers print the same
+/// section.
 fn rejected_section(rejected: &[Rejected], ink: Painter) -> Vec<String> {
     let mut groups: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
@@ -1821,7 +1824,11 @@ fn rejected_section(rejected: &[Rejected], ink: Painter) -> Vec<String> {
     }
     let mut out = vec![ink.accent_bold(&format!("Rejected — {}", rejected.len()))];
     for (label, items) in groups {
-        out.push(ink.red(&format!("  {label:<17} {}", items.join(", "))));
+        out.push(ink.red(&format!(
+            "  {label:<17}{count:>3}  {hosts}",
+            count = items.len(),
+            hosts = items.join(", ")
+        )));
     }
     out
 }
@@ -6547,10 +6554,10 @@ mod tests {
             rejected_section(&rejected, Painter::plain()),
             [
                 "Rejected — 5",
-                "  404               mirror.b.example, mirror.a.example",
-                "  no Date header    mirror.c.example",
-                "  stale             mirror.e.example (162 h)",
-                "  unreachable       mirror.d.example",
+                "  404                2  mirror.b.example, mirror.a.example",
+                "  no Date header     1  mirror.c.example",
+                "  stale              1  mirror.e.example (162 h)",
+                "  unreachable        1  mirror.d.example",
             ]
         );
         // --verbose trades the groups for each mirror's own line and its full reason.
@@ -6568,6 +6575,51 @@ mod tests {
                 && l.contains("162 h behind")),
             "{verbose:?}"
         );
+    }
+
+    /// Each class of reason carries its own count, which is the reading `SPEC.md` Output and the man
+    /// page promise: "how many mirrors failed *this way*". The expectation is derived from this
+    /// test's input — the labels spelled out here, the hosts it hands over and the number it counts
+    /// off them, in the host order it saw them — so no rendered line is copied from a run, a count
+    /// that is dropped changes its line, and a class that printed a neighbour's count or hosts fails
+    /// instead of reading as plausible. The counts are 3, 2 and 1 on purpose: equal counts would let
+    /// a swap pass.
+    #[test]
+    fn each_rejected_class_line_carries_the_count_of_its_own_hosts() {
+        let input: [(&str, Reject, &[&str]); 3] = [
+            // The order the section prints them in: by class, hosts in the order they came.
+            (
+                "404",
+                Reject::NotFound,
+                &["mirror.b.example", "mirror.a.example", "mirror.c.example"],
+            ),
+            ("no Date header", Reject::NoDate, &["mirror.f.example"]),
+            (
+                "unreachable",
+                Reject::Unreachable,
+                &["mirror.d.example", "mirror.e.example"],
+            ),
+        ];
+        let mut rejected = Vec::new();
+        for (_, kind, hosts) in &input {
+            for host in *hosts {
+                rejected.push(Rejected {
+                    host: (*host).to_string(),
+                    kind: kind.to_owned(),
+                    why: format!("{host} was rejected"),
+                });
+            }
+        }
+        let total: usize = input.iter().map(|(_, _, hosts)| hosts.len()).sum();
+        let mut expected = vec![format!("Rejected — {total}")];
+        for (label, _, hosts) in &input {
+            expected.push(format!(
+                "  {label:<17}{count:>3}  {hosts}",
+                count = hosts.len(),
+                hosts = hosts.join(", ")
+            ));
+        }
+        assert_eq!(rejected_section(&rejected, Painter::plain()), expected);
     }
 
     /// The classifier reads the real error values the probe and the date parser produce, so a
@@ -7022,8 +7074,8 @@ mod tests {
             "    + https://mirror.example/ubuntu".to_string(),
             String::new(),
             "Rejected — 2".to_string(),
-            "  404               mirror.lostpacket.org".to_string(),
-            "  stale             mirror.pit.teraswitch.com (162 h)".to_string(),
+            "  404                1  mirror.lostpacket.org".to_string(),
+            "  stale              1  mirror.pit.teraswitch.com (162 h)".to_string(),
         ];
         assert_eq!(report, expected);
     }
@@ -7133,8 +7185,8 @@ mod tests {
         );
         // The full text of every rejection reason, instead of the grouped class and its count.
         assert!(
-            text.contains("  404               mirror.lostpacket.org"),
-            "the grouped class is missing:\n{text}"
+            text.contains("  404                1  mirror.lostpacket.org"),
+            "the grouped class and its count are missing:\n{text}"
         );
         assert!(
             !text.contains("answered HTTP 404"),
