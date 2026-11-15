@@ -31,7 +31,12 @@ jobs:
       version: ${{ steps.v.outputs.version }}
       skip: ${{ steps.v.outputs.skip }}
     steps:
+      # Tags are needed twice here: the tag-exists check reads them, and the release notes name the
+      # previous release for their compare link. A default checkout is shallow and tagless, so
+      # `git tag -l` returns nothing in CI and the compare line silently disappears.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Read version
         id: v
         run: |
