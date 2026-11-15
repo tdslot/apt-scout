@@ -48,8 +48,21 @@ builder_run() { docker run --rm --platform "$platform" -v "$PWD":/src -w /src \
 # persistent directories above: installed once per invocation, reused by the second build, and
 # skipped by rustup itself when it is already there.
 builder_prepare() {
-  builder_run sh -c "curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal \
-    --default-toolchain stable -t $target >/dev/null 2>&1"
+  # The published `rustup-init` binary, checked against the checksum served from the same origin over
+  # TLS. Not `curl ... | sh`: that executes whatever the URL serves at run time, inside a container
+  # that has this checkout mounted read-write.
+  builder_run sh -c "
+    set -e
+    # The host triple, not $target: rustup publishes its installer per host, and this container is amd64.
+    base=https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu
+    cd /tmp
+    curl -sSfLO "\$base/rustup-init"
+    curl -sSfLO "\$base/rustup-init.sha256"
+    sha256sum -c rustup-init.sha256
+    chmod +x rustup-init
+    ./rustup-init -y --profile minimal --default-toolchain stable -t $target >/dev/null 2>&1
+    rm -f rustup-init rustup-init.sha256
+  "
 }
 # build plain|cfg -- `cargo clean -p apt-scout` drops only this crate's artifacts, never its deps,
 # and never the two copies below (they live outside target/docker/$target). The clean is what makes
