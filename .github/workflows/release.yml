@@ -74,8 +74,66 @@ jobs:
           # carries them: the package published here is the package the repository tests.
           bash scripts/build-deb.sh --binary "target/$TARGET/release/apt-scout" "$VERSION"
           (cd dist && sha256sum -- *.tar.gz *.deb > ../SHA256SUMS && mv ../SHA256SUMS .)
-          awk -v v="## $VERSION " 'index($0,v)==1{f=1;next} /^## /{f=0} f' CHANGELOG.md > notes.md
-          [ -s notes.md ] || echo "Release v$VERSION" > notes.md
+          # Release notes are the front page for somebody deciding whether to install this, so they
+          # carry more than the changelog section: what it is, how to install either artifact, how to
+          # verify them, what it needs, and where the documentation is. The generated section is the
+          # "What is new" part and nothing else is hand-written per release.
+          awk -v v="## $VERSION " 'index($0,v)==1{f=1;next} /^## /{f=0} f' CHANGELOG.md > /tmp/section.md
+          prev=$(git tag -l 'v*' --sort=-v:refname | sed -n 1p)
+          {
+            echo "**apt-scout** finds a fresh, fast Ubuntu archive mirror and either recommends it or rewrites your apt sources to use it. One static binary, no runtime, no Python."
+            echo
+            echo '```sh'
+            echo "sudo apt install ./apt-scout_${VERSION}_amd64.deb    # gpgv and ubuntu-keyring come with it"
+            echo "sudo apt-scout --country LT                     # asks once, backs up, rewrites, says what changed"
+            echo "sudo apt-scout --restore                        # puts the newest backup back"
+            echo '```'
+            echo
+            echo '### What is new'
+            echo
+            cat /tmp/section.md
+            echo '### Install'
+            echo
+            echo 'Debian package (amd64, static, no libc6 dependency):'
+            echo
+            echo '```sh'
+            echo "curl -fsSLO https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/apt-scout_${VERSION}_amd64.deb"
+            echo "sudo apt install ./apt-scout_${VERSION}_amd64.deb"
+            echo '```'
+            echo
+            echo 'Tarball (binary, both licences, README and the manual page):'
+            echo
+            echo '```sh'
+            echo "curl -fsSLO https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/apt-scout-v${VERSION}-${TARGET}.tar.gz"
+            echo "tar -xzf apt-scout-v${VERSION}-${TARGET}.tar.gz"
+            echo "sudo install -m 0755 apt-scout-v${VERSION}-${TARGET}/apt-scout /usr/local/bin/"
+            echo "sudo install -m 0644 apt-scout-v${VERSION}-${TARGET}/apt-scout.1 /usr/share/man/man1/"
+            echo 'sudo apt install gpgv ubuntu-keyring'
+            echo '```'
+            echo
+            echo '### Verify'
+            echo
+            echo '```sh'
+            echo "curl -fsSLO https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/SHA256SUMS"
+            echo 'sha256sum -c --ignore-missing SHA256SUMS'
+            echo '```'
+            echo
+            echo '### Requirements and safety'
+            echo
+            echo '- Ubuntu or a derivative (Pop!_OS, Mint); Debian is refused rather than guessed.'
+            echo '- Root only for the write, and for reading a backup to restore. A non-root run prints the `sudo` line and exits 3.'
+            echo '- Every replaced file is copied to `/var/backups/apt-scout/<id>/` (0700, root-owned) with a `MANIFEST` before the first byte is written; the write is atomic per file.'
+            echo '- Only official archive URIs are rewritten: `security.ubuntu.com`, PPAs, third-party repositories, `ports.ubuntu.com` and `mirror://` are never touched.'
+            echo '- `gpgv` with the Ubuntu archive keyring verifies each `InRelease`, and only a verified mirror can be written.'
+            echo
+            echo '### Documentation'
+            echo
+            echo '- `man apt-scout` — every flag, mode, exit code and file it touches; also inside the `.deb`.'
+            echo "- [README](https://github.com/${GITHUB_REPOSITORY}/blob/v${VERSION}/README.md) and [SPEC.md](https://github.com/${GITHUB_REPOSITORY}/blob/v${VERSION}/SPEC.md)."
+            if [ -n "$prev" ]; then
+              echo "- Full changelog: https://github.com/${GITHUB_REPOSITORY}/compare/${prev}...v${VERSION}"
+            fi
+          } > notes.md
           echo "--- artifacts ---"
           (cd dist && ls -l && sha256sum --check SHA256SUMS)
           echo "--- archive contents ---"
