@@ -200,7 +200,9 @@ decides whether the run writes.
 As a non-root user: no write. The run prints the report and then one line,
 \fBsudo apt\-scout ...\fR, rebuilt from the flags of that run and spelled in
 long form so a copied command is unambiguous, and exits 3. It opens no apt file
-for writing.
+for writing, and it plans nothing, so its report stops after
+\fBRecommendation\fR and carries no \fBPlanned change\fR section at all: the
+\fBsudo\fR line stands where that section would be.
 .TP
 .B sudo apt\-scout
 As root: write. After the report, the planned change names the files it will
@@ -275,8 +277,10 @@ and its signature status, with the reason it was chosen.
 .TP
 .B Planned change
 .br
-The files a write would change, the old and the new URI, and the backup path;
-\fB\-\-list\fR says that nothing is written.
+Printed by the runs that plan a change, and only by them: a root run and
+\fB\-\-list\fR. It names the files a write would change, the old and the new
+URI, and the backup path, or says that the apt sources already point at the
+chosen mirror; \fB\-\-list\fR adds that nothing is written.
 .TP
 .B Rejected
 .br
@@ -288,8 +292,8 @@ count.
 .PP
 Without \fB\-v\fR the report answers which mirror to use and why: the identity
 line, \fBSources\fR, the context line without the server's AS, the table, the
-recommendation, the planned change with the backup path, and the rejection
-counts grouped by class.
+recommendation, the planned change with the backup path in a run that plans
+one, and the rejection counts grouped by class.
 .PP
 With \fB\-v\fR it also answers prove it to me, adding each row's AS number and
 its \fBsame\fR/\fBdiff\fR/\fBunknown\fR match with the server, the server's AS
@@ -363,8 +367,10 @@ confirmation prompt are bold. Nothing else is styled, and the \fBsudo
 apt\-scout\fR line is never styled because a user copies it.
 .PP
 A write prints a second block after the confirmation: \fBbackup: <path>\fR, one
-\fBwrote <path>\fR per file, and a closing line naming the files and suggesting
-\fBsudo apt update\fR.
+\fBwrote <path>\fR per file, and then two closing lines: \fBchanged <paths>:
+every eligible official archive URI in those files now points at
+<mirror>.\fR, naming the files and the URI it wrote, and \fBNext: run 'sudo apt
+update' to refresh the package lists.\fR, naming the step after it.
 .PP
 A restore has no ranked table and no recommendation, because it reads a backup
 instead of choosing a mirror. It prints one block instead: the backup it put
@@ -381,7 +387,9 @@ already point at the chosen mirror.
 .B 1
 A refusal or a failure after the run started: no usable or no fresh mirror; no
 apt source that may be rewritten; a backup or a write that failed; a plan
-refused by validation. A root run that found nothing to write exits 1.
+refused by validation. A root run whose sources already point at the chosen
+mirror is not this case and exits 0, as the entry above says: the refusal here
+is for a root run that found no apt source URI it may rewrite at all.
 .TP
 .B 2
 Usage error, reported before any network request: an unknown option, including
@@ -403,7 +411,9 @@ archive.ubuntu.com answers 404 for, because the release moved to
 .SH ERRORS
 Every message names what failed, the path, URL or value it failed on, the
 reason underneath kept verbatim, and what to do next; the exit status says
-which kind of failure it was. The ones a run produces most often:
+which kind of failure it was. The ones a run produces most often, as the text
+a run prints where the failure is one message, and as the shape it leaves in
+the report where it is not:
 .TP
 .B cannot tell which country you are in
 .br
@@ -451,20 +461,23 @@ Exit 4.
 .TP
 .B every verified cell reading ?
 .br
-\fBgpgv\fR or the Ubuntu archive keyring is missing or unusable, so no
-signature can be checked and no write is allowed. Install both with
-\fBsudo apt install gpgv ubuntu\-keyring\fR; ranking works meanwhile, and
-\fB\-\-verbose\fR prints the reason it could not run.
+A shape in the report, not a message: \fBgpgv\fR or the Ubuntu archive
+keyring is missing or unusable, so no signature can be checked and no write is
+allowed. The \fBDetail\fR block of a \fB\-\-verbose\fR run prints what the cell
+stands on, \fBsignature: unverified (signature unavailable)\fR. Install both
+with \fBsudo apt install gpgv ubuntu\-keyring\fR; ranking works meanwhile.
 .TP
 .B a backup, a write or a plan that failed
 .br
-The message names the target and the reason: a target that is not a regular
-file, a file that changed since it was read, a backup directory that already
-exists for that second, a read-only mount, or a mismatch the writer refused.
-Nothing under \fI/etc/apt\fR is left half-written, and a failed backup writes
-nothing at all. Exit 1.
+A shape in the report, not a message: the error line under it names the target
+and the reason, in the writer's own words \(em \fBit is a symlink, and
+apt-scout never follows one\fR, or \fBchanged since the plan was built\fR. The
+causes are a target that is not a regular file, a file that changed since it
+was read, a backup directory that already exists for that second, a read-only
+mount, or a mismatch the writer refused. Nothing under \fI/etc/apt\fR is left
+half-written, and a failed backup writes nothing at all. Exit 1.
 .TP
-.B an unknown option, a value the flag cannot use
+.B unknown option '<flag>'; try --help
 .br
 Usage errors are reported before any request is made and before any backup is
 opened: an unknown flag (\fB\-\-refresh\fR, \fB\-\-tui\fR and the reserved
@@ -609,9 +622,10 @@ writer, after one confirmation. A non-root run prints the \fBsudo\fR line and
 exits 3.
 .TP
 .B Why a source file was skipped
-Read the \fBSources\fR block of \fBapt\-scout \-l \-v\fR: every file, every
-URI it holds, and the reason each was rewritten or skipped, with the full text
-under \fB\-v\fR.
+Read the \fBSources\fR block of \fBapt\-scout \-l\fR: every file, every URI it
+holds, and the reason each was rewritten or skipped. \fB\-v\fR leaves that
+block byte for byte as it is and adds \fBDetail\fR, with the facts behind each
+row, and the full text of every \fBRejected\fR reason.
 .TP
 .B Restore a backup by hand
 When \fB\-\-restore\fR refuses a backup, copy the file back yourself as root so
