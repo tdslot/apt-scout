@@ -19,7 +19,6 @@ maintainer = "Tadas Lotužas <tdslot@gmail.com>"
 depends = "gpgv, ubuntu-keyring"
 section = "admin"
 priority = "optional"
-assets = [
-    ["target/release/apt-scout", "usr/bin/", "755"],
-    ["man/apt-scout.1", "usr/share/man/man1/", "644"],
-]
+# The staging layout lives in scripts/build-deb.sh, which is the one builder: the release
+# workflow calls it too. This table used to feed cargo-deb, and omitting copyright and
+# changelog.gz from it is why the published package differed from the tested one.

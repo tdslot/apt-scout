@@ -1,20 +1,35 @@
 name: Release
 
 # Runs when develop is merged into main. Releases only if Cargo.toml version has no tag yet.
+#
+# Also dispatchable by hand, which builds and verifies every artifact and stops before publishing.
+# The write token lives in the publish job alone, and that job runs inside the `release` environment,
+# whose deployment rule admits `main` only. A dispatch on a branch executes that branch's copy of this
+# file, so the file itself is not the control: the environment is. Without it, editing this job in a
+# branch and dispatching there would still reach a token that creates tags.
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and verify the artifacts, then stop without publishing"
+        type: boolean
+        default: true
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
   TARGET: x86_64-unknown-linux-musl
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      skip: ${{ steps.v.outputs.skip }}
     steps:
       - uses: actions/checkout@v4
       - name: Read version
@@ -22,7 +37,10 @@ jobs:
         run: |
           version="$(sed -n -E '0,/^version = "(.*)"/s//\1/p' Cargo.toml)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          if git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1; then
+          # A dry run always builds: its purpose is to exercise the pipeline for a version that may
+          # or may not be tagged yet, so the tag check applies to a push to main only.
+          if [ "${{ github.event_name }}" = "push" ] \
+             && git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1; then
             echo "Tag v$version exists; nothing to release."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
@@ -35,22 +53,89 @@ jobs:
       - uses: taiki-e/install-action@v2
         if: steps.v.outputs.skip != 'true'
         with:
-          tool: cargo-deb,cross
-      - name: Build, package, publish
+          tool: cross
+      - name: Build and package
         if: steps.v.outputs.skip != 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.v.outputs.version }}
         run: |
           cargo test --locked
           cross build --release --locked --target "$TARGET"
-          name="apt-scout-v${VERSION}-${TARGET}"
+          name="apt-scout-v$VERSION-$TARGET"
           mkdir -p "dist/$name"
           cp "target/$TARGET/release/apt-scout" LICENSE-MIT LICENSE-APACHE README.md "dist/$name/"
+          cp man/apt-scout.1 "dist/$name/"
+          # The tarball carries the same documents the .deb does: the binary, both licences, the
+          # README with its install steps, and the manual page SPEC.md:196 requires to be in it.
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           rm -rf "dist/$name"
-          cargo deb --no-build --target "$TARGET" --output dist/
+          # One builder. scripts/build-deb.sh stages the binary, the README, the man page, a
+          # copyright carrying the MIT text and a generated changelog.gz, and asserts the archive
+          # carries them: the package published here is the package the repository tests.
+          bash scripts/build-deb.sh --binary "target/$TARGET/release/apt-scout" "$VERSION"
           (cd dist && sha256sum -- *.tar.gz *.deb > ../SHA256SUMS && mv ../SHA256SUMS .)
           awk -v v="## $VERSION " 'index($0,v)==1{f=1;next} /^## /{f=0} f' CHANGELOG.md > notes.md
           [ -s notes.md ] || echo "Release v$VERSION" > notes.md
-          gh release create "v$VERSION" dist/* --target "$GITHUB_SHA" --title "v$VERSION" --notes-file notes.md
+          echo "--- artifacts ---"
+          (cd dist && ls -l && sha256sum --check SHA256SUMS)
+          echo "--- archive contents ---"
+          dpkg-deb -c dist/*.deb | awk '{print $1, $3, $6}'
+          tar -tzf dist/*.tar.gz
+      - name: Keep the artifacts
+        if: steps.v.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/SHA256SUMS
+            notes.md
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    environment: release
+    # The only path to a tag or a release: a push to main, or a dispatch on main with the box
+    # unticked. Everything else stops at the build job, which holds no write token.
+    if: |
+      needs.build.outputs.skip != 'true' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || inputs.dry_run != true)
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          # The upload's root is the least common ancestor of its paths (the repository root, because
+          # notes.md sits there), so the artifact carries dist/... and notes.md. Extracting at "." puts
+          # them back exactly where the publish steps expect them.
+          path: .
+      - name: Verify the artifacts before publishing
+        run: |
+          cd dist
+          ls -l
+          sha256sum --check SHA256SUMS
+          dpkg-deb -c ./*.deb | awk '{print $1, $3, $6}' | grep -q 'usr/share/man/man1/apt-scout.1'
+          tar -tzf ./*.tar.gz | grep -q 'apt-scout.1'
+      - name: Refuse to republish a tag that exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          # The build job's tag check is push-only, because a dry run must be able to exercise an
+          # already-tagged version. The publish job therefore re-checks: an existing tag means an
+          # earlier release owns those bytes, and a second dispatch must not move it.
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "Release v$VERSION already exists; nothing to publish."
+            exit 0
+          fi
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          gh release create "v$VERSION" dist/*.tar.gz dist/*.deb dist/SHA256SUMS notes.md \
+            --target "$GITHUB_SHA" --title "v$VERSION" --notes-file notes.md

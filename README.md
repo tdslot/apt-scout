@@ -25,7 +25,7 @@ It installs `/usr/bin/apt-scout` and the manual page at `/usr/share/man/man1/apt
 
 One `.deb` serves every supported release. The binary is linked against musl, so it has no `libc6` dependency and no glibc ABI to match, and `gpgv` and `ubuntu-keyring` keep the same names and paths from 20.04 to 26.04. The split is by architecture (`amd64` today, `arm64` later), never by release: the Docker matrix over `ubuntu:20.04` through `ubuntu:26.04` is the compatibility evidence — two builds, two digests, the same pair green in each image.
 
-The release tarball holds the binary, the two licences and this file:
+The release tarball holds the binary, the two licences, this file and the manual page:
 
 ```sh
 tar -xzf apt-scout-v<version>-x86_64-unknown-linux-musl.tar.gz
@@ -43,7 +43,8 @@ scripts/docker-test.sh --build-only       # target/docker/apt-scout-plain, stati
 scripts/build-deb.sh                      # dist/apt-scout_<version>_amd64.deb
 ```
 
-`scripts/build-deb.sh` stages that static binary, this README and, when `man/apt-scout.1` exists, the manual page, then builds the archive with `dpkg-deb` — on the host, or in an `ubuntu:24.04` container when the host has no `dpkg-deb`. It reads the version, the maintainer, the synopsis and the dependencies from `Cargo.toml` unless you pass a version as its argument, carries the MIT licence text in `usr/share/doc/apt-scout/copyright`, generates a `changelog.gz` from that version, needs Docker for the container path a Mac has to use, and takes `--binary <path>` to package a binary from anywhere else, so CI can produce the release package with this script. The published release is packaged instead by `.github/workflows/release.yml` with `cargo deb` from the same `[package.metadata.deb]` metadata: two builders for one layout, kept in step by hand, and `ROADMAP.md` tracks the difference.
+`scripts/build-deb.sh` stages that static binary, this README and, when `man/apt-scout.1` exists, the manual page, then builds the archive with `dpkg-deb` — on the host, or in an `ubuntu:24.04` container when the host has no `dpkg-deb`. It reads the version, the maintainer, the synopsis and the dependencies from `Cargo.toml` unless you pass a version as its argument, carries the MIT licence text in `usr/share/doc/apt-scout/copyright`, generates a `changelog.gz` from that version, needs Docker for the container path a Mac has to use, and takes `--binary <path>` to package a binary from anywhere else, so CI can produce the release package with this script.
+The published release runs this same script: `.github/workflows/release.yml` builds the static binary with `cross` and calls `scripts/build-deb.sh --binary target/x86_64-unknown-linux-musl/release/apt-scout`, so the package on the release page is the package the repository tests, carrying the same five contents and the same assertions. One builder, not two.
 
 ## Quick start
 
@@ -200,3 +201,4 @@ Country detection contacts Canonical geoip, `ifconfig.co`, `ipinfo.io` and the C
 ## License
 
 MIT OR Apache-2.0
+
