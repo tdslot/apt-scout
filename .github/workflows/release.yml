@@ -35,7 +35,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         if: steps.v.outputs.skip != 'true'
         with:
-          tool: cargo-deb,cross
+          tool: cross
       - name: Build, package, publish
         if: steps.v.outputs.skip != 'true'
         env:
@@ -47,9 +47,16 @@ jobs:
           name="apt-scout-v${VERSION}-${TARGET}"
           mkdir -p "dist/$name"
           cp "target/$TARGET/release/apt-scout" LICENSE-MIT LICENSE-APACHE README.md "dist/$name/"
+          cp man/apt-scout.1 "dist/$name/"
+          # The tarball carries the same documents the .deb does: the binary, both licences, the
+          # README and the manual page SPEC.md:196 requires to be in the archive.
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           rm -rf "dist/$name"
-          cargo deb --no-build --target "$TARGET" --output dist/
+          # One builder. scripts/build-deb.sh stages the binary, the README, the man page, a
+          # copyright carrying the MIT text and a generated changelog.gz, then asserts all five
+          # are in the archive before it names the file: the package published here is the
+          # package the repository tests, not a second one built from Cargo metadata.
+          bash scripts/build-deb.sh --binary "target/$TARGET/release/apt-scout" "$VERSION"
           (cd dist && sha256sum -- *.tar.gz *.deb > ../SHA256SUMS && mv ../SHA256SUMS .)
           awk -v v="## $VERSION " 'index($0,v)==1{f=1;next} /^## /{f=0} f' CHANGELOG.md > notes.md
           [ -s notes.md ] || echo "Release v$VERSION" > notes.md
