@@ -2563,13 +2563,25 @@ fn run_restore(args: &Args, ink: Painter, root: bool, ask: bool) -> Result<u8, (
     // between the answer and the write, so a backup that appears or vanishes while the person is
     // deciding cannot change what is written.
     let outcome = restore::run(&plan, now).map_err(|e| (e.exit_code(), e.to_string()))?;
+    restore_report(ink, backup, &plan, &outcome, args.verbose).print();
+    Ok(0)
+}
+
+/// The whole block a finished restore prints: the `Restore` heading, then the lines that name the
+/// backup. Assembled here rather than at the call site so the one accent site a run's own report
+/// never reaches can be painted by a test, in the form `SPEC.md` Output gives it. `restored` is read
+/// from the plan that was written, so the block names the backup that was actually put back.
+fn restore_report(
+    ink: Painter,
+    restored: &manifest::BackupId,
+    plan: &plan::Plan,
+    outcome: &apply::Outcome,
+    verbose: bool,
+) -> Report {
     let mut report = Report::default();
     report.line(ink.accent_bold("Restore"));
-    // `backup` is read from the plan above — the plan that was written — so the block names the
-    // backup that was actually put back.
-    report.block(restore_lines(backup, &plan, &outcome, args.verbose));
-    report.print();
-    Ok(0)
+    report.block(restore_lines(restored, plan, outcome, verbose));
+    report
 }
 
 /// What the confirmation names before a restore writes anything: the backup it reads, the files it
@@ -5137,6 +5149,21 @@ mod tests {
             ],
         };
         let plain = restore_lines(&restored, &plan, &outcome, false);
+        // The `Restore` heading is the one accent site a painted report cannot reach, because a
+        // restore prints its own block instead of the mirror report: it is pinned here, in exact
+        // bytes, so a site that reverted to the plain accent or to the bold-only ink the accent
+        // replaced fails this assertion and nothing else catches it.
+        assert_eq!(
+            restore_report(
+                Painter::new(true, Accent::EightBit),
+                &restored,
+                &plan,
+                &outcome,
+                false,
+            )
+            .0[0],
+            "\u{1b}[1;38;5;166mRestore\u{1b}[0m"
+        );
         assert_eq!(
             plain,
             [
