@@ -2,8 +2,9 @@ name: Release
 
 # Runs when develop is merged into main. Releases only if Cargo.toml version has no tag yet.
 #
-# Also dispatchable by hand with dry_run on, which builds and checks every artifact and stops before
-# `gh release create`: the pipeline can be proved on a branch instead of on the release that needs it.
+# Also dispatchable by hand, which builds and verifies every artifact and stops before publishing.
+# The write token lives in the publish job alone: a dispatch on a branch runs the build job with
+# read-only permissions and cannot create a tag or a release even if its workflow file is edited.
 on:
   push:
     branches: [main]
@@ -15,15 +16,18 @@ on:
         default: true
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
   TARGET: x86_64-unknown-linux-musl
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      skip: ${{ steps.v.outputs.skip }}
     steps:
       - uses: actions/checkout@v4
       - name: Read version
@@ -31,9 +35,10 @@ jobs:
         run: |
           version="$(sed -n -E '0,/^version = "(.*)"/s//\1/p' Cargo.toml)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          # A dry run always builds: its purpose is to exercise the pipeline for a version that may or
-          # may not be tagged yet, so the tag check applies to a push to main only.
-          if [ "${{ github.event_name }}" = "push" ]              && git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1; then
+          # A dry run always builds: its purpose is to exercise the pipeline for a version that may
+          # or may not be tagged yet, so the tag check applies to a push to main only.
+          if [ "${{ github.event_name }}" = "push" ] \
+             && git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1; then
             echo "Tag v$version exists; nothing to release."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
@@ -47,43 +52,72 @@ jobs:
         if: steps.v.outputs.skip != 'true'
         with:
           tool: cross
-      - name: Build, package, publish
+      - name: Build and package
         if: steps.v.outputs.skip != 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.v.outputs.version }}
-          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
         run: |
           cargo test --locked
           cross build --release --locked --target "$TARGET"
-          name="apt-scout-v${VERSION}-${TARGET}"
+          name="apt-scout-v$VERSION-$TARGET"
           mkdir -p "dist/$name"
           cp "target/$TARGET/release/apt-scout" LICENSE-MIT LICENSE-APACHE README.md "dist/$name/"
           cp man/apt-scout.1 "dist/$name/"
           # The tarball carries the same documents the .deb does: the binary, both licences, the
-          # README and the manual page SPEC.md:196 requires to be in the archive.
+          # README with its install steps, and the manual page SPEC.md:196 requires to be in it.
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           rm -rf "dist/$name"
           # One builder. scripts/build-deb.sh stages the binary, the README, the man page, a
-          # copyright carrying the MIT text and a generated changelog.gz, then asserts all five
-          # are in the archive before it names the file: the package published here is the
-          # package the repository tests, not a second one built from Cargo metadata.
+          # copyright carrying the MIT text and a generated changelog.gz, and asserts the archive
+          # carries them: the package published here is the package the repository tests.
           bash scripts/build-deb.sh --binary "target/$TARGET/release/apt-scout" "$VERSION"
           (cd dist && sha256sum -- *.tar.gz *.deb > ../SHA256SUMS && mv ../SHA256SUMS .)
           awk -v v="## $VERSION " 'index($0,v)==1{f=1;next} /^## /{f=0} f' CHANGELOG.md > notes.md
           [ -s notes.md ] || echo "Release v$VERSION" > notes.md
-          # Only a push to main publishes. A dispatch runs on whatever ref it was given, and an
-          # unticked dry_run box there must not turn a branch into a release.
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$GITHUB_REF" != "refs/heads/main" ]; then
-            echo "dispatch on $GITHUB_REF: artifacts built and verified, nothing published (not main)"
-            exit 0
-          fi
-          if [ "$DRY_RUN" = "true" ]; then
-            echo "dry run: every artifact built and hashed; nothing published"
-            (cd dist && ls -l && sha256sum --check SHA256SUMS)
-            echo "--- archive contents (the .deb is the one scripts/build-deb.sh built and asserted) ---"
-            dpkg-deb -c dist/*.deb | awk '{print $1, $3, $6}'
-            tar -tzf dist/*.tar.gz
-            exit 0
-          fi
-          gh release create "v$VERSION" dist/* --target "$GITHUB_SHA" --title "v$VERSION" --notes-file notes.md
+          echo "--- artifacts ---"
+          (cd dist && ls -l && sha256sum --check SHA256SUMS)
+          echo "--- archive contents ---"
+          dpkg-deb -c dist/*.deb | awk '{print $1, $3, $6}'
+          tar -tzf dist/*.tar.gz
+      - name: Keep the artifacts
+        if: steps.v.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/SHA256SUMS
+            notes.md
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    # The only path to a tag or a release: a push to main, or a dispatch on main with the box
+    # unticked. Everything else stops at the build job, which holds no write token.
+    if: |
+      needs.build.outputs.skip != 'true' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || inputs.dry_run != true)
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist
+      - name: Verify the artifacts before publishing
+        run: |
+          cd dist
+          ls -l
+          sha256sum --check SHA256SUMS
+          dpkg-deb -c ./*.deb | awk '{print $1, $3, $6}' | grep -q 'usr/share/man/man1/apt-scout.1'
+          tar -tzf ./*.tar.gz | grep -q 'apt-scout.1'
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          gh release create "v$VERSION" dist/*.tar.gz dist/*.deb dist/SHA256SUMS notes.md \
+            --target "$GITHUB_SHA" --title "v$VERSION" --notes-file notes.md
