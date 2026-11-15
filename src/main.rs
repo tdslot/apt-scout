@@ -7177,8 +7177,11 @@ mod tests {
         );
     }
 
-    /// The three ways colour is off (SPEC.md Output): stdout is not a terminal — a pipe, a file, the
-    /// container matrix — `--no-color`, and `NO_COLOR` set to any value, the empty one included.
+    /// The three ways colour is off (SPEC.md Output): stdout is not a terminal — a pipe, a file, or the
+    /// container matrix, whose cases read captured output — `--no-color`, and `NO_COLOR` set to any
+    /// value, the empty one included. What this does **not** cover is the accent choice itself: the
+    /// TTY gate is exercised by the matrix, but which of the two accent forms is printed is pinned by
+    /// the unit tests below and was observed by hand on a PTY, and no container case reads a TTY.
     /// Each one alone is enough, and each one must leave the report byte for byte as the plain one.
     #[test]
     fn a_report_with_colour_off_is_the_plain_report_byte_for_byte() {
