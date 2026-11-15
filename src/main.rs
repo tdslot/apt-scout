@@ -748,6 +748,17 @@ impl Accent {
             Accent::EightBit => "38;5;166",
         }
     }
+
+    /// The same colour with `SGR 1` in front of it, so the lifted accent is **one** sequence and not
+    /// two escapes: a terminal that maps bold to the bright variant pulls it away from the dark red
+    /// end `38;5;166` sits at, which is what keeps a heading from reading as a rejection (SPEC.md
+    /// Output). Written out rather than composed at runtime because `paint` owns the one format.
+    fn bold_code(self) -> &'static str {
+        match self {
+            Accent::TrueColor => "1;38;2;233;84;32",
+            Accent::EightBit => "1;38;5;166",
+        }
+    }
 }
 
 /// The inks the report uses: the whole vocabulary of SPEC.md Output, so no render site can invent
@@ -760,9 +771,14 @@ enum Style {
     Yellow,
     Red,
     Dim,
-    /// The one brand ink: the identity line, every section heading and the spinner's frame. It carries
-    /// its form, because the accent is the only ink whose exact bytes depend on the terminal.
+    /// The one brand ink, at its plain weight: the spinner's Braille frame. It carries its form,
+    /// because the accent is the only ink whose exact bytes depend on the terminal.
     Accent(Accent),
+    /// The same brand ink, bold: the identity line and every section heading. The weight is part of the
+    /// structure ink and not decoration (SPEC.md Output): in the 256-colour form the accent's `166`
+    /// sits close to the semantic red, and bold is most terminals' bright variant, so the two stop
+    /// looking alike next to each other. The spinner keeps plain weight, where no red sits beside it.
+    AccentBold(Accent),
 }
 
 impl Style {
@@ -775,6 +791,7 @@ impl Style {
             Style::Red => "31",
             Style::Dim => "2",
             Style::Accent(accent) => accent.code(),
+            Style::AccentBold(accent) => accent.bold_code(),
         }
     }
 }
@@ -853,10 +870,16 @@ impl Painter {
         }
     }
 
-    /// The accent ink: the identity line, every section heading and the spinner's frame, and nothing
-    /// else (SPEC.md Output).
+    /// The accent ink at plain weight: the spinner's frame, and nothing else (SPEC.md Output).
     fn accent(&self, text: &str) -> String {
         paint(Style::Accent(self.accent), text, self.colour)
+    }
+
+    /// The accent ink bold: the identity line and every section heading, and nothing else (SPEC.md
+    /// Output). The two are the same colour and differ by weight, so the structure ink cannot be
+    /// mistaken for the red a rejection reason or a `-` diff line carries.
+    fn accent_bold(&self, text: &str) -> String {
+        paint(Style::AccentBold(self.accent), text, self.colour)
     }
 
     fn bold(&self, text: &str) -> String {
@@ -1382,7 +1405,7 @@ fn header_identity(
     origin: &str,
     ink: Painter,
 ) -> String {
-    ink.accent(&format!(
+    ink.accent_bold(&format!(
         "apt-scout {version} · {distro} · country: {country} ({origin})"
     ))
 }
@@ -1414,14 +1437,14 @@ fn header_context(
 }
 
 /// A section title with an annotation on the right, so a heading can state the rule it follows
-/// without a sentence underneath the table. The heading is the accent — the one ink every
+/// without a sentence underneath the table. The heading is the bold accent — the one ink every
 /// `titled()` heading shares — and is painted after its padding so the annotation stays in its
 /// column.
 fn titled(left: &str, right: &str, ink: Painter) -> String {
     if right.is_empty() {
-        ink.accent(left)
+        ink.accent_bold(left)
     } else {
-        format!("{}  {right}", ink.accent(&format!("{left:<45}")))
+        format!("{}  {right}", ink.accent_bold(&format!("{left:<45}")))
     }
 }
 
@@ -1738,7 +1761,7 @@ fn rejected_section(rejected: &[Rejected], ink: Painter) -> Vec<String> {
         };
         groups.entry(r.kind.label()).or_default().push(item);
     }
-    let mut out = vec![ink.accent(&format!("Rejected — {}", rejected.len()))];
+    let mut out = vec![ink.accent_bold(&format!("Rejected — {}", rejected.len()))];
     for (label, items) in groups {
         out.push(ink.red(&format!("  {label:<17} {}", items.join(", "))));
     }
@@ -1747,7 +1770,7 @@ fn rejected_section(rejected: &[Rejected], ink: Painter) -> Vec<String> {
 
 /// `--verbose` says why for each mirror on its own line, instead of grouping.
 fn rejected_detail(rejected: &[Rejected], ink: Painter) -> Vec<String> {
-    let mut out = vec![ink.accent(&format!("Rejected — {}", rejected.len()))];
+    let mut out = vec![ink.accent_bold(&format!("Rejected — {}", rejected.len()))];
     for r in rejected {
         out.push(ink.red(&format!(
             "  {:<40} {:<17} {}",
@@ -1787,7 +1810,7 @@ fn detail_section(
     resolved: &std::collections::HashMap<String, ResolvedAs>,
     ink: Painter,
 ) -> Vec<String> {
-    let mut out = vec![ink.accent("Detail")];
+    let mut out = vec![ink.accent_bold("Detail")];
     for (i, row) in rows.iter().enumerate() {
         out.push(format!("  {}  {}", i + 1, row.url));
         let detail = details.get(row.url);
@@ -2342,7 +2365,7 @@ fn run() -> Result<u8, (u8, String)> {
     // CLI), and the two differ once a run is not narrowed to one country.
     let best_country = recommendation_country(&details, &best.url);
     report.block(vec![
-        ink.accent("Recommendation"),
+        ink.accent_bold("Recommendation"),
         recommendation(best, best_country, best_cell.as_deref(), args.verbose, ink),
     ]);
 
@@ -2540,13 +2563,25 @@ fn run_restore(args: &Args, ink: Painter, root: bool, ask: bool) -> Result<u8, (
     // between the answer and the write, so a backup that appears or vanishes while the person is
     // deciding cannot change what is written.
     let outcome = restore::run(&plan, now).map_err(|e| (e.exit_code(), e.to_string()))?;
-    let mut report = Report::default();
-    report.line(ink.accent("Restore"));
-    // `backup` is read from the plan above — the plan that was written — so the block names the
-    // backup that was actually put back.
-    report.block(restore_lines(backup, &plan, &outcome, args.verbose));
-    report.print();
+    restore_report(ink, backup, &plan, &outcome, args.verbose).print();
     Ok(0)
+}
+
+/// The whole block a finished restore prints: the `Restore` heading, then the lines that name the
+/// backup. Assembled here rather than at the call site so the one accent site a run's own report
+/// never reaches can be painted by a test, in the form `SPEC.md` Output gives it. `restored` is read
+/// from the plan that was written, so the block names the backup that was actually put back.
+fn restore_report(
+    ink: Painter,
+    restored: &manifest::BackupId,
+    plan: &plan::Plan,
+    outcome: &apply::Outcome,
+    verbose: bool,
+) -> Report {
+    let mut report = Report::default();
+    report.line(ink.accent_bold("Restore"));
+    report.block(restore_lines(restored, plan, outcome, verbose));
+    report
 }
 
 /// What the confirmation names before a restore writes anything: the backup it reads, the files it
@@ -5114,6 +5149,21 @@ mod tests {
             ],
         };
         let plain = restore_lines(&restored, &plan, &outcome, false);
+        // The `Restore` heading is the one accent site a painted report cannot reach, because a
+        // restore prints its own block instead of the mirror report: it is pinned here, in exact
+        // bytes, so a site that reverted to the plain accent or to the bold-only ink the accent
+        // replaced fails this assertion and nothing else catches it.
+        assert_eq!(
+            restore_report(
+                Painter::new(true, Accent::EightBit),
+                &restored,
+                &plan,
+                &outcome,
+                false,
+            )
+            .0[0],
+            "\u{1b}[1;38;5;166mRestore\u{1b}[0m"
+        );
         assert_eq!(
             plain,
             [
@@ -6634,7 +6684,7 @@ mod tests {
             report.block(detail_section(&rows, &details, &mirror_asn, ink));
         }
         report.block(vec![
-            ink.accent("Recommendation"),
+            ink.accent_bold("Recommendation"),
             recommendation(
                 &ranked[0],
                 "United States",
@@ -7056,7 +7106,7 @@ mod tests {
             ink,
         ));
         report.block(vec![
-            ink.accent("Recommendation"),
+            ink.accent_bold("Recommendation"),
             recommendation(
                 &probed(MIRROR, verify::SignatureStatus::verified_for_test()),
                 "United States",
@@ -7122,9 +7172,12 @@ mod tests {
         assert_eq!(plain.yellow("?"), "?");
         assert_eq!(plain.red("- old"), "- old");
         assert_eq!(plain.dim("behind"), "behind");
-        // The accent too: a run with colour off makes no escape whichever form it would have taken.
+        // The accent too, both weights: a run with colour off makes no escape whichever form it
+        // would have taken.
         assert_eq!(plain.accent("Sources"), "Sources");
+        assert_eq!(plain.accent_bold("Sources"), "Sources");
         assert_eq!(paint(Style::Accent(Accent::TrueColor), "x", false), "x");
+        assert_eq!(paint(Style::AccentBold(Accent::TrueColor), "x", false), "x");
     }
 
     /// The accent's two forms, each pinned as its own literal, and `accent_for` choosing between them
@@ -7145,6 +7198,40 @@ mod tests {
             paint(Style::Accent(Accent::TrueColor), "\u{280b}", true),
             paint(Style::Accent(Accent::EightBit), "\u{280b}", true),
             "the two forms are one escape, and a fallback that shares it is decorative"
+        );
+
+        // The bold form of the same ink, pinned the same way. It is `SGR 1` in the same sequence and
+        // not a second escape, so the weight travels with the colour and cannot be applied to one
+        // form only.
+        assert_eq!(
+            paint(Style::AccentBold(Accent::TrueColor), "\u{280b}", true),
+            "\u{1b}[1;38;2;233;84;32m\u{280b}\u{1b}[0m"
+        );
+        assert_eq!(
+            paint(Style::AccentBold(Accent::EightBit), "\u{280b}", true),
+            "\u{1b}[1;38;5;166m\u{280b}\u{1b}[0m"
+        );
+        assert_ne!(
+            paint(Style::AccentBold(Accent::TrueColor), "\u{280b}", true),
+            paint(Style::AccentBold(Accent::EightBit), "\u{280b}", true),
+            "the bold forms differ too; one shared bold escape would be one form wearing a name"
+        );
+        // The fallback pair differs only in the colour part: replace the colour with the other form's
+        // and the bytes match, so the bold prefix and the reset cannot drift apart between them.
+        assert_eq!(
+            paint(Style::AccentBold(Accent::EightBit), "\u{280b}", true)
+                .replace("38;5;166", "38;2;233;84;32"),
+            paint(Style::AccentBold(Accent::TrueColor), "\u{280b}", true)
+        );
+        assert_eq!(
+            paint(Style::Accent(Accent::EightBit), "\u{280b}", true)
+                .replace("38;5;166", "38;2;233;84;32"),
+            paint(Style::Accent(Accent::TrueColor), "\u{280b}", true)
+        );
+        // And the bold form is the plain one plus `1;`: the weight is the only thing added to it.
+        assert_eq!(
+            paint(Style::AccentBold(Accent::EightBit), "x", true).replace("1;38", "38"),
+            paint(Style::Accent(Accent::EightBit), "x", true)
         );
 
         // `COLORTERM` naming a capability: the two spellings real terminals export, in either case.
@@ -7170,10 +7257,21 @@ mod tests {
         assert_eq!(ink.red("- x"), "\u{1b}[31m- x\u{1b}[0m");
         assert_eq!(ink.dim("behind"), "\u{1b}[2mbehind\u{1b}[0m");
         assert_eq!(paint(Style::Dim, "x", true), "\u{1b}[2mx\u{1b}[0m");
+        // The accent's two weights: the spinner's frame keeps the colour alone, a heading carries the
+        // bold too, and neither is two escapes from a call site.
+        assert_eq!(ink.accent("\u{280b}"), "\u{1b}[38;5;166m\u{280b}\u{1b}[0m");
+        assert_eq!(
+            ink.accent_bold("Section"),
+            "\u{1b}[1;38;5;166mSection\u{1b}[0m"
+        );
         // A plain painter over the same text is the identity, so the two differ by the escape only.
         assert_eq!(
             strip_escapes(&ink.bold("Section")),
             Painter::plain().bold("Section")
+        );
+        assert_eq!(
+            strip_escapes(&ink.accent_bold("Section")),
+            Painter::plain().accent_bold("Section")
         );
     }
 
@@ -7229,44 +7327,59 @@ mod tests {
         assert_eq!(stripped, plain);
 
         // Site by site (SPEC.md Output): the accent on the identity line and every section heading,
-        // bold on the recommended host; green `yes` and `+` lines; yellow `no` and `?`; red rejection
-        // reasons and `-` lines; dim `behind`, `speed` and `latency`.
+        // and in the bold form `SGR 1;38;5;166` — one sequence, because the weight is what separates
+        // the structure ink from the semantic red; bold on the recommended host alone otherwise;
+        // green `yes` and `+` lines; yellow `no` and `?`; red rejection reasons and `-` lines; dim
+        // `behind`, `speed` and `latency`.
         let any = |needle: &str| coloured.iter().any(|line| line.contains(needle));
         assert!(
-            coloured[0].starts_with("\u{1b}[38;5;166mapt-scout 0.1.0"),
+            coloured[0].starts_with("\u{1b}[1;38;5;166mapt-scout 0.1.0"),
             "{}",
             coloured[0]
         );
-        assert!(any("\u{1b}[38;5;166mSources "));
-        assert!(any("\u{1b}[38;5;166mRanked — "));
-        assert!(any("\u{1b}[38;5;166mDetail\u{1b}[0m"));
-        assert!(any("\u{1b}[38;5;166mRecommendation\u{1b}[0m"));
-        assert!(any("\u{1b}[38;5;166mRejected — 1\u{1b}[0m"));
-        assert!(any("\u{1b}[38;5;166mPlanned change "));
-        // No heading is bold any more: the accent replaced that, and both inks on one heading would
-        // be a fourth vocabulary nobody asked for.
+        assert!(any("\u{1b}[1;38;5;166mSources "));
+        assert!(any("\u{1b}[1;38;5;166mRanked — "));
+        assert!(any("\u{1b}[1;38;5;166mDetail\u{1b}[0m"));
+        assert!(any("\u{1b}[1;38;5;166mRecommendation\u{1b}[0m"));
+        assert!(any("\u{1b}[1;38;5;166mRejected — 1\u{1b}[0m"));
+        assert!(any("\u{1b}[1;38;5;166mPlanned change "));
+        // No accent site lost the weight: a heading at the plain accent, and the identity line at it,
+        // would be the reading the human rejected — orange next to red with nothing else to tell them
+        // apart. Each one is named, so a site that reverts fails its own assertion.
+        for site in [
+            "\u{1b}[38;5;166mapt-scout ",
+            "\u{1b}[38;5;166mSources ",
+            "\u{1b}[38;5;166mRanked — ",
+            "\u{1b}[38;5;166mDetail\u{1b}[0m",
+            "\u{1b}[38;5;166mRecommendation\u{1b}[0m",
+            "\u{1b}[38;5;166mRejected — 1\u{1b}[0m",
+            "\u{1b}[38;5;166mPlanned change ",
+        ] {
+            assert!(
+                !any(site),
+                "this accent site lost its bold and is the plain accent again: {site}"
+            );
+        }
+        // The bold that used to be the heading ink is gone: the accent replaced it, and both inks on
+        // one heading would be a vocabulary nobody asked for.
         assert!(!any("\u{1b}[1mSources"), "{coloured:?}");
         assert!(!any("\u{1b}[1mRanked"), "{coloured:?}");
         // The recommended host keeps bold.
         assert!(any("\u{1b}[1mhttps://mirror.example/ubuntu/\u{1b}[0m"));
-        // And the accent stays off every semantic cell: a table cell, a diff line, a rejection reason
-        // and a dim column heading keep the ink SPEC.md Output gives them and gain nothing.
+        // And neither accent weight reaches a semantic cell: a table cell, a diff line, a rejection
+        // reason and a dim column heading keep the ink SPEC.md Output gives them and gain nothing.
+        // Both forms are probed, because a cell painted in the bold accent does not contain the plain
+        // accent's opening bytes.
         for cell in [
-            "\u{1b}[38;5;166myes",
-            "\u{1b}[38;5;166mno",
-            "\u{1b}[38;5;166m?",
-            "\u{1b}[38;5;166mbehind",
-            "\u{1b}[38;5;166mspeed",
-            "\u{1b}[38;5;166mlatency",
-            "\u{1b}[38;5;166m404",
-            "\u{1b}[38;5;166m- ",
-            "\u{1b}[38;5;166m+ ",
-            "\u{1b}[38;5;166m12929",
+            "yes", "no", "?", "behind", "speed", "latency", "404", "- ", "+ ", "12929",
         ] {
-            assert!(
-                !any(cell),
-                "the accent reached the semantic cell {cell}: {coloured:?}"
-            );
+            for ink in ["\u{1b}[38;5;166m", "\u{1b}[1;38;5;166m"] {
+                let painted = format!("{ink}{cell}");
+                assert!(
+                    !any(&painted),
+                    "the accent reached the semantic cell {painted}: {coloured:?}"
+                );
+            }
         }
         assert!(any("\u{1b}[2mbehind\u{1b}[0m"));
         assert!(any("\u{1b}[2m     speed\u{1b}[0m"));

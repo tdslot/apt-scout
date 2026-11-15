@@ -22,4 +22,7 @@ jobs:
         run: |
           version="$(sed -n -E '0,/^version = "(.*)"/s//\1/p' Cargo.toml)"
           awk -v v="## $version " 'index($0,v)==1{f=1;next} /^## /{f=0} f' CHANGELOG.md > /tmp/notes.md
-          gh pr create --base main --head develop --title "Release v$version" --body-file /tmp/notes.md
+          gh pr create --base main --head develop --title "chore(release): v$version" --body-file /tmp/notes.md
+          # The title is a Conventional Commit because pr-title is a required check on both branches, and
+          # "Release v$version" failed it on both real releases, leaving the release PR unmergeable until a
+          # human retitled it by hand.

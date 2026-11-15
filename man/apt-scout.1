@@ -346,17 +346,21 @@ warning keeps its own line, and the animation stops while it is on screen.
 .PP
 Colour appears only when stdout is a terminal, \fBNO_COLOR\fR is not set and
 \fB\-\-no\-color\fR was not given. Section headings and the identity line are
-the accent, Ubuntu orange \fB#E95420\fR, and so is the Braille frame of the
-progress line while the phase text beside it is not; the accent is written as
-\fB38;2;233;84;32\fR when \fBCOLORTERM\fR reads \fBtruecolor\fR or
-\fB24bit\fR, and otherwise as the 256-colour \fB38;5;166\fR, because a
-terminal without truecolor ignores or misdraws \fB38;2\fR rather than
-refusing it. The \fByes\fR cell is green while \fBno\fR and \fB?\fR are
-yellow, a rejection reason and a line removed from a source file are red while
-an added line is green, the numeric column headings are dim, and the
-recommended mirror and the confirmation prompt are bold. Nothing else is
-styled, and the \fBsudo apt\-scout\fR line is never styled because a user
-copies it.
+the accent, Ubuntu orange \fB#E95420\fR, in bold as well as in colour: the
+256-colour form of that orange sits close to the red a rejection reason and a
+removed line carry, and a terminal draws bold as the bright variant, so the
+weight is what keeps structure from reading as failure. The Braille frame of
+the progress line is the accent without the bold, while the phase text beside
+it is not painted; the accent is written as \fB38;2;233;84;32\fR
+(\fB1;38;2;233;84;32\fR at the bold sites) when \fBCOLORTERM\fR reads
+\fBtruecolor\fR or \fB24bit\fR, and otherwise as the 256-colour
+\fB38;5;166\fR (\fB1;38;5;166\fR at the bold sites), because a terminal
+without truecolor ignores or misdraws \fB38;2\fR rather than refusing it. The
+\fByes\fR cell is green while \fBno\fR and \fB?\fR are yellow, a rejection
+reason and a line removed from a source file are red while an added line is
+green, the numeric column headings are dim, and the recommended mirror and the
+confirmation prompt are bold. Nothing else is styled, and the \fBsudo
+apt\-scout\fR line is never styled because a user copies it.
 .PP
 A write prints a second block after the confirmation: \fBbackup: <path>\fR, one
 \fBwrote <path>\fR per file, and a closing line naming the files and suggesting
@@ -428,9 +432,10 @@ shipped by the \fBgpgv\fR package.
 .br
 \fBtruecolor\fR or \fB24bit\fR, in any case, selects the accent's exact
 \fB38;2\fR sequence; every other value, and no value at all, selects the
-256-colour \fB38;5;166\fR. It is a display-only read: it reaches no decision,
-no path, no byte written and no exit code, and it changes no word the report
-prints, only the bytes of that one escape.
+256-colour \fB38;5;166\fR. Both carry \fB1;\fR in front at the bold sites, so
+the weight travels with the colour. It is a display-only read: it reaches no
+decision, no path, no byte written and no exit code, and it changes no word
+the report prints, only the bytes of that one escape.
 .TP
 .B NO_COLOR
 Any value, the empty one included, turns colour off. It is a display-only read:
