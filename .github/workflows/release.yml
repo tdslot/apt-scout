@@ -72,11 +72,17 @@ jobs:
           (cd dist && sha256sum -- *.tar.gz *.deb > ../SHA256SUMS && mv ../SHA256SUMS .)
           awk -v v="## $VERSION " 'index($0,v)==1{f=1;next} /^## /{f=0} f' CHANGELOG.md > notes.md
           [ -s notes.md ] || echo "Release v$VERSION" > notes.md
+          # Only a push to main publishes. A dispatch runs on whatever ref it was given, and an
+          # unticked dry_run box there must not turn a branch into a release.
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "dispatch on $GITHUB_REF: artifacts built and verified, nothing published (not main)"
+            exit 0
+          fi
           if [ "$DRY_RUN" = "true" ]; then
             echo "dry run: every artifact built and hashed; nothing published"
             (cd dist && ls -l && sha256sum --check SHA256SUMS)
-            echo "--- archive contents ---"
-            dpkg-deb -c dist/*.deb | awk '{print $1, $3, $6}' | sed -n '1,12p'
+            echo "--- archive contents (the .deb is the one scripts/build-deb.sh built and asserted) ---"
+            dpkg-deb -c dist/*.deb | awk '{print $1, $3, $6}'
             tar -tzf dist/*.tar.gz
             exit 0
           fi

@@ -201,3 +201,4 @@ Country detection contacts Canonical geoip, `ifconfig.co`, `ipinfo.io` and the C
 ## License
 
 MIT OR Apache-2.0
+
