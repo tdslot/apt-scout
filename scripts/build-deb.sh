@@ -3,6 +3,11 @@
 # --build-only produces, or the file --binary names.
 # Usage: scripts/build-deb.sh [--binary <path>] [version]
 set -euo pipefail
+# This script's own path, absolute, resolved before the cd below: "$0" is relative to the caller's
+# working directory, so `bash ../apt-scout/scripts/build-deb.sh --self-test` from somewhere else
+# stops resolving once this script has moved. The self-test copies this file, so it needs this.
+self=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+self=$self/$(basename -- "$0")
 cd "$(dirname "$0")/.."
 
 usage() {
@@ -100,11 +105,13 @@ EOF
   # Then the packaging run itself, for real: a scratch copy of the tree (this script, the scratch
   # manifest, the two files a run installs) is packaged with --binary pointing at a fake binary, and
   # the archive's own usr/bin/apt-scout is compared with that file byte for byte. The other half is
-  # the refusal: a path that is not there stops the build and is named in the message.
-  local repo=$dir/repo fake=$dir/fake-binary deb extract=$dir/extract out
+  # the three refusals, each with its own exit status and its own message: a path that is not there,
+  # a directory that is executable but is not a file — the one case only `-f` catches, because `-x`
+  # passes on a directory — and a regular file without the execute bit.
+  local repo=$dir/repo fake=$dir/fake-binary deb extract=$dir/extract out status
   deb=$repo/dist/apt-scout_9.9.9_amd64.deb
   mkdir -p "$repo/scripts"
-  cp "$0" "$repo/scripts/build-deb.sh"
+  cp "$self" "$repo/scripts/build-deb.sh"
   chmod 0755 "$repo/scripts/build-deb.sh"
   cp "$manifest" "$repo/Cargo.toml"
   cp README.md LICENSE-MIT "$repo/"
@@ -127,6 +134,32 @@ EOF
     case $out in
       *"$dir/not-there"*) echo "PASS --binary with a path that is not there stops the build naming it" ;;
       *) echo "FAIL --binary with a path that is not there does not name it: $out"; bad=1 ;;
+    esac
+  fi
+  # The case the `-f` guard exists for: a directory has the execute bit, so `-x` passes on it and a
+  # build without the `-f` check reaches the staging `install` instead of stopping here.
+  status=0
+  out=$("$repo/scripts/build-deb.sh" --binary "$dir" 9.9.9 2>&1) || status=$?
+  if [ "$status" -ne 1 ]; then
+    echo "FAIL --binary with a directory exits $status, not 1"; bad=1
+  else
+    case $out in
+      *"$dir is not a regular file"*) echo "PASS --binary with a directory says it is not a regular file" ;;
+      *) echo "FAIL --binary with a directory does not say it is not a regular file: $out"; bad=1 ;;
+    esac
+  fi
+  # The third truth: a regular file that is there and lacks the execute bit is neither missing nor a
+  # directory, and says so instead of borrowing either message.
+  printf '#!/bin/sh\nexit 0\n' > "$dir/not-executable"
+  chmod 0644 "$dir/not-executable"
+  status=0
+  out=$("$repo/scripts/build-deb.sh" --binary "$dir/not-executable" 9.9.9 2>&1) || status=$?
+  if [ "$status" -ne 1 ]; then
+    echo "FAIL --binary with a regular file that is not executable exits $status, not 1"; bad=1
+  else
+    case $out in
+      *"$dir/not-executable is not executable"*) echo "PASS --binary with a file that is not executable says so" ;;
+      *) echo "FAIL --binary with a file that is not executable does not say so: $out"; bad=1 ;;
     esac
   fi
   if ! "$repo/scripts/build-deb.sh" --binary "$fake" 9.9.9 >/dev/null; then
@@ -185,7 +218,15 @@ priority=$(meta_required priority)
 synopsis=$(package_field description)
 [ -n "$synopsis" ] || die "cannot read the description from Cargo.toml"
 
-[ -f "$binary" ] || die "$binary is missing; build it with scripts/docker-test.sh --build-only"
+# Three different truths get three different messages: a path that is not there, a path that is
+# there but is not a regular file (a directory passes `-x`, so `-f` is the guard that catches it),
+# and a regular file without the execute bit. Same exit code, no wrong message for a real path.
+if [ ! -f "$binary" ]; then
+  if [ -e "$binary" ]; then
+    die "$binary is not a regular file; --binary names the file to package, and a directory is not one"
+  fi
+  die "$binary is missing; build it with scripts/docker-test.sh --build-only"
+fi
 [ -x "$binary" ] || die "$binary is not executable; rebuild it with scripts/docker-test.sh --build-only"
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/apt-scout-deb.XXXXXX") || die "cannot create a staging directory"
