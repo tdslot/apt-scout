@@ -1,0 +1,11 @@
+{
+  "ip": "203.0.113.7",
+  "city": "City",
+  "region": "Region",
+  "country": "NO",
+  "loc": "0.0,0.0",
+  "org": "AS64496 Example Network AS",
+  "postal": "0000",
+  "timezone": "Europe/Example",
+  "readme": "https://ipinfo.io/missingauth"
+}

@@ -1,0 +1,55 @@
+name: Prepare release
+
+# Manual: bumps the version, generates CHANGELOG.md from Conventional Commits
+# and opens a PR into develop. Merging it triggers "Release PR".
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without v prefix, e.g. 0.2.0"
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Validate version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Version '$VERSION' is not X.Y.Z (no v prefix)." >&2; exit 1; }
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then echo "Tag v$VERSION already exists." >&2; exit 1; fi
+      - name: Bump version and update changelog
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          sed -i -E "0,/^version = \".*\"/s//version = \"$VERSION\"/" Cargo.toml
+          cargo check --quiet
+          .github/scripts/changelog.sh "$VERSION" > /tmp/section.md
+          { head -n 3 CHANGELOG.md; echo; cat /tmp/section.md; tail -n +4 CHANGELOG.md; } > /tmp/CHANGELOG.md
+          mv /tmp/CHANGELOG.md CHANGELOG.md
+      - name: Open PR into develop
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          branch="release/v$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add Cargo.toml Cargo.lock CHANGELOG.md
+          git commit -m "chore(release): v$VERSION"
+          git push origin "$branch"
+          gh pr create --base develop --head "$branch" --title "chore(release): v$VERSION" --body-file /tmp/section.md
+          # PRs opened with GITHUB_TOKEN do not trigger CI; dispatch it so the required check reports on this commit.
+          gh workflow run ci.yml --ref "$branch"

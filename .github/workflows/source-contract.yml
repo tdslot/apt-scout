@@ -1,0 +1,56 @@
+name: Source contract check
+
+# Advisory, never a required check. Weekly: confirm every live data source still
+# answers and still has the fields the parser needs. Opens or updates one issue
+# after two consecutive failures (runner IPs can be rate limited by single services).
+# Scheduled workflows run only from the default branch (main): this file starts running
+# after the first release merges develop into main. Public-repo schedules are disabled
+# after 60 days without repository activity; re-enable from the Actions tab if that happens.
+# Manual runs (workflow_dispatch) never count as the "previous" weekly run.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dig
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq dnsutils || echo "dig not installed; Cymru check is skipped"
+      - name: Check sources
+        id: check
+        run: |
+          set +e
+          bash .github/scripts/check-sources.sh | tee report.txt
+          echo "status=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+      - name: Previous run result
+        id: prev
+        if: steps.check.outputs.status != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prev="$(gh run list --workflow source-contract.yml --event schedule --status completed --limit 1 --json conclusion --jq '.[0].conclusion // "none"')"
+          echo "conclusion=$prev" >> "$GITHUB_OUTPUT"
+      - name: Open or update issue after two consecutive failures
+        if: steps.check.outputs.status != '0' && steps.prev.outputs.conclusion == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Data source contract check failing"
+          body="$(printf 'The weekly source contract check failed twice in a row.\n\n```\n%s\n```\n\nRun: %s/%s/actions/runs/%s' "$(cat report.txt)" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
+          existing="$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
+      - name: Fail the run so the next one can see this result
+        if: steps.check.outputs.status != '0'
+        run: exit 1

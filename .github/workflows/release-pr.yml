@@ -1,0 +1,25 @@
+name: Release PR
+
+# When the release-prep PR lands on develop, open develop -> main.
+# Merging that PR (merge commit) triggers the Release workflow.
+on:
+  push:
+    branches: [develop]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  open:
+    if: "startsWith(github.event.head_commit.message, 'chore(release): v')"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Open develop -> main PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(sed -n -E '0,/^version = "(.*)"/s//\1/p' Cargo.toml)"
+          awk -v v="## $version " 'index($0,v)==1{f=1;next} /^## /{f=0} f' CHANGELOG.md > /tmp/notes.md
+          gh pr create --base main --head develop --title "Release v$version" --body-file /tmp/notes.md

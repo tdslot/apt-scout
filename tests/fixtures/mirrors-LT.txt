@@ -1,0 +1,6 @@
+http://ubuntu-archive.mirror.serveriai.lt/
+https://mirror.bacloud.com/ubuntu-mirror/archive/
+http://ftp.litnet.lt/ubuntu/
+http://ubuntu.mirror.vu.lt/ubuntu/
+https://mirror.vpsnet.com/ubuntu/
+http://archive.ubuntu.com/ubuntu/
