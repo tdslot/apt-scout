@@ -750,8 +750,8 @@ impl Accent {
     }
 }
 
-/// The inks the report uses: the whole vocabulary of SPEC.md Output, so no render site can invent a
-/// seventh one. Display only — a decision, a comparison, an ordering, a path, a written byte and an
+/// The inks the report uses: the whole vocabulary of SPEC.md Output, so no render site can invent
+/// another one. Display only — a decision, a comparison, an ordering, a path, a written byte and an
 /// exit code never read it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Style {
