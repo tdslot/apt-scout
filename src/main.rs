@@ -1437,7 +1437,7 @@ fn header_context(
 }
 
 /// A section title with an annotation on the right, so a heading can state the rule it follows
-/// without a sentence underneath the table. The heading is the accent — the one ink every
+/// without a sentence underneath the table. The heading is the bold accent — the one ink every
 /// `titled()` heading shares — and is painted after its padding so the annotation stays in its
 /// column.
 fn titled(left: &str, right: &str, ink: Painter) -> String {
