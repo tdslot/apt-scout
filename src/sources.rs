@@ -1343,6 +1343,89 @@ mod tests {
         }
     }
 
+    /// The other half of the rule above, and the half nothing asserted before D40: exactly one spelling
+    /// layer is read, so a segment that is ordinary under that layer stays ordinary. `%252e%252e` is the
+    /// literal name `%2e%2e` to the server apt talks to, because one layer is what apt itself applies, and
+    /// `...` is a directory called `...`. This test fails the day `dot_segment` decodes a second layer
+    /// (`%252e%252e` would become `..`) or starts treating a run of dots as `..`, which would move a ruled
+    /// boundary with no ruling behind the move. A segment the check does not recognise can only decide
+    /// whether an existing token is replaced and never move a write, because every write target comes from
+    /// the closed enumeration in `plan` (SPEC: Apply).
+    #[test]
+    fn a_second_encoding_layer_is_not_a_dot_segment() {
+        let ubuntu = roots(&[("mirror.example", "/ubuntu")]);
+        // Admitted: one layer only, so these are names.
+        for admitted in [
+            "http://mirror.example/ubuntu/%252e%252e",
+            "http://mirror.example/ubuntu/%252e%252e/dists/noble/InRelease",
+            "http://mirror.example/ubuntu/%252E%252E",
+            "http://mirror.example/ubuntu/...",
+            "http://mirror.example/ubuntu/.../dists/noble/InRelease",
+        ] {
+            assert!(
+                is_rewritable(admitted, &ubuntu, false),
+                "{admitted} is an ordinary segment name and must stay eligible"
+            );
+        }
+        // Refused in the same test, so it states the whole boundary rather than one half of it: a second
+        // decode has to keep every one of these refused and still admit the five above, which it cannot.
+        for refused in [
+            "http://mirror.example/ubuntu/%2e%2e",
+            "http://mirror.example/ubuntu/%2e.",
+            "http://mirror.example/ubuntu/.%2e",
+            "http://mirror.example/ubuntu/..",
+            "http://mirror.example/ubuntu/.",
+        ] {
+            assert!(
+                !is_rewritable(refused, &ubuntu, false),
+                "{refused} is a dot segment and must stay refused"
+            );
+        }
+        // The listed side reads the same layer, so the ordinary spelling enters the set too.
+        assert_eq!(
+            mirror_root("http://mirror.example/ubuntu/%252e%252e"),
+            Some(MirrorRoot {
+                host: "mirror.example".to_string(),
+                path: "/ubuntu/%252e%252e".to_string(),
+            })
+        );
+        assert_eq!(
+            mirror_root("http://mirror.example/ubuntu/.../"),
+            Some(MirrorRoot {
+                host: "mirror.example".to_string(),
+                path: "/ubuntu/.../".to_string(),
+            })
+        );
+    }
+
+    /// The same two spellings through the whole rewrite path: an ordinary segment is not eligible in the
+    /// predicate and then reported as a refused dot segment, so the plan carries the replacement and no
+    /// skip reason names a segment. It fails with the test above on a second decode, and on its own if a
+    /// refusal reason starts calling `%252e` or `...` a dot segment (SPEC: Apply).
+    #[test]
+    fn a_uri_whose_segment_is_a_literal_name_is_rewritten() {
+        let hosts = roots(&[("mirror.example", "/ubuntu")]);
+        let input = "deb http://mirror.example/ubuntu/%252e%252e noble main\ndeb http://mirror.example/ubuntu/... noble main\ndeb http://mirror.example/ubuntu/%2e%2e noble main\n";
+        let plan = rewrite_source(
+            input,
+            Path::new("/etc/apt/sources.list"),
+            "https://mirror.example/ubuntu/",
+            &hosts,
+            false,
+        )
+        .expect("the selected mirror is valid");
+        assert_eq!(
+            plan.skipped,
+            [
+                "/etc/apt/sources.list:3: URI 'http://mirror.example/ubuntu/%2e%2e' carries a '%2e%2e' path segment, so it is left unchanged"
+            ]
+        );
+        assert_eq!(
+            plan.files[0].content,
+            "deb https://mirror.example/ubuntu/ noble main\ndeb https://mirror.example/ubuntu/ noble main\ndeb http://mirror.example/ubuntu/%2e%2e noble main\n"
+        );
+    }
+
     /// The skipped token says which segment it found, and the line keeps its bytes, so a refusal is never
     /// silent and never half-applied (SPEC: Apply).
     #[test]
