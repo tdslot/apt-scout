@@ -1,9 +1,18 @@
 name: Release
 
 # Runs when develop is merged into main. Releases only if Cargo.toml version has no tag yet.
+#
+# Also dispatchable by hand with dry_run on, which builds and checks every artifact and stops before
+# `gh release create`: the pipeline can be proved on a branch instead of on the release that needs it.
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and verify the artifacts, then stop without publishing"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -22,7 +31,9 @@ jobs:
         run: |
           version="$(sed -n -E '0,/^version = "(.*)"/s//\1/p' Cargo.toml)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          if git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1; then
+          # A dry run always builds: its purpose is to exercise the pipeline for a version that may or
+          # may not be tagged yet, so the tag check applies to a push to main only.
+          if [ "${{ github.event_name }}" = "push" ]              && git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1; then
             echo "Tag v$version exists; nothing to release."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
@@ -41,6 +52,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.v.outputs.version }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
         run: |
           cargo test --locked
           cross build --release --locked --target "$TARGET"
@@ -60,4 +72,12 @@ jobs:
           (cd dist && sha256sum -- *.tar.gz *.deb > ../SHA256SUMS && mv ../SHA256SUMS .)
           awk -v v="## $VERSION " 'index($0,v)==1{f=1;next} /^## /{f=0} f' CHANGELOG.md > notes.md
           [ -s notes.md ] || echo "Release v$VERSION" > notes.md
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "dry run: every artifact built and hashed; nothing published"
+            (cd dist && ls -l && sha256sum --check SHA256SUMS)
+            echo "--- archive contents ---"
+            dpkg-deb -c dist/*.deb | awk '{print $1, $3, $6}' | sed -n '1,12p'
+            tar -tzf dist/*.tar.gz
+            exit 0
+          fi
           gh release create "v$VERSION" dist/* --target "$GITHUB_SHA" --title "v$VERSION" --notes-file notes.md
