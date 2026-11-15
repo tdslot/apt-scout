@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. Generated from Conventional Commits by the "Prepare release" workflow.
 
+## 1.1.1 - 2026-11-15
+
+### Fixed
+
+- lift the accent off the red with weight, not a new hue (#82)
+
 ## 1.1.0 - 2026-11-15
 
 ### Added
