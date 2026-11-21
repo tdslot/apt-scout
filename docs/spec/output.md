@@ -1,6 +1,7 @@
 # Output
 
-- `OUT-1` **The default report is the decision; `--verbose` is the proof.** The default report answers
+- `OUT-1` The default report MUST be the decision, and `--verbose` MUST be the proof.
+  The default report answers
   "which mirror should I use and why" and `--verbose` answers "prove it to me", so a fact is in the
   default report only when a person choosing a mirror acts on it, and a fact that only lets a reader
   check the run is `--verbose`'s.
@@ -18,7 +19,8 @@
   backup path, and the `Rejected` counts grouped by class. `--verbose` is display only in the same
   sense colour is: it reaches no decision, no ordering, no path, no byte written and no exit code,
   so two runs that differ only in it probe, rank, plan and write identically.
-- `OUT-2` **The ranked table's columns are named for what they measure.** `behind` is how far the mirror's
+- `OUT-2` The ranked table's columns MUST be named for what they measure.
+  `behind` is how far the mirror's
   `<codename>-updates` package lists trail the freshest date the run knows: minutes, `0m` when the
   mirror is up to date, and the same number `pipeline.md` step 8 rejects against, so it is freshness and never
   network latency. `latency` is the measured round trip of the mirror's `-updates` request, time to
@@ -26,13 +28,14 @@
   `InRelease` signature: `yes` when `/usr/bin/gpgv` accepted it with the Ubuntu archive keyring,
   `no` when the body was readable but unsigned, altered or signed by an unknown key, and `?` when
   verification could not run at all — a missing `gpgv` or keyring, an oversized body, or a timeout.
-  Only `yes` may authorize a write; `no` and `?` never do, and neither is a reason to reject or
+  Only `yes` MAY authorize a write; `no` and `?` never do, and neither is a reason to reject or
   reorder a row, because read-only ranking keeps its tolerance (Freshness trust boundary).
   The legend printed with the `Ranked` title states one clause per column that needs one —
   `behind = -updates age vs freshest · latency = round trip · verified = InRelease signature` — and
   the recommendation uses these same words, never a second spelling of the same fact.
-- `OUT-3` **The trailing `notes` cell carries exactly one fact, and a column that would be empty is
-  dropped.** The cell is `redir:<host>` when the mirror redirects to another host, and the host is
+- `OUT-3` The trailing `notes` cell MUST carry exactly one fact, and a column that would be empty
+  MUST be dropped.
+  The cell is `redir:<host>` when the mirror redirects to another host, and the host is
   cut to at most 16 columns, ending in `~` when it did not fit; `~` cannot occur in a hostname, so a
   cut host is never read as a real one, and the marker costs the column it occupies so the cell
   stays inside its bound.
@@ -41,8 +44,8 @@
   The AS column is omitted entirely when no shown row has AS data, and the `notes` column when no
   shown row has a note, so the table never reads as "every mirror is unknown" and a plain table
   gains no empty column.
-- `OUT-4` **One report, one block.** A run writes its report once, on stdout, once probing and ranking are
-  done: the identity line, `Sources`, the ranked section with its title, `Detail` in a `--verbose`
+- `OUT-4` A run MUST write its report once, on stdout, once probing and ranking are done: the identity
+  line, `Sources`, the ranked section with its title, `Detail` in a `--verbose`
   run, `Recommendation`, `Planned change` when the mode plans one, in that order, and `Rejected`
   only when something was rejected.
   The identity line and `Sources` are always there; a section after them is printed when the run
@@ -53,7 +56,8 @@
   another section has already printed.
   What a write prints after the confirmation (`backup:`, `wrote`, `changed`) is a second block,
   which this section does not change.
-- `OUT-5` **Colour is display-only.** Colour appears only when stdout is a terminal, `NO_COLOR` is not set
+- `OUT-5` Colour MUST be display-only.
+  Colour appears only when stdout is a terminal, `NO_COLOR` is not set
   (any value counts as set, the empty one included) and `--no-color` was not given; in every other
   case the report prints no escape sequence at all.
   Colour governs the report and nothing else: the progress line's own control sequences are not
@@ -73,7 +77,8 @@
   the recommended mirror and the confirmation prompt are bold.
   Nothing else is styled, and the `sudo apt-scout …` line a non-root run prints is never styled,
   because a user copies it.
-- `OUT-6` **The accent has two forms, and the fallback is named because a terminal will not complain.**
+- `OUT-6` The accent MUST have two forms, `COLORTERM` MUST pick between them, and the fallback MUST be
+  named because a terminal will not complain.
   `#E95420` is a 24-bit colour, so it is written as `38;2;233;84;32` — `1;38;2;233;84;32` where the
   site is bold — only when `COLORTERM` reads `truecolor` or `24bit`, in any case; every other value,
   and an unset `COLORTERM`, takes the 256-colour cube's `38;5;166` (`1;38;5;166` where the site is
@@ -84,14 +89,16 @@
   Both forms and both weights come from one `Style` and are emitted by the one function that
   produces an escape, so the accent cannot be one form, or one weight, on one line and the other on
   the next: the form is decided once, with the colour decision, before the first line is printed.
-- `OUT-7` **The plain output is the contract, and colour reaches no decision.** With colour off the report
+- `OUT-7` The plain output MUST be the contract, and colour MUST reach no decision.
+  With colour off the report
   carries the same words, the same columns and the same section headings a colour run prints, minus
   the escapes, so a harness that captures stdout matches the same lines either way: the container
   matrix runs with stdout a pipe, therefore colour off, and asserts that text.
   Colour is never an input to a decision, a comparison, an ordering, a path, the plan, the bytes
   written or an exit code, so two runs that differ only in colour write the same bytes under
   `/etc/apt` and exit with the same code.
-- `OUT-8` **Progress is transient, animated, and only for a person.** While a run works it shows one
+- `OUT-8` Progress MUST be transient, animated, and only for a person.
+  While a run works it shows one
   status line, on stderr, rewritten in place, and only when stderr is a terminal; when stderr is a
   pipe, a file or a CI log, no progress line is written at all — no timestamped line, no "still
   working" notice — and nothing is started to draw one.
@@ -106,21 +113,24 @@
   with the next phase.
   The ticker advances a frame and redraws the line it is given and does nothing else: no probe's
   timeout, request, measurement, rejection or join order changes because a frame was drawn.
-- `OUT-9` **The animation is testable without a terminal, and it adds no dependency.** The frame is a pure
+- `OUT-9` The animation MUST be testable without a terminal, and it MUST add no dependency.
+  The frame is a pure
   function of the time a phase has been active, and the ticker's loop is driven through the existing
   progress `Sink` seam with an injected wait, so a synthetic 300 ms phase asserts the frames that
   were drawn and the text they carried, with no sleep, no thread and no terminal in the test.
   The animation is standard library only — `std::thread`, `std::sync::mpsc`, `std::sync::Mutex`,
   `std::time` — so no terminal crate, no progress crate and no new dependency is added, and a sink
   write that fails is dropped as before rather than turned into an error.
-- `OUT-10` **Progress ends with one summary line.** The ticker is stopped and the live line cleared before
-  the report is printed, and no frame may be drawn after that: the status line is replaced by
+- `OUT-10` Progress MUST end with one summary line.
+  The ticker is stopped and the live line cleared before
+  the report is printed, and the ticker MUST NOT draw a frame after that: the status line is replaced by
   `done — <usable> usable, <rejected> rejected in <t> s`, with one decimal place, for example
   `done — 4 usable, 0 rejected in 3.1 s`.
   The counts are the ones the ranked title carries, and the time runs from the loading phase to the
   end of ranking; no transient line and no ticker outlives the report's first line.
-- `OUT-11` **`NO_COLOR`, `COLORTERM` and, later, the locale are the only environment reads that may change
-  printed text.** `NO_COLOR` and `COLORTERM` are display-only reads — the first turns colour off,
+- `OUT-11` `NO_COLOR`, `COLORTERM` and, later, the locale MUST be the only environment reads that may
+  change printed text.
+  `NO_COLOR` and `COLORTERM` are display-only reads — the first turns colour off,
   the second picks which of the accent's two escapes is printed — and the locale read of
   Localization is the other: none of the three reaches a decision, a path, a byte written or an exit
   code, and no module reached from `src/apply.rs` reads any of them.

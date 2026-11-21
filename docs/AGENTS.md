@@ -36,7 +36,10 @@ Task order, task states, merged PRs, and verification evidence live in `ROADMAP.
 
 ## Verification
 
-- Every claim about a control names a `SPEC.md` section, a `spec/` chapter and step, or an S1–S17 test ID. A requirement id is not accepted until D76 assigns ids that resolve.
+- Every claim about a control names a `SPEC.md` section, a `spec/` chapter and step, or an S1–S17 test
+  ID.
+  A requirement id is cited as it stands in `spec/`, and an id the chapters no longer carry is a
+  defect.
 - A control that exists is cited `path:line`; a control that must still be built is written as `must`, in the voice of the S tests, and says plainly that it does not exist yet. A present-tense sentence with no citation is a claim about shipped code, and a claim the code cannot support is a defect.
 - `rg -n "OPEN — needs a human ruling" docs/threat-model.md` returns nothing; a gap left open with that marker, or a ruling that reads as if it answered a different question, is a defect.
 - The ruling count is one number in the record and in `ROADMAP.md`: `rg -no '^- \*\*7\.[1-9]' docs/threat-model.md | wc -l` returns 9, `rg -no '^\*\*G[1-3]' docs/threat-model.md | wc -l` returns 3, and `rg -ni "twelve rulings" docs/threat-model.md ROADMAP.md` returns five lines across those two files — one in the record and four in `ROADMAP.md` (D6e, D9d, the D50 entry and the log line at the end of the file). A different count anywhere is a defect.
@@ -45,5 +48,7 @@ Task order, task states, merged PRs, and verification evidence live in `ROADMAP.
 
 ## Child DOX Index
 
-- `spec/AGENTS.md` — the contract for the normative chapters: one area per file, stable requirement ids, `(planned)`, no history or rationale, and the layout rule this folder also applies.
+- `spec/AGENTS.md` — the contract for the normative chapters: one area per file, stable requirement ids
+  with a `MUST`/`SHOULD`/`MAY` obligation in the sentence that opens each one, `(planned)`, no history
+  or rationale, and the layout rule this folder also applies.
 - `decisions/` holds one file per decision and an index of the ids recorded elsewhere; it has no `AGENTS.md` of its own and is covered by this file.

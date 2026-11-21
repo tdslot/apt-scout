@@ -1,9 +1,10 @@
 # Platform support
-- `PLAT-1` Ubuntu and derivatives, detected from `/etc/os-release` `ID` / `ID_LIKE`.
+- `PLAT-1` The run MUST support Ubuntu and its derivatives, detected from `/etc/os-release` `ID` /
+  `ID_LIKE`.
   The codename is `UBUNTU_CODENAME` when present, otherwise `VERSION_CODENAME`: Linux Mint reports
   `VERSION_CODENAME=wilma` but apt uses Ubuntu's `noble`.
-- `PLAT-2` Pop!_OS (`ID=pop`, `ID_LIKE="ubuntu debian"`, `UBUNTU_CODENAME` equals the Ubuntu base, for
-  example `jammy`): supported.
+- `PLAT-2` The run MUST support Pop!_OS (`ID=pop`, `ID_LIKE="ubuntu debian"`, `UBUNTU_CODENAME` equals
+  the Ubuntu base, for example `jammy`).
   Verified from the real `pop-default-settings` package (`/etc/pop-os/os-release`, `postinst`): the
   active source is the deb822 file `/etc/apt/sources.list.d/system.sources` with
   `URIs: http://apt.pop-os.org/ubuntu`,
@@ -35,6 +36,7 @@
   rewrite is then simply undone, which is acceptable.
   Check whether the `pop-default-settings` `postinst` overwrites `system.sources` on package upgrade
   (it only creates the file when missing, so an upgrade does not overwrite it).
-- `PLAT-3` Architectures `amd64` and `i386` only (from `dpkg --print-architecture`).
-  Other architectures (arm64, ...) use `ports.ubuntu.com`, which has no mirror choice: print an
-  explanation and make no changes.
+- `PLAT-3` The run MUST accept the architectures `amd64` and `i386` only (from
+  `dpkg --print-architecture`).
+  Other architectures (arm64, ...) use `ports.ubuntu.com`, which has no mirror choice: the run MUST
+  print an explanation and make no changes.
