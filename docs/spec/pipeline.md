@@ -144,9 +144,9 @@ Invalid response counts as failure.
    `<codename>-security/InRelease` get the `Date:` of each pocket.
    The `<codename>-updates` reference is downloaded in full under the 512 KiB download/verification
    cap and its OpenPGP signature is verified, and both its `Date` and its signature status are kept,
-   because it is the freshness baseline a write MAY trust.
+   because it is the freshness baseline a write may trust.
    The `<codename>-security` reference is a ranged 4 KiB head and is never verified, because nothing
-   MAY consume its signature.
+   may consume its signature.
    This is the freshness baseline.
    The `<codename>` release pocket is not compared: its `Date` is the release date (for example
    `noble` shows April 2024) and never changes, so it says nothing about freshness.
@@ -168,7 +168,7 @@ Invalid response counts as failure.
    left untouched.
    A missing `-updates` pocket or unparsable `Date` rejects.
    A `Date:` is trusted only when it is inside the cleartext-signed region: nothing but
-   whitespace-only lines MAY precede `-----BEGIN PGP SIGNED MESSAGE-----`, which MUST itself start
+   whitespace-only lines may precede `-----BEGIN PGP SIGNED MESSAGE-----`, which MUST itself start
    its line (`gpgv` refuses a space-prefixed armour header), the armour headers that follow it are
    skipped up to the first blank line, and the search stops at `-----BEGIN PGP SIGNATURE-----`.
    A body with any other content before the armour header, or with its only `Date:` after the

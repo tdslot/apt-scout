@@ -34,7 +34,7 @@ Vague messages ("Unknown error", "Something went wrong", bare `No such file`) ar
     Geolocation and AS failures are `note:` lines and the run continues without them (`SPEC.md` resilience).
   - Interrupted write: temp files are cleaned up on the next run; the original file is never
     left half-written.
-- `ERR-4` The program MUST NOT keep a cache, so there is none to heal: no cache directory and no cache
+- `ERR-4` The program MUST NOT keep a cache in v1, so there is none to heal: no cache directory and no cache
   file exist, and the mirror list, the geo answers and the AS lookups are fetched afresh on every run,
   so no stale copy is ever served.
 - `ERR-5` The program MUST NOT self-heal when it is unsafe: it MUST never guess which apt file to

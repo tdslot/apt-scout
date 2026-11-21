@@ -116,8 +116,8 @@
   every locale.
   A rejection carries its message id and its arguments and is rendered when it is printed, so no
   order can depend on the locale a run happens to print in.
-- `LOC-14` Every release MUST carry the English manual page, and it MAY carry a page for any locale
-  whose catalog it ships.
+- `LOC-14` Every release MUST carry the English manual page, and a locale whose catalog ships MUST get its own
+  page.
   A locale that carries a catalog MUST have its own page at `man/<locale>/man1/apt-scout.1`,
   installed
   to `/usr/share/man/<locale>/man1/`, where `<locale>` is the system name man-db resolves: `lt`, and

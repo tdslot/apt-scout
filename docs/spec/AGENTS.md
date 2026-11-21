@@ -19,7 +19,7 @@ pull request as the tests.
 
 - One requirement per bullet, in the voice of the contract: `MUST`, `SHOULD`, `MAY`.
   The obligation is in the first sentence and that sentence carries the keyword: `MUST` for a hard
-  obligation a command can check, `SHOULD` where the text names the justified exception or the
+  obligation, `SHOULD` where the text names the justified exception or the
   choice between two valid outcomes, `MAY` for behavior that is genuinely optional.
   The body carries the same uppercase keywords wherever it states a further obligation or
   permission; a plain-English `may` or `must` stays lowercase.

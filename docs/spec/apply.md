@@ -53,7 +53,7 @@
   eligible only when its host matches a listed mirror's host and its path begins with that listed
   entry's path, compared by whole segments, so a listed `/ubuntu` admits `/ubuntu/` and
   `/ubuntu/dists/...` but not `/ubuntufoo`.
-  A mirror host usually carries several trees, and the tool MAY replace only the Ubuntu tree:
+  A mirror host usually carries several trees, and the tool may replace only the Ubuntu tree:
   `deb http://ftp.uni-stuttgart.de/debian trixie main` is left alone even when that host is
   listed as an Ubuntu mirror at `/pub/linux/debian/ubuntu/`.
   A listed entry whose path is `/` admits every path on that host, because the list names no
@@ -69,7 +69,7 @@
   so `%252e` is a literal segment name and `...` is an ordinary segment.
   The port is not part of the comparison, as before. `--https-only` does not narrow what is
   recognizable: a mirror written over `http` stays recognizable in a later `--https-only` run.
-  Every entry of every list source passes the same candidate URL validation before it MAY enter the
+  Every entry of every list source passes the same candidate URL validation before it may enter the
   set, the Launchpad page and the `mirrors.ubuntu.com` fallback alike, and an entry that fails is
   reported and left out, never silently trusted.
   Launchpad is the only list that names every country; `mirrors.ubuntu.com` is read one country at a

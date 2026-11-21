@@ -15,11 +15,11 @@
   The English page is the source of truth; a localized page for a shipped locale is allowed under
   Localization.
 - `NFR-4` The run MUST exit with these codes: 0 ok, 1 runtime error, 2 usage error, 3 the run would
-  write and this uid may not —
-  every non-root run other than `--list` that reaches the write, which prints the command to run
-  instead; a usage error (2) and a failure earlier in the run (1) keep their own code.
-  Code 4 means an unsupported distro or architecture, or a release that left `archive.ubuntu.com` for
+  write and this uid may not, and 4 no usable distro, architecture or release —
+  an unsupported distro or architecture, or a release that left `archive.ubuntu.com` for
   `old-releases.ubuntu.com` because the reference `<codename>-updates` answered 404.
+  Exit 3 is every non-root run other than `--list` that reaches the write, which prints the command to
+  run instead; a usage error (2) and a failure earlier in the run (1) keep their own code.
   A root run that found no eligible or no rewritable source MUST write nothing and exit 1, as Apply
   states; `--list` MUST exit 0 whatever the uid and a non-root run MUST exit 3.
 - `NFR-5` The delivery sequence MUST live in `ROADMAP.md` alone: the task order, task states,
@@ -66,7 +66,7 @@
   authorizes a write.
   Ranking MAY use a `Date` whose status is `invalid` or `unavailable`, but only a `Verified` `Date`
   parsed inside the signed region is usable by a write.
-  Before a write MAY use a ranked mirror, the selected mirror's `-updates` `InRelease` and the write
+  Before a write may use a ranked mirror, the selected mirror's `-updates` `InRelease` and the write
   baseline MUST both be `Verified`.
   Ranking has a separate baseline that ignores verification and MAY fall back to the newest
   candidate `Date`, verified or not.
