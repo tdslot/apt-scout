@@ -1,9 +1,9 @@
 # Pipeline
 
-1. **Detect distro** from `/etc/os-release`.
+1. `PIPE-1` **Detect distro** from `/etc/os-release`.
    Read the codename: `UBUNTU_CODENAME` when present, otherwise `VERSION_CODENAME` (Linux Mint
    reports `VERSION_CODENAME=wilma`, but apt uses `noble`).
-2. **Detect location** of the server (country, then AS), skipped with `--no-geo`.
+2. `PIPE-2` **Detect location** of the server (country, then AS), skipped with `--no-geo`.
    Every source is optional: if all fail, the program asks for `--country`, or for `--any` where no
    country is needed; it does not guess a worldwide list.
    The mirror-list sources themselves are Launchpad for the selected country, then the
@@ -53,7 +53,7 @@ table and validate the local architecture.
 Invalid country/unsupported architecture must fail before geolocation or any HTTP/DNS request.
 Resolve this before invoking geo or mirror-list sources.
 
-3. **Load mirror list**, first success wins, source shown in output:
+3. `PIPE-3` **Load mirror list**, first success wins, source shown in output:
    1. Launchpad `https://launchpad.net/ubuntu/+archivemirrors` (HTML, ~316 KB, ~560 mirrors in ~80
       countries). Measured structure: a `<tr class="head">` row with `<th colspan="2">Country</th>`
       starts each country; each mirror row has a `/ubuntu/+mirror/<id>` link, one `<a href>` per
@@ -77,7 +77,7 @@ Resolve this before invoking geo or mirror-list sources.
 failure falls through to the next source), response validated (non-empty, at least one well-formed
 `http(s)://` URL; for Launchpad, at least one country section).
 Invalid response counts as failure.
-4. **Filter**: mirrors in the detected country only, unless `--any` is given, which removes the
+4. `PIPE-4` **Filter**: mirrors in the detected country only, unless `--any` is given, which removes the
    country from the candidate set; plus the one automatic widening described below, which adds every
    other country's mirrors once and only when the run's own country came back with nothing usable.
    Candidates are deduplicated (ignoring a trailing slash and case), capped at 30, and
@@ -120,7 +120,7 @@ Invalid response counts as failure.
      That prefilter decides what is probed and never what ranks — a mirror whose declared speed is
      unknown sorts last among the candidates and still ranks wherever its probe puts it.
      A run narrowed to one country keeps the cap in list order.
-5. **Resolve AS** of candidates (skipped with `--no-geo`; informational, never a reason to fail
+5. `PIPE-5` **Resolve AS** of candidates (skipped with `--no-geo`; informational, never a reason to fail
    the run): resolve each hostname to an IP, then Team Cymru DNS TXT per IP (parallel, cap 8 at a
    time), normalized as in step 2.
    No per-IP fallback is implemented yet; failures leave AS unknown.
@@ -137,7 +137,7 @@ Invalid response counts as failure.
    CDN-backed mirrors can resolve to different AS per query; AS is approximate.
    Current implementation resolves the first address returned by the system resolver; IPv6-specific
    candidate selection is not implemented yet.
-6. **Fetch reference** once, before probing: from
+6. `PIPE-6` **Fetch reference** once, before probing: from
    `http://archive.ubuntu.com/ubuntu/dists/<codename>-updates/InRelease` and
    `<codename>-security/InRelease` get the `Date:` of each pocket.
    The `<codename>-updates` reference is downloaded in full under the 512 KiB download/verification
@@ -148,7 +148,7 @@ Invalid response counts as failure.
    This is the freshness baseline.
    The `<codename>` release pocket is not compared: its `Date` is the release date (for example
    `noble` shows April 2024) and never changes, so it says nothing about freshness.
-7. **Probe** each candidate in parallel (`std::thread`): fetch
+7. `PIPE-7` **Probe** each candidate in parallel (`std::thread`): fetch
    `<mirror>/dists/<codename>-updates/InRelease` in full under the 512 KiB download/verification cap
    so its OpenPGP signature can be checked, and fetch only the head (`Range: bytes=0-4095`) of
    `<mirror>/dists/<codename>-security/InRelease` for the informational `Date`.
@@ -159,7 +159,7 @@ Invalid response counts as failure.
    to measure throughput.
    Redirects: follow at most 3, re-validate the final host and scheme; report mirrors that redirect
    to another host.
-8. **Reject** unreachable mirrors, non-200 responses, and stale mirrors. `<codename>-updates`
+8. `PIPE-8` **Reject** unreachable mirrors, non-200 responses, and stale mirrors. `<codename>-updates`
    decides: a mirror is stale if its `Date` is older than the reference by more than `MAX_LAG` (24
    hours). `<codename>-security` lag is shown for information only, because `security.ubuntu.com` is
    left untouched.
@@ -195,7 +195,7 @@ Invalid response counts as failure.
    reference exactly and 4 were identical to each other but one signing generation behind (about 6
    hours), so a 1-hour limit would reject 40% of good mirrors.
    Freshness also guards against replay of old indexes; apt still verifies signatures.
-9. **Rank**: compare `-updates` `Date` exactly (no tolerance); lag is the reference `Date` minus
+9. `PIPE-9` **Rank**: compare `-updates` `Date` exactly (no tolerance); lag is the reference `Date` minus
    the mirror `Date`, clamped to 0 because the reference is fetched first and a mirror may be newer.
    Primary key: lag ascending (mirrors with equal `Date` form one group).
    Within a group: throughput descending, then latency ascending; a mirror in the same AS as the
@@ -207,7 +207,7 @@ Invalid response counts as failure.
    (or `unknown`) and same-AS status (`same`, `diff`, or `unknown`) so a reader can understand and
    audit the AS tie-break; the default report shows neither (Output), and no output may imply AS
    preference when the lookup failed.
-10. **Plan and write**: build the plan described in Apply, validate it against the closed target
+10. `PIPE-10` **Plan and write**: build the plan described in Apply, validate it against the closed target
     enumeration and the current on-disk digests, and only then write.
     A run that may not write stops after the recommendation.
     No step of this is user-visible or separately invocable.

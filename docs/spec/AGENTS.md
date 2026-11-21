@@ -20,12 +20,12 @@ pull request as the tests.
 - One requirement per bullet, in the voice of the contract: `MUST`, `SHOULD`, `MAY`.
   A sentence about what the code does today is a claim, not a requirement; claims live in
   `ROADMAP.md` with their evidence.
-  The normative voice is D76's work: today the chapters are unnumbered bullets.
+  The chapters carry ids but not yet the normative voice; that is D76b.
 - Every requirement carries a stable id from the file's prefix (see the index in `SPEC.md`).
   An id is assigned once and never renumbered; a withdrawn requirement keeps its id and is marked
   withdrawn.
-  No id exists yet: assigning them is D76, and until then a citation names a file and a step.
-- From D76, a requirement the code does not implement yet carries `(planned)` after its id.
+  The index in `SPEC.md` lists every id with one line and its state.
+- A requirement the code does not implement yet carries `(planned)` after its id.
 - Terms come from `../../GLOSSARY.md`.
   A term the glossary lacks is added there first, in the same pull request.
 - One sentence per line inside a paragraph or list item; a sentence too long to read is wrapped at
@@ -35,7 +35,7 @@ pull request as the tests.
 - No history, no pull-request numbers, no evidence and no rationale: why a rule exists is an ADR,
   cited as `ADR-0003` and never restated.
   The chapters are not there yet — `non-functional.md` still carries milestone history — and
-  removing it belongs to D76.
+  removing it belongs to D76b.
 - English only.
 
 ## Work Guidance
@@ -67,13 +67,15 @@ code span:
 awk '!/^[|]/ && length($0)>120 && $0 !~ /^ *`[^`]*`$/ {print FILENAME": "FNR}' SPEC.md docs/spec/*.md
 ```
 
-Requirement ids are unique per prefix.
-The check is vacuous until D76 assigns them, because the pattern matches nothing; D76 adds the
-positive half, that every chapter matches at least one id:
+Requirement ids are unique, and the index in `SPEC.md` and the chapters carry the same set:
 
 ```
-rg -o '(CLI|OUT|PIPE|APPLY|RESTORE|ERR|LOC|TEST|NFR|PLAT|TUI)-[0-9]+' . | sort | uniq -d
+rg --no-filename -o '((CLI|OUT|PIPE|APPLY|RESTORE|ERR|LOC|TEST|NFR|PLAT|TUI)-[0-9]+)' \
+  SPEC.md docs/spec | sort | uniq -c | awk '$1 != 2'
 ```
+
+Every id must appear exactly twice: once in its chapter and once in the index. A count of one or three is a
+defect, and so is an id in a chapter that no index row names.
 
 ## Child DOX Index
 

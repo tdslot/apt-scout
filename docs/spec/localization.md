@@ -1,6 +1,6 @@
 # Localization
 
-- **Display text only.** A locale selects the words a run prints and nothing else.
+- `LOC-1` (planned) **Display text only.** A locale selects the words a run prints and nothing else.
   It is never an input to a path, a filename, a decision, a comparison, an ordering, the plan, the
   bytes written or an exit code, and the privileged path never reads it: the locale is resolved once
   at startup, before any apt file is opened, and no module reached from `src/apply.rs` reads an
@@ -15,11 +15,11 @@
   verification unavailable and a write fail closed.
   Two runs that differ only in locale print different text, write identical bytes and exit with the
   same code.
-- **English is the default and the fallback.** Every user-facing message has an English text.
+- `LOC-2` (planned) **English is the default and the fallback.** Every user-facing message has an English text.
   A run whose locale the binary does not carry prints English; a message the selected catalog lacks
   prints its whole English text, never a blank and never a half-translated line.
   The unit of fallback is the message, not the fragment.
-- **Message ids are stable and are never keyed on English text.** A message is addressed by a
+- `LOC-3` (planned) **Message ids are stable and are never keyed on English text.** A message is addressed by a
   table key naming its role — `rejected_stale`, `table_header_signature` — matching
   `^[a-z][a-z0-9_]*$`: lowercase ASCII letters and digits joined by `_`, starting with a letter.
   The pattern is written anchored, and that is part of the requirement rather than notation: an
@@ -32,7 +32,7 @@
   deliberate strict subset of the ids it does.
   An id never changes when its English sentence is rewritten: no id contains a space, so no id can
   be an English sentence, and editing English invalidates no translation.
-- **Selection is RFC 4647 lookup.** `LC_ALL` when set and non-empty, else `LANG`, else English.
+- `LOC-4` (planned) **Selection is RFC 4647 lookup.** `LC_ALL` when set and non-empty, else `LANG`, else English.
   No other environment variable, no option and no configuration file selects a locale: `LANGUAGE`
   and `LC_MESSAGES` are deliberately not read.
   The value is normalized to a language tag first — charset and modifier dropped, `_` written as
@@ -41,7 +41,7 @@
   So `lt_LT.UTF-8` selects the `lt` catalog, and `de_AT.UTF-8` and `de_CH.UTF-8` both select `de`.
   A value that is not a language tag (`C`, `POSIX`, empty, unset) selects English without an error,
   and the program prints UTF-8 whatever the charset suffix claims.
-- **Chinese is selected by script, before the lookup, and a script is never substituted.**
+- `LOC-5` (planned) **Chinese is selected by script, before the lookup, and a script is never substituted.**
   `zh_CN`, `zh_SG`, `zh_Hans_*` and bare `zh` select Simplified (`zh-Hans`); `zh_TW`, `zh_HK`,
   `zh_MO` and `zh_Hant_*` select Traditional (`zh-Hant`), which v1 does not carry, so those runs
   print English rather than Simplified.
@@ -49,13 +49,13 @@
   Simplified from Traditional.
   The same rule applies everywhere: a locale the binary does not carry, including Norwegian Nynorsk
   (`nn`), prints English.
-- **The catalogs are Fluent files compiled into the binary.** Each locale is one
+- `LOC-6` (planned) **The catalogs are Fluent files compiled into the binary.** Each locale is one
   `locales/<tag>/main.ftl`, and `locales/en/main.ftl` is the source of truth every other catalog is
   translated from. `src/l10n.rs` builds them with `fluent-templates`' `static_loader!` and English
   as the fallback language, so the catalogs are compiled at build time: nothing is read from the
   filesystem at run time, no locale path comes from the environment, the release is still one static
   musl binary, and the shipped set is the set of directories under `locales/`.
-- **The dependency set changes once, by decision, and `cargo deny check` is what approves it.**
+- `LOC-7` (planned) **The dependency set changes once, by decision, and `cargo deny check` is what approves it.**
   `fluent-templates` 0.15.1 and the crates it resolves to — `fluent-bundle`, `fluent-syntax`,
   `fluent-langneg`, `unic-langid`, `intl-memoizer`, `intl_pluralrules`, `self_cell`, `rustc-hash`,
   `type-map`, `smallvec`, `displaydoc`, `thiserror`, and the proc-macro crates
@@ -69,7 +69,7 @@
   This is the crate's second dependency family and it is taken deliberately: one dependency is the
   default, not a prohibition, and a dependency enters by an explicit licence-checked decision rather
   than by accident.
-- **A catalog is complete or it is not shipped.** For every shipped locale the test suite requires
+- `LOC-8` (planned) **A catalog is complete or it is not shipped.** For every shipped locale the test suite requires
   every English message id, the same placeholder set in every message as its English entry, and
   every plural category that language's CLDR rule can return; a gap fails `cargo test` with the list
   of missing ids, not the run, and that list is the work queue a translator starts from; the gate's
@@ -80,34 +80,34 @@
   reads, so a bare placeholder whose meaning is nowhere written is a defect.
   Translated text lives only in the catalog files: a translated string never appears in `src/`, in
   the documentation or in a test.
-- **A catalog that does not parse cannot ship.** The tests parse every `locales/*/main.ftl` and
+- `LOC-9` (planned) **A catalog that does not parse cannot ship.** The tests parse every `locales/*/main.ftl` and
   fail with the file and position of the first error, and `cargo test` also forces the compiled
   catalogs to load, so a catalog the binary carries and cannot parse is a test failure.
   A missing message id in a release binary prints a visible lookup diagnostic rather than nothing,
   and no lookup can change a decision.
-- **Plurals and numbers.** A counted message is one Fluent message with a select expression over
+- `LOC-10` (planned) **Plurals and numbers.** A counted message is one Fluent message with a select expression over
   the counted variable, and the plural category is chosen by the library from the catalog's own
   language; the crate carries no plural rule of its own.
   Numbers, byte counts, dates and durations are formatted identically in every locale, with ASCII
   digits and ISO 8601 dates; only the surrounding words are translated.
-- **Never translated.** Mirror hostnames, URIs, package names, file paths, option names, country
+- `LOC-11` (planned) **Never translated.** Mirror hostnames, URIs, package names, file paths, option names, country
   codes, AS numbers, the program name and the `sudo apt-scout ...` line a non-root run prints: a
   user copies that line, so it stays runnable.
   Prompt answers (`y`, `yes`, `n`, `no`, and empty for the default) are not translated either; only
   the question is.
   A printed message carries no character the user cannot see: Fluent's Unicode isolating marks
   around placeholders are disabled, so a copied URI is the URI.
-- **Column alignment counts display columns, not characters**, so a double-width script lines up
+- `LOC-12` (planned) **Column alignment counts display columns, not characters**, so a double-width script lines up
   in the ranked table like a Latin one.
   The width function is the crate's own, tested against a fixture table of code points whose East
   Asian Width is known, and the ranked table is padded with it rather than with a character count.
   Nothing is claimed for emoji, for combining sequences outside the listed ranges, or for
   right-to-left text.
-- **Ordering never uses translated text.** Where a run sorts, the key is a mirror URL, a message
+- `LOC-13` (planned) **Ordering never uses translated text.** Where a run sorts, the key is a mirror URL, a message
   id or another value that is identical in every locale.
   A rejection carries its message id and its arguments and is rendered when it is printed, so no
   order can depend on the locale a run happens to print in.
-- **Manuals.** The English page is the only one every release must carry.
+- `LOC-14` (planned) **Manuals.** The English page is the only one every release must carry.
   A locale that carries a catalog is owed its own page at `man/<locale>/man1/apt-scout.1`, installed
   to `/usr/share/man/<locale>/man1/`, where `<locale>` is the system name man-db resolves: `lt`, and
   `zh_CN` for the `zh-Hans` catalog, because man-db looks up a locale name and not a script tag.

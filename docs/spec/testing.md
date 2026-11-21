@@ -1,6 +1,6 @@
 # Testing
 
-- An assertion compares a value with an expectation that does not derive from the same expression
+- `TEST-1` An assertion compares a value with an expectation that does not derive from the same expression
   as the value.
   A test whose two sides are computed one from the other, or whose expected side cannot differ from
   the produced one in the environment it runs in, passes whatever the code does: it is a defect in
@@ -8,12 +8,12 @@
   A test written or changed is therefore shown to fail when the code it covers is broken — mutate
   that code, watch the test report the failure, restore it — or the PR states why no such mutation
   can exist.
-- Unit tests (`#[cfg(test)]`) cover pure logic on fixtures: `os-release`, Launchpad HTML,
+- `TEST-2` Unit tests (`#[cfg(test)]`) cover pure logic on fixtures: `os-release`, Launchpad HTML,
   `mirrors.txt`, `InRelease` dates, freshness, ranking, read-only apt source inventory/parsers, and
   D8 source rewrite output/round trips.
   Saved fixtures come from real responses (the Launchpad page is ~316 KB; keep a trimmed copy with
   at least two countries and every status value seen).
-- Docker integration tests run inside disposable real Ubuntu images; offline cases and
+- `TEST-3` Docker integration tests run inside disposable real Ubuntu images; offline cases and
   live-network smoke cases are both included.
   Live cases require internet and are manual, never part of CI.
   The matrix covers every supported release; format measured on 2026-11-11:
@@ -50,7 +50,7 @@ messages inside disposable containers with isolated `/etc/apt`; the restore case
 non-root run that opens no backup, a tampered copy, a target replaced behind the backup's back, and
 the confirmation answered `y` and `n` on standard input).
 Network answers in automated tests are otherwise injected from fixtures.
-- Localization is tested in two layers, and a catalog ships only when both pass.
+- `TEST-4` Localization is tested in two layers, and a catalog ships only when both pass.
   In-process, over the files the binary carries: every `locales/*/main.ftl` parses (a failure names
   the file and position), the compiled catalogs load, the shipped set the binary reports equals the
   set of locale directories, every English message id exists in every shipped locale with the
@@ -74,7 +74,7 @@ Network answers in automated tests are otherwise injected from fixtures.
   first translated catalog on, whose own entry carries the same four comparisons and requires the
   translated run to print that locale's text.
   Neither pair is claimed to cover a path its fixture does not reach.
-- One script (`scripts/docker-test.sh`) runs the container tests on the developer's machine only;
+- `TEST-5` One script (`scripts/docker-test.sh`) runs the container tests on the developer's machine only;
   CI does not run Docker tests (CI builds and runs static checks).
   The write cases run against the container's own `/etc/apt`, with no path override of any kind:
   there is no runtime override, because the writer reads no environment variable, and, once those
@@ -92,16 +92,16 @@ Network answers in automated tests are otherwise injected from fixtures.
   TUI milestone additionally requires a laptop launch against safe fixture/mock data for user visual
   inspection, followed by runtime checks in local Ubuntu Docker emulation; visual acceptance
   requires explicit user confirmation.
-- Pop!_OS is tested in an Ubuntu 22.04 container with the real `pop-default-settings` package
+- `TEST-6` Pop!_OS is tested in an Ubuntu 22.04 container with the real `pop-default-settings` package
   downloaded from `apt.pop-os.org` (pinned by file checksum in the test fixtures, downloaded once
   and cached; the download is a test setup step, not a test of the live service): its `os-release`
   and the deb822 `system.sources` template from its `postinst` are the fixture.
   Linux Mint is covered by its documented `os-release` (`ID=linuxmint`, `VERSION_CODENAME=wilma`,
   `UBUNTU_CODENAME=noble`) in a container.
   Neither is a full installation, only the files this tool reads and writes.
-- Live-network smoke tests (real Launchpad, geo sources) are manual, never part of CI, because
+- `TEST-7` Live-network smoke tests (real Launchpad, geo sources) are manual, never part of CI, because
   they are rate limited and flaky.
-- Man-page verification checks `man/apt-scout.1` formatting (for example with `mandoc -Tlint`) and
+- `TEST-8` Man-page verification checks `man/apt-scout.1` formatting (for example with `mandoc -Tlint`) and
   confirms `man apt-scout` renders in a disposable Ubuntu container.
   Every example must match `--help` and the implemented CLI; do not document planned flags as
   available.
