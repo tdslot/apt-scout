@@ -24,7 +24,7 @@ pull request as the tests.
   The body carries the same uppercase keywords wherever it states a further obligation or
   permission; a plain-English `may` or `must` stays lowercase.
   A sentence about what the code does today is a claim, not a requirement; claims live in
-  `ROADMAP.md` with their evidence.
+  `ROADMAP.md`, with the gate records archived under `docs/history/`.
 - Every requirement carries a stable id from the file's prefix (see the index in `SPEC.md`).
   An id is assigned once and never renumbered; a withdrawn requirement keeps its id and is marked
   withdrawn.

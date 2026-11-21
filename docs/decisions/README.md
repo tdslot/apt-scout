@@ -21,7 +21,8 @@ The privilege boundary is recorded as one document, `docs/threat-model.md`, carr
 | --- | --- |
 | D6c, D6e, D6f, D9, D9a, D9c, D10, D10b, D11, D11a, D11b, D12, D13, D25, D30a, D30c, D31a, D42, D49 | `docs/threat-model.md` |
 
-`ROADMAP.md` records the task each id became, its state, the pull request that closed it and the evidence. An id that names a task rather than a decision is not a decision record, and an id whose substance is a ruling in the threat model does not get a second file.
+`ROADMAP.md` records the task each id became, its state, the pull request that closed it and the evidence, with the
+gate records archived under `docs/history/`. An id that names a task rather than a decision is not a decision record, and an id whose substance is a ruling in the threat model does not get a second file.
 
 ## Numbering
 

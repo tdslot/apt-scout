@@ -157,7 +157,8 @@ and `partial:` with what is missing where it implements only part of it.
 | `TUI-11` | `docs/spec/tui.md` | The TUI MUST restore the terminal state on exit, panic or Ctrl-C. | planned |
 
 A row that claims `implemented` is a claim about shipped code, and `ROADMAP.md`
-records the pull request and the evidence behind each line; where the two disagree, `ROADMAP.md` wins.
+records the pull request, and the evidence behind each line is archived under `docs/history/`;
+where the two disagree, `ROADMAP.md` wins.
 
 ## Privilege boundary and threat model
 
