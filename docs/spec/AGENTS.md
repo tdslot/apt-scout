@@ -53,12 +53,15 @@ pull request as the tests.
 
 ## Verification
 
-Every chapter is in the `SPEC.md` index, and every index row has a file:
+Every chapter has at least one index row in `SPEC.md`:
+
+(The loop matches the path inside a row, so a chapter named only in prose does not pass. The other direction,
+an index row naming a chapter that does not exist, is not covered by a command; check it when a row is added.)
 
 ```
 for f in docs/spec/*.md; do
   case "$f" in *AGENTS.md) continue;; esac
-  rg -q "$f" SPEC.md || echo "unindexed: $f"
+  rg -q "\| \`$f\` \|" SPEC.md || echo "unindexed: $f"
 done
 ```
 
