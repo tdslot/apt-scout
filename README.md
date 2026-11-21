@@ -197,7 +197,7 @@ Country detection contacts Canonical geoip, `ifconfig.co`, `ipinfo.io` and the C
 | Implemented behaviour, exit codes and the pipeline | [SPEC.md](SPEC.md) |
 | The security record and the rulings a write answers to | [docs/threat-model.md](docs/threat-model.md) |
 | Project vocabulary | [GLOSSARY.md](GLOSSARY.md) |
-| Task states, evidence and what is next | [ROADMAP.md](ROADMAP.md) |
+| Task states, what is next, and where the evidence is | [ROADMAP.md](ROADMAP.md) |
 | Contribution rules and the checks a change must pass | [AGENTS.md](AGENTS.md) |
 | Release history | [CHANGELOG.md](CHANGELOG.md) |
 
