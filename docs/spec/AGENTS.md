@@ -76,8 +76,8 @@ rg --no-filename -o '((CLI|OUT|PIPE|APPLY|RESTORE|ERR|LOC|TEST|NFR|PLAT|TUI)-[0-
   SPEC.md docs/spec | sort | uniq -c | awk '$1 != 2'
 ```
 
-Every id must appear exactly twice: once in its chapter and once in the index. A count of one or three is a
-defect, and so is an id in a chapter that no index row names.
+Every id must appear exactly twice: once in its chapter and once in the index.
+A count of one or three is a defect, and so is an id in a chapter that no index row names.
 
 ## Child DOX Index
 
