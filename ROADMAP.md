@@ -410,6 +410,7 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
 - [ ] D79. Rule the localization question: `docs/spec/localization.md` requires `fluent-templates` 0.15.1 and a `locales/` tree that do not exist, while `AGENTS.md` states a one-dependency rule. Say whether localization is v1 and fix whichever document is wrong. [SPEC: docs/spec/localization.md]
 - [ ] D80. Rule the TUI and `--refresh` scope: both are specified and neither is implemented, and `--refresh` is an unknown option today. [SPEC: docs/spec/tui.md, docs/spec/cli.md]
 - [ ] D81. Rule the mirror-list cache (D28): specified with a 24 h validity and never implemented. [SPEC: docs/spec/pipeline.md]
+- [ ] D82. Re-point the stale `path:line` citations in `docs/threat-model.md` that predate this restructure: fact 4 names `src/main.rs:1926`/`:2003` for the terminal checks (now `:2090`/`:2169`), fact 1 names `:2343`/`:2352`/`:2370`, section 5 names `:2867` for `write_baseline` (now `:3045`), and B7 names `:721`, which is `Ok(3)`. A `path:line` that does not resolve is a defect under `docs/AGENTS.md`. [docs/AGENTS.md]
 
 ## Change log
 
