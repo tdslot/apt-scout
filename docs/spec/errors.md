@@ -30,7 +30,7 @@ Vague messages ("Unknown error", "Something went wrong", bare `No such file`) ar
     is reported with its source and its reason, and when every source fails the run prints
     `no mirror list is available:` followed by each source and its reason, then exits 1 without
     planning or writing anything.
-    Geolocation and AS failures are `note:` lines and the run continues without them (Resilience).
+    Geolocation and AS failures are `note:` lines and the run continues without them (`SPEC.md` resilience).
   - Interrupted write: temp files are cleaned up on the next run; the original file is never
     left half-written.
 - There is no cache to heal, because v1 keeps none: no cache directory and no cache file exist, so

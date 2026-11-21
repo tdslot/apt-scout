@@ -39,7 +39,7 @@ pub struct Outcome {
     /// Informational only (SPEC step 8): `None` when the mirror has no `-security` InRelease.
     pub security_date: Option<i64>,
     /// Time to first byte of the deciding `-updates` request: DNS, TCP, TLS and one round trip,
-    /// measured before any body byte arrives (SPEC step 7). Not a download time.
+    /// measured before any body byte arrives (`docs/spec/pipeline.md` step 7). Not a download time.
     pub latency_ms: u64,
     pub throughput_bps: u64,
     /// Set when the mirror answered from a different host than the one listed (SPEC step 7).

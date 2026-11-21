@@ -32,7 +32,7 @@ This file is the map: the requirement text lives in `docs/spec/`, one file per a
 
 ## Requirement index
 
-Each area owns one file and one requirement prefix.
+Each area owns one file and one or more requirement prefixes.
 Numbered requirements and their one-line statements are added per area.
 
 | Prefix | File | Area | State |

@@ -1,4 +1,4 @@
-//! The only module that talks to the network (SPEC.md: HTTP is injected so tests use canned answers).
+//! The only module that talks to the network (`docs/spec/testing.md`: HTTP is injected so tests use canned answers).
 
 use std::fmt;
 use std::io::Read;

@@ -32,7 +32,7 @@ done
 # The loops below filter on "$*": the versions stay there and the mode flags stay out.
 if [ "${#versions[@]}" -gt 0 ]; then set -- "${versions[@]}"; else set --; fi
 
-# SPEC.md supports amd64 (and i386). Build and run amd64 everywhere; on Apple Silicon Docker emulates it.
+# `docs/spec/platform.md` supports amd64 (and i386). Build and run amd64 everywhere; on Apple Silicon Docker emulates it.
 target=x86_64-unknown-linux-musl
 platform=linux/amd64
 

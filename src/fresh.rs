@@ -4,7 +4,7 @@ use std::fmt;
 
 use crate::verify::{SignatureStatus, VerifiedDate};
 
-/// Stale mirrors are rejected when `-updates` lags the reference by more than this (SPEC step 8).
+/// Stale mirrors are rejected when `-updates` lags the reference by more than this (`docs/spec/pipeline.md` step 8).
 pub const MAX_LAG_SECS: i64 = 24 * 3600;
 
 const ARMOUR_HEAD: &str = "-----BEGIN PGP SIGNED MESSAGE-----";

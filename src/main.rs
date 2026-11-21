@@ -685,7 +685,7 @@ fn write_closing_block(touched: &[apply::Touched], uri: &str) -> String {
 /// Whether the report prints the no-eligible hint itself, so that no run prints it twice. A run
 /// that stops without an error — `--list`, or a non-root run that prints the `sudo` line — has no
 /// message to carry the hint, so the report does. A root write stops with a refusal, and a refusal
-/// must say how to fix what it reports (SPEC.md Errors), so that message carries it and the report
+/// must say how to fix what it reports (`docs/spec/errors.md`), so that message carries it and the report
 /// leaves it out. One hint per run, whichever run it is.
 fn hint_in_report(mode: Mode) -> bool {
     !matches!(mode, Mode::Write { .. } | Mode::Restore { .. })
@@ -706,8 +706,7 @@ fn no_eligible_report(mode: Mode, list_source: &str) -> Vec<String> {
     lines
 }
 
-/// No apt source file holds an official Ubuntu archive URI, so the run stops before probing. SPEC.md
-/// Apply: `--list` exits 0, a non-root run prints the `sudo` line and exits 3, and a root run that was
+/// No apt source file holds an official Ubuntu archive URI, so the run stops before probing. docs/spec/apply.md: `--list` exits 0, a non-root run prints the `sudo` line and exits 3, and a root run that was
 /// going to write exits 1.
 fn no_eligible_uri(mode: Mode, args: &Args, list_source: &str) -> Result<u8, (u8, String)> {
     match mode {
@@ -801,8 +800,7 @@ impl Accent {
 
     /// The same colour with `SGR 1` in front of it, so the lifted accent is **one** sequence and not
     /// two escapes: a terminal that maps bold to the bright variant pulls it away from the dark red
-    /// end `38;5;166` sits at, which is what keeps a heading from reading as a rejection (SPEC.md
-    /// Output). Written out rather than composed at runtime because `paint` owns the one format.
+    /// end `38;5;166` sits at, which is what keeps a heading from reading as a rejection (docs/spec/output.md). Written out rather than composed at runtime because `paint` owns the one format.
     fn bold_code(self) -> &'static str {
         match self {
             Accent::TrueColor => "1;38;2;233;84;32",
@@ -886,8 +884,7 @@ fn accent_for(colourterm: Option<&str>) -> Accent {
 }
 
 /// `text` in `style`, or `text` unchanged when colour is off. The only place an escape sequence is
-/// made, so a plain run prints exactly the bytes a colour run prints minus the escapes (SPEC.md
-/// Output). Pure.
+/// made, so a plain run prints exactly the bytes a colour run prints minus the escapes (docs/spec/output.md). Pure.
 fn paint(style: Style, text: &str, enabled: bool) -> String {
     if !enabled {
         return text.to_string();
@@ -925,8 +922,7 @@ impl Painter {
         paint(Style::Accent(self.accent), text, self.colour)
     }
 
-    /// The accent ink bold: the identity line and every section heading, and nothing else (SPEC.md
-    /// Output). The two are the same colour and differ by weight, so the structure ink cannot be
+    /// The accent ink bold: the identity line and every section heading, and nothing else (docs/spec/output.md). The two are the same colour and differ by weight, so the structure ink cannot be
     /// mistaken for the red a rejection reason or a `-` diff line carries.
     fn accent_bold(&self, text: &str) -> String {
         paint(Style::AccentBold(self.accent), text, self.colour)
@@ -1915,8 +1911,7 @@ fn detail_section(
     out
 }
 
-/// Unix seconds as `2026-11-12 08:29 UTC`: ASCII digits and one shape in every locale (SPEC.md
-/// Localization), so a copied date stays a date.
+/// Unix seconds as `2026-11-12 08:29 UTC`: ASCII digits and one shape in every locale (docs/spec/localization.md), so a copied date stays a date.
 fn utc_stamp(secs: i64) -> String {
     let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400);
@@ -2424,8 +2419,7 @@ fn run() -> Result<u8, (u8, String)> {
         .verbose
         .then(|| as_cell(&mirror_asn, server_asn.as_deref(), &best.url))
         .flatten();
-    // The mirror's own country, not the run's: only the mirror's is a fact about the mirror (SPEC.md
-    // CLI), and the two differ once a run is not narrowed to one country.
+    // The mirror's own country, not the run's: only the mirror's is a fact about the mirror (docs/spec/cli.md), and the two differ once a run is not narrowed to one country.
     let best_country = recommendation_country(&details, &best.url);
     report.block(vec![
         ink.accent_bold("Recommendation"),
@@ -5483,7 +5477,7 @@ mod tests {
             .expect_err("a root run with nothing to write must fail");
         assert_eq!(code, 1);
         // The refusal keeps the remedy, because a refusal has to say how to fix what it reports
-        // (SPEC.md Errors) — exactly once:
+        // (`docs/spec/errors.md`) — exactly once:
         assert_eq!(msg.matches(&hint).count(), 1, "{msg}");
         // …and a hint that stops is followed by a new sentence, never by a second full stop.
         assert!(hint.ends_with('.'), "{hint}");
@@ -6406,8 +6400,7 @@ mod tests {
 
     /// The default recommendation speaks the table's word for the signature and never the exact
     /// status: a mirror whose check could not run reads `verified ?` and one whose signature was
-    /// invalid reads `verified no`, while the phrases that say *why* stay `--verbose`'s (SPEC.md
-    /// Output). Without this the default line printed the same `unverified (…)` text `Detail` does.
+    /// invalid reads `verified no`, while the phrases that say *why* stay `--verbose`'s (docs/spec/output.md). Without this the default line printed the same `unverified (…)` text `Detail` does.
     #[test]
     fn the_default_recommendation_says_the_tables_word_never_the_proof() {
         let unchecked = &verify::SignatureStatus::Unavailable("no gpgv in this image".into());

@@ -6,7 +6,7 @@ The normative chapters of `SPEC.md`: one file per area, each owning one or more 
 prefixes.
 Code, tests and reviews are held to this text.
 
-`../SPEC.md` is the map: the requirement index and the cross-cutting rules. `../decisions/`
+`../../SPEC.md` is the map: the requirement index and the cross-cutting rules. `../decisions/`
 records why a rule is shaped the way it is; `../threat-model.md` rules on the privilege boundary.
 
 ## Ownership
