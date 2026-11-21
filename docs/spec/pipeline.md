@@ -1,9 +1,9 @@
 # Pipeline
 
-1. `PIPE-1` **Detect distro** from `/etc/os-release`.
-   Read the codename: `UBUNTU_CODENAME` when present, otherwise `VERSION_CODENAME` (Linux Mint
+1. `PIPE-1` The run MUST detect the distro from `/etc/os-release`.
+   It MUST read the codename: `UBUNTU_CODENAME` when present, otherwise `VERSION_CODENAME` (Linux Mint
    reports `VERSION_CODENAME=wilma`, but apt uses `noble`).
-2. `PIPE-2` **Detect location** of the server (country, then AS), skipped with `--no-geo`.
+2. `PIPE-2` The run MUST detect the location of the server (country, then AS), skipped with `--no-geo`.
    Every source is optional: if all fail, the program asks for `--country`, or for `--any` where no
    country is needed; it does not guess a worldwide list.
    The mirror-list sources themselves are Launchpad for the selected country, then the
@@ -32,7 +32,7 @@
      needed; AS DNS lookup has a 12 s total per-query budget and mirror-AS ranking has a 20 s
      overall budget.
      Print which sources failed and why.
-   - Validation: country is uppercased and must match `^[A-Z]{2}$`; `XX` (unknown), `T1` (Tor)
+   - Validation: country is uppercased and MUST match `^[A-Z]{2}$`; `XX` (unknown), `T1` (Tor)
      and `Unknown` are treated as unknown.
      The same rule applies to `--country`.
    - AS normalization: every source's value becomes canonical `AS<number>`.
@@ -50,10 +50,11 @@
      for the AS lookup unless `--no-geo`.
 **Preflight before any network access:** validate CLI country values against the supported country
 table and validate the local architecture.
-Invalid country/unsupported architecture must fail before geolocation or any HTTP/DNS request.
+Invalid country/unsupported architecture MUST fail before geolocation or any HTTP/DNS request.
 Resolve this before invoking geo or mirror-list sources.
 
-3. `PIPE-3` **Load mirror list**, first success wins, source shown in output:
+3. `PIPE-3` The run MUST load the mirror list, the first success wins, and the source it used MUST be
+   shown in the output. The sources are tried in this order:
    1. Launchpad `https://launchpad.net/ubuntu/+archivemirrors` (HTML, ~316 KB, ~560 mirrors in ~80
       countries). Measured structure: a `<tr class="head">` row with `<th colspan="2">Country</th>`
       starts each country; each mirror row has a `/ubuntu/+mirror/<id>` link, one `<a href>` per
@@ -62,7 +63,7 @@ Resolve this before invoking geo or mirror-list sources.
       up to date) is used as a hint, never as proof of freshness. Measured: 82 country sections, 562
       mirror rows, only `UP` and `UNKNOWN` statuses seen, speeds from `128 Kbps` to `100 Gbps`, and
       2 rows with only `ftp`/`rsync` links (skip them, they cannot be probed over HTTP). The parser
-      must tolerate missing protocols and unknown statuses, and is tested against a saved fixture of
+      MUST tolerate missing protocols and unknown statuses, and is tested against a saved fixture of
       this page.
    2. `http://mirrors.ubuntu.com/<CC>.txt` (plain text, one URL per line, already ordered by
       geographic proximity, ~6 URLs, no speed or status).
@@ -77,7 +78,8 @@ Resolve this before invoking geo or mirror-list sources.
 failure falls through to the next source), response validated (non-empty, at least one well-formed
 `http(s)://` URL; for Launchpad, at least one country section).
 Invalid response counts as failure.
-4. `PIPE-4` **Filter**: mirrors in the detected country only, unless `--any` is given, which removes the
+4. `PIPE-4` The run MUST filter to the mirrors in the detected country only, unless `--any` is given,
+   which removes the
    country from the candidate set; plus the one automatic widening described below, which adds every
    other country's mirrors once and only when the run's own country came back with nothing usable.
    Candidates are deduplicated (ignoring a trailing slash and case), capped at 30, and
@@ -120,9 +122,9 @@ Invalid response counts as failure.
      That prefilter decides what is probed and never what ranks — a mirror whose declared speed is
      unknown sorts last among the candidates and still ranks wherever its probe puts it.
      A run narrowed to one country keeps the cap in list order.
-5. `PIPE-5` **Resolve AS** of candidates (skipped with `--no-geo`; informational, never a reason to fail
-   the run): resolve each hostname to an IP, then Team Cymru DNS TXT per IP (parallel, cap 8 at a
-   time), normalized as in step 2.
+5. `PIPE-5` The run MUST resolve the AS of the candidates (skipped with `--no-geo`; informational,
+   never a reason to fail the run): resolve each hostname to an IP, then Team Cymru DNS TXT per IP
+   (parallel, cap 8 at a time), normalized as in step 2.
    No per-IP fallback is implemented yet; failures leave AS unknown.
    Cymru client: hand-rolled raw UDP query (about 80 lines; std has no TXT API and an async resolver
    crate contradicts the no-async rule).
@@ -137,18 +139,18 @@ Invalid response counts as failure.
    CDN-backed mirrors can resolve to different AS per query; AS is approximate.
    Current implementation resolves the first address returned by the system resolver; IPv6-specific
    candidate selection is not implemented yet.
-6. `PIPE-6` **Fetch reference** once, before probing: from
+6. `PIPE-6` The run MUST fetch the reference once, before probing: from
    `http://archive.ubuntu.com/ubuntu/dists/<codename>-updates/InRelease` and
    `<codename>-security/InRelease` get the `Date:` of each pocket.
    The `<codename>-updates` reference is downloaded in full under the 512 KiB download/verification
    cap and its OpenPGP signature is verified, and both its `Date` and its signature status are kept,
-   because it is the freshness baseline a write may trust.
+   because it is the freshness baseline a write MAY trust.
    The `<codename>-security` reference is a ranged 4 KiB head and is never verified, because nothing
-   may consume its signature.
+   MAY consume its signature.
    This is the freshness baseline.
    The `<codename>` release pocket is not compared: its `Date` is the release date (for example
    `noble` shows April 2024) and never changes, so it says nothing about freshness.
-7. `PIPE-7` **Probe** each candidate in parallel (`std::thread`): fetch
+7. `PIPE-7` The run MUST probe each candidate in parallel (`std::thread`): fetch
    `<mirror>/dists/<codename>-updates/InRelease` in full under the 512 KiB download/verification cap
    so its OpenPGP signature can be checked, and fetch only the head (`Range: bytes=0-4095`) of
    `<mirror>/dists/<codename>-security/InRelease` for the informational `Date`.
@@ -159,13 +161,14 @@ Invalid response counts as failure.
    to measure throughput.
    Redirects: follow at most 3, re-validate the final host and scheme; report mirrors that redirect
    to another host.
-8. `PIPE-8` **Reject** unreachable mirrors, non-200 responses, and stale mirrors. `<codename>-updates`
+8. `PIPE-8` The run MUST reject unreachable mirrors, non-200 responses, and stale mirrors.
+   `<codename>-updates`
    decides: a mirror is stale if its `Date` is older than the reference by more than `MAX_LAG` (24
    hours). `<codename>-security` lag is shown for information only, because `security.ubuntu.com` is
    left untouched.
    A missing `-updates` pocket or unparsable `Date` rejects.
    A `Date:` is trusted only when it is inside the cleartext-signed region: nothing but
-   whitespace-only lines may precede `-----BEGIN PGP SIGNED MESSAGE-----`, which must itself start
+   whitespace-only lines MAY precede `-----BEGIN PGP SIGNED MESSAGE-----`, which MUST itself start
    its line (`gpgv` refuses a space-prefixed armour header), the armour headers that follow it are
    skipped up to the first blank line, and the search stops at `-----BEGIN PGP SIGNATURE-----`.
    A body with any other content before the armour header, or with its only `Date:` after the
@@ -195,7 +198,8 @@ Invalid response counts as failure.
    reference exactly and 4 were identical to each other but one signing generation behind (about 6
    hours), so a 1-hour limit would reject 40% of good mirrors.
    Freshness also guards against replay of old indexes; apt still verifies signatures.
-9. `PIPE-9` **Rank**: compare `-updates` `Date` exactly (no tolerance); lag is the reference `Date` minus
+9. `PIPE-9` The run MUST rank by comparing the `-updates` `Date` exactly (no tolerance); lag is the
+   reference `Date` minus
    the mirror `Date`, clamped to 0 because the reference is fetched first and a mirror may be newer.
    Primary key: lag ascending (mirrors with equal `Date` form one group).
    Within a group: throughput descending, then latency ascending; a mirror in the same AS as the
@@ -203,11 +207,11 @@ Invalid response counts as failure.
    against that top speed, so it is not chained).
    A lagging but not stale mirror stays selectable and shows a warning.
    Accepted trade-off: a slow mirror with the exact reference `Date` ranks above a much faster one
-   that is one signing generation (about 6 hours) behind. `--verbose` must show the actual mirror AS
+   that is one signing generation (about 6 hours) behind. `--verbose` MUST show the actual mirror AS
    (or `unknown`) and same-AS status (`same`, `diff`, or `unknown`) so a reader can understand and
-   audit the AS tie-break; the default report shows neither (Output), and no output may imply AS
+   audit the AS tie-break; the default report shows neither (Output), and the output MUST NOT imply AS
    preference when the lookup failed.
-10. `PIPE-10` **Plan and write**: build the plan described in Apply, validate it against the closed target
+10. `PIPE-10` The run MUST build the plan described in Apply, validate it against the closed target
     enumeration and the current on-disk digests, and only then write.
     A run that may not write stops after the recommendation.
     No step of this is user-visible or separately invocable.

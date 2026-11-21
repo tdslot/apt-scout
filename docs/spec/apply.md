@@ -1,6 +1,6 @@
 # Apply
 
-- `APPLY-1` One code path writes, and it is internal.
+- `APPLY-1` One code path MUST write, and it MUST be internal.
   Discovery, verification, rewrite planning and confirmation produce a plan; the plan is validated
   against the closed target enumeration and the current on-disk state; only then does the first byte
   change.
@@ -28,23 +28,23 @@
   A `--restore` plan is authorized by the backup it was re-derived from instead of by a verified
   mirror: it carries no selected mirror and no baseline, the baseline rule above is a mirror's rule,
   and every other requirement in this bullet applies to it unchanged.
-  Only a `--restore` plan may remove a file: a removal is the one effect a restore can prove from
+  Only a `--restore` plan MAY remove a file: a removal is the one effect a restore can prove from
   the manifest it re-derived the plan from, so a plan that would remove anything while authorized by
   a mirror is refused before its first byte.
   A replacement is legitimate under either authority; a creation is legitimate only under a mirror
   plan, because a restore plan carries no platform and a creation without one is refused.
-- `APPLY-2` Source discovery and inventory are read-only.
+- `APPLY-2` Source discovery and inventory MUST be read-only.
   Scan `/etc/apt/sources.list` and regular `*.list` / `*.sources` entries under
   `/etc/apt/sources.list.d/`; do not follow symlinks.
   Report each inspected file and each skipped file/stanza/URI with its reason before mirror probing.
   If no eligible official archive URI exists, stop before reference/mirror probes: `--list` exits 0,
   a non-root run prints the `sudo` line and exits 3, and a root run that was going to write exits 1.
   D7 extracts URI tokens and suites only; it performs no writes.
-- `APPLY-3` Rewrite per URI token, not per file or line.
+- `APPLY-3` The run MUST rewrite per URI token, not per file or line.
   Rewrite a URI when its host is `archive.ubuntu.com`, `*.archive.ubuntu.com`, or a host and path
   the Launchpad mirror list names in any country, not only the run's own country, so a mirror this
   tool wrote stays rewritable after the operator changes country: otherwise a choice the tool made
-  can be undone only by hand, which the run that made it must not leave behind.
+  can be undone only by hand, which the run that made it MUST NOT leave behind.
   Membership answers recognizability, not trust: it makes an existing URI eligible for replacement
   and nothing else — the replacement is still the selected candidate, validated and with its
   `-updates` `InRelease` verified per probe, and the list source is trusted no further than it
@@ -53,8 +53,8 @@
   eligible only when its host matches a listed mirror's host and its path begins with that listed
   entry's path, compared by whole segments, so a listed `/ubuntu` admits `/ubuntu/` and
   `/ubuntu/dists/...` but not `/ubuntufoo`.
-  A mirror host usually carries several trees and only the Ubuntu tree is what this tool may
-  replace: `deb http://ftp.uni-stuttgart.de/debian trixie main` is left alone even when that host is
+  A mirror host usually carries several trees, and the tool MAY replace only the Ubuntu tree:
+  `deb http://ftp.uni-stuttgart.de/debian trixie main` is left alone even when that host is
   listed as an Ubuntu mirror at `/pub/linux/debian/ubuntu/`.
   A listed entry whose path is `/` admits every path on that host, because the list names no
   narrower tree there and the tool cannot tell the trees apart; that is acknowledged rather than
@@ -69,7 +69,7 @@
   so `%252e` is a literal segment name and `...` is an ordinary segment.
   The port is not part of the comparison, as before. `--https-only` does not narrow what is
   recognizable: a mirror written over `http` stays recognizable in a later `--https-only` run.
-  Every entry of every list source passes the same candidate URL validation before it may enter the
+  Every entry of every list source passes the same candidate URL validation before it MAY enter the
   set, the Launchpad page and the `mirrors.ubuntu.com` fallback alike, and an entry that fails is
   reported and left out, never silently trusted.
   Launchpad is the only list that names every country; `mirrors.ubuntu.com` is read one country at a
@@ -93,41 +93,42 @@
   The only exception is the Pop!_OS split above, which keeps `-security` on the original mirror.
   On Ubuntu 24.04 and later security already lives in its own stanza (`security.ubuntu.com`), so no
   split is needed.
-- `APPLY-4` deb822 (`/etc/apt/sources.list.d/*.sources`): a stanza's `URIs:` field may hold several URIs; D7
-  recognizes continuation lines, repeated fields, comments and stanza boundaries; rewrite only
-  matching tokens in later milestones.
+- `APPLY-4` For deb822 (`/etc/apt/sources.list.d/*.sources`) the run MUST read a stanza's `URIs:` field
+  as one or more URIs, recognize continuation lines, repeated fields, comments and stanza
+  boundaries, and rewrite only the matching tokens.
   Keep every other field (`Types`, `Suites`, `Components`, `Signed-By`, ...) and comments byte for
   byte.
-  Do not touch stanzas with `Enabled: no`.
-  Missing or malformed `URIs`/`Suites`, duplicate singleton fields, and unknown formats are reported
-  and never guessed.
-- `APPLY-5` Legacy (`/etc/apt/sources.list`, `*.list`): D7 recognizes `deb`/`deb-src` lines, bracketed
-  options such as `[arch=... signed-by=...]`, comments and URI tokens; rewrite only the URI token in
-  later milestones.
-  Malformed lines and unsupported URI schemes are reported and never guessed.
-- `APPLY-6` `mirror://` / `mirror+file:` URIs (older installs): leave unchanged and report them with an
-  explanation.
-- `APPLY-7` (planned) Alternatives: in the TUI, the first checked mirror in rank order becomes the active URI.
-  Other checked mirrors are written as commented lines `# alternative: <uri>` above the changed
+  The run MUST NOT touch stanzas with `Enabled: no`.
+  Missing or malformed `URIs`/`Suites`, duplicate singleton fields, and unknown formats MUST be
+  reported and never guessed.
+- `APPLY-5` For legacy sources (`/etc/apt/sources.list`, `*.list`) the run MUST recognize `deb`/`deb-src`
+  lines, bracketed options such as `[arch=... signed-by=...]`, comments and URI tokens, and MUST
+  rewrite only the URI token.
+  Malformed lines and unsupported URI schemes MUST be reported and never guessed.
+- `APPLY-6` `mirror://` and `mirror+file:` URIs (older installs) MUST be left unchanged and reported
+  with an explanation.
+- `APPLY-7` (planned) In the TUI the first checked mirror in rank order MUST become the active URI.
+  Other checked mirrors MUST be written as commented lines `# alternative: <uri>` above the changed
   line, so the user can switch quickly. apt has no failover across URIs, so alternatives are
   documentation only.
-- `APPLY-8` Safety checks before writing: target is a regular file (do not follow symlinks), keep mode and
-  owner, no half-written files.
-- `APPLY-9` File creation is planned, never incidental: `/etc/apt/sources.list.d/system-security.sources` is
-  created with `create_new` and mode 0600, and `EEXIST` aborts the whole apply with nothing written.
-  A planned write that creates a file is accepted only when the platform is Pop!_OS and the target
-  is exactly `sources.list.d/system-security.sources`; a plan that creates any other file, or
-  replaces a file that does not exist, aborts before the first open.
-- `APPLY-10` Backup every file to be changed to `/var/backups/apt-scout/<UTC timestamp>/`, directory mode
-  0700, refuse a symlinked directory.
-  Write a manifest of original paths.
-  Abort the whole apply if any backup fails.
-- `APPLY-11` Write atomically: temp file in the same directory, fsync, rename.
-- `RESTORE-1` `--restore` copies the newest backup back, in one root run: it reads
+- `APPLY-8` Before writing, the run MUST check that the target is a regular file (do not follow
+  symlinks), MUST keep mode and owner, and MUST leave no half-written file.
+- `APPLY-9` File creation MUST be planned, never incidental: the planned
+  `/etc/apt/sources.list.d/system-security.sources` is created with `create_new` and mode 0600, and
+  `EEXIST` MUST abort the whole apply with nothing written.
+  A planned write that creates a file MUST be accepted only when the platform is Pop!_OS and the
+  target is exactly `sources.list.d/system-security.sources`; a plan that creates any other file, or
+  replaces a file that does not exist, MUST abort before the first open.
+- `APPLY-10` The run MUST back up every file to be changed to `/var/backups/apt-scout/<UTC timestamp>/`,
+  directory mode 0700, and MUST refuse a symlinked directory.
+  It MUST write a manifest of original paths.
+  It MUST abort the whole apply if any backup fails.
+- `APPLY-11` The write MUST be atomic: temp file in the same directory, fsync, rename.
+- `RESTORE-1` `--restore` MUST copy the newest backup back, in one root run: it reads
   `/var/backups/apt-scout/<backup id>/MANIFEST` itself and aborts before parsing a byte unless that
   path is a regular file, owned by root, mode 0600, and not a symlink.
-  It then re-derives the target set and every per-target digest from the manifest itself and
-  validates them: every entry matched to the closed target enumeration, every path under
+  It then MUST re-derive the target set and every per-target digest from the manifest itself and
+  MUST validate them: every entry matched to the closed target enumeration, every path under
   `/etc/apt/`, a regular file after resolution, and every recorded digest, mode and owner matching
   the backup copy it names, refusing the whole restore on the first disagreement; a file the run
   created has no backup copy, so its record carries the digest, mode and owner the run created it
@@ -149,19 +150,20 @@
   copy beside it, so what refuses a second restore from that backup is the disk rather than the
   manifest — the record says replace and the target is gone — which is the record-versus-disk rule
   above rather than a guess.
-- `APPLY-12` Custom URLs (`Insert`): scheme `http` or `https` only; reject userinfo, whitespace, `file:`, and
-  loopback/private/link-local addresses; probe like any candidate; show a warning before apt is
-  pointed at a user-supplied host.
-- `APPLY-13` If no URI is rewritable (for example arm64, or a system already using a third-party mirror), say
-  so before any probing: scan the sources first, print every file inspected and why each entry was
-  skipped. `--list` exits 0, a non-root run prints the `sudo` line and exits 3, and a root run that
+- `APPLY-12` A custom URL (`Insert`) MUST use the scheme `http` or `https` only, and the run MUST reject
+  userinfo, whitespace, `file:`, and loopback/private/link-local addresses; it MUST probe the URL
+  like any candidate and MUST show a warning before apt is pointed at a user-supplied host.
+- `APPLY-13` The run MUST say so before any probing when no URI is rewritable (for example arm64, or a
+  system already using a third-party mirror): scan the sources first, print every file inspected and
+  why each entry was skipped.
+  `--list` exits 0, a non-root run prints the `sudo` line and exits 3, and a root run that
   was going to write exits 1.
-  Do not probe 30 mirrors for nothing.
-- `APPLY-14` Candidate hygiene (mirror lists are partly fetched over plain HTTP): every candidate, from any
-  list source, must be `http`/`https`, have no userinfo, and not resolve to a private, loopback or
-  link-local address.
-  Results from the `mirrors.ubuntu.com` fallback are marked unverified in the output.
-- `APPLY-15` After apply, suggest `sudo apt update`; do not run it.
+  The run MUST NOT probe 30 mirrors for nothing.
+- `APPLY-14` Candidate hygiene: every candidate from any list source MUST be `http`/`https`, have no
+  userinfo, and not resolve to a private, loopback or link-local address, because mirror lists are
+  partly fetched over plain HTTP.
+  Results from the `mirrors.ubuntu.com` fallback MUST be marked unverified in the output.
+- `APPLY-15` After an apply the run MUST suggest `sudo apt update` and MUST NOT run it.
   The run that wrote was a root run under `sudo` and has exited by the time the sentence is read, so
   a hint that named a bare `apt update` would tell the reader to run, from their own shell, a
   command that fails there.

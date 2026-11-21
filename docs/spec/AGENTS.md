@@ -18,13 +18,18 @@ pull request as the tests.
 ## Local Contracts
 
 - One requirement per bullet, in the voice of the contract: `MUST`, `SHOULD`, `MAY`.
+  The obligation is in the first sentence and that sentence carries the keyword: `MUST` for a hard
+  obligation a command can check, `SHOULD` where the text names the justified exception or the
+  choice between two valid outcomes, `MAY` for behavior that is genuinely optional.
+  The body carries the same uppercase keywords wherever it states a further obligation or
+  permission; a plain-English `may` or `must` stays lowercase.
   A sentence about what the code does today is a claim, not a requirement; claims live in
   `ROADMAP.md` with their evidence.
-  The chapters carry ids but not yet the normative voice; that is D76b.
 - Every requirement carries a stable id from the file's prefix (see the index in `SPEC.md`).
   An id is assigned once and never renumbered; a withdrawn requirement keeps its id and is marked
   withdrawn.
-  The index in `SPEC.md` lists every id with one line and its state.
+  The index in `SPEC.md` lists every id with one line and its state, and the `Requirement` cell is
+  that requirement's first sentence verbatim, so a row can be found in its chapter by search.
 - A requirement the code does not implement yet carries `(planned)` after its id.
   A requirement that is only partly implemented keeps no marker: the requirement stands as written, and its
   index row says `partial:` with what is missing.
@@ -34,10 +39,11 @@ pull request as the tests.
   a safe space.
   No line outside a table or a code block exceeds 120 characters.
   Tables only for enumerations.
-- No history, no pull-request numbers, no evidence and no rationale: why a rule exists is an ADR,
-  cited as `ADR-0003` and never restated.
-  The chapters are not there yet — `non-functional.md` still carries milestone history — and
-  removing it belongs to D76b.
+- No history, no pull-request numbers, no evidence and no milestone notes: why a rule exists is an
+  ADR, cited as `ADR-0003` and never restated.
+  The delivery sequence and its states are `ROADMAP.md`'s alone.
+  The rationale and the dated measurements some requirement bodies still carry are D83's work, not a
+  licence for new ones.
 - English only.
 
 ## Work Guidance
@@ -47,8 +53,9 @@ pull request as the tests.
   edit.
 - A citation names a file and a step, never a bare section name: `pipeline.md` step 4, not
   "Pipeline 4".
-- A rule that outlives its incident is promoted from `.pi/agents/lessons.md` into this contract;
-  an incident that keeps recurring earns a verification command here.
+- A rule that outlives its incident is promoted from the agent's lessons file, which is machine-level
+  and not in this repository, into this contract; an incident that keeps recurring earns a
+  verification command here.
 - Run a verification command before writing it down, and check it against a case it must catch.
 
 ## Verification
@@ -72,15 +79,49 @@ code span:
 awk '!/^[|]/ && length($0)>120 && $0 !~ /^ *`[^`]*`$/ {print FILENAME": "FNR}' SPEC.md docs/spec/*.md
 ```
 
-Requirement ids are unique, and the index in `SPEC.md` and the chapters carry the same set:
+Requirement ids are unique, and the index in `SPEC.md` and the chapters name the same set.
+The first command compares the two sorted, unique id sets, so an id on one side and not the other is
+printed; it says nothing about how often an id appears. The second counts occurrences, so an id twice
+in one chapter and once in the index passes the first command and fails here.
+
+```
+ids() { rg --no-filename -o '`((CLI|OUT|PIPE|APPLY|RESTORE|ERR|LOC|TEST|NFR|PLAT|TUI)-[0-9]+)`' "$@" | sort -u; }
+diff <(ids SPEC.md) <(ids docs/spec --glob '!AGENTS.md')
+```
 
 ```
 rg --no-filename -o '((CLI|OUT|PIPE|APPLY|RESTORE|ERR|LOC|TEST|NFR|PLAT|TUI)-[0-9]+)' \
   SPEC.md docs/spec | sort | uniq -c | awk '$1 != 2'
 ```
 
-Every id must appear exactly twice: once in its chapter and once in the index.
-A count of one or three is a defect, and so is an id in a chapter that no index row names.
+Every id appears exactly twice: once in its chapter and once in the index.
+Each index row's `Requirement` cell is its chapter's first sentence, verbatim:
+
+```
+for f in docs/spec/*.md; do
+  case "$f" in *AGENTS.md) continue;; esac
+  flat=$(tr '\n' ' ' < "$f" | tr -s ' ' | sed 's/`//g')
+  rg --no-filename "^\| \`[A-Z]*-[0-9]*\` \| \`$f\` \| " SPEC.md |
+    sed -E 's/^\| `[^`]+` \| `[^`]+` \| (.*) \| [a-z:].*$/\1/' |
+    sed 's/`//g' |
+    while IFS= read -r s; do
+      case "$flat" in *"$s"*) ;; *) echo "untraceable: $f: $s";; esac
+    done
+done
+```
+
+A row whose statement was reworded in the chapter and not in `SPEC.md` prints `untraceable`.
+Each requirement states its obligation with one of the three keywords on the line that names its id:
+
+```
+pre='(CLI|OUT|PIPE|APPLY|RESTORE|ERR|LOC|TEST|NFR|PLAT|TUI)'
+ids() { rg --no-filename -o "\x60$pre-[0-9]+\x60" "$@"; }
+kw() { rg --no-filename -o "\x60$pre-[0-9]+\x60[^\n]*\b(MUST|SHOULD|MAY)\b" "$@" | rg -o '`[A-Z]+-[0-9]+`'; }
+diff <(ids docs/spec --glob '!AGENTS.md' | sort -u) <(kw docs/spec --glob '!AGENTS.md' | sort -u)
+```
+
+An id whose line carries no keyword is printed on the left side alone; the keyword need not be the
+first word, so a sentence that states its obligation after a preamble still counts.
 
 ## Child DOX Index
 

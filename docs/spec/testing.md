@@ -1,6 +1,6 @@
 # Testing
 
-- `TEST-1` An assertion compares a value with an expectation that does not derive from the same expression
+- `TEST-1` An assertion MUST compare a value with an expectation that does not derive from the same expression
   as the value.
   A test whose two sides are computed one from the other, or whose expected side cannot differ from
   the produced one in the environment it runs in, passes whatever the code does: it is a defect in
@@ -8,15 +8,15 @@
   A test written or changed is therefore shown to fail when the code it covers is broken — mutate
   that code, watch the test report the failure, restore it — or the PR states why no such mutation
   can exist.
-- `TEST-2` Unit tests (`#[cfg(test)]`) cover pure logic on fixtures: `os-release`, Launchpad HTML,
+- `TEST-2` Unit tests (`#[cfg(test)]`) MUST cover pure logic on fixtures: `os-release`, Launchpad HTML,
   `mirrors.txt`, `InRelease` dates, freshness, ranking, read-only apt source inventory/parsers, and
   D8 source rewrite output/round trips.
   Saved fixtures come from real responses (the Launchpad page is ~316 KB; keep a trimmed copy with
   at least two countries and every status value seen).
-- `TEST-3` Docker integration tests run inside disposable real Ubuntu images; offline cases and
-  live-network smoke cases are both included.
-  Live cases require internet and are manual, never part of CI.
-  The matrix covers every supported release; format measured on 2026-11-11:
+- `TEST-3` Docker integration tests MUST run inside disposable real Ubuntu images, and MUST include
+  offline cases and live-network smoke cases.
+  The live cases MUST be manual and MUST never be part of CI; they need internet.
+  The matrix MUST cover every supported release; format measured on 2026-11-11:
 
   | Release | Codename | Sources format |
   | --- | --- | --- |
@@ -44,13 +44,14 @@ code stay usable), one live case that requires a real `verified` reference and a
 `verified` mirror row after installing the two `.deb` dependencies, because a base image is not a
 package install, and the restore cases W27–W33, which reach the flag the user types against a backup
 a real write made, including the interactive confirmation answered both ways.
-Later source-write milestones must test rewrite, backup, atomic write, `--restore` and error
+Later source-write milestones MUST test rewrite, backup, atomic write, `--restore` and error
 messages inside disposable containers with isolated `/etc/apt`; the restore cases are W27–W33 in
 `scripts/docker-test.sh` (a positive restore after a real write, a second restore refused, a
 non-root run that opens no backup, a tampered copy, a target replaced behind the backup's back, and
 the confirmation answered `y` and `n` on standard input).
 Network answers in automated tests are otherwise injected from fixtures.
-- `TEST-4` (planned) Localization is tested in two layers, and a catalog ships only when both pass.
+- `TEST-4` (planned) Localization MUST be tested in two layers, and a catalog MUST ship only when both
+  pass.
   In-process, over the files the binary carries: every `locales/*/main.ftl` parses (a failure names
   the file and position), the compiled catalogs load, the shipped set the binary reports equals the
   set of locale directories, every English message id exists in every shipped locale with the
@@ -61,7 +62,7 @@ Network answers in automated tests are otherwise injected from fixtures.
   English), the width function against its fixture table, and the literal gate that refuses a
   printed sentence outside `src/l10n.rs`.
   The completeness gate's discriminating power over English-tied ids is shown in the same layer:
-  from the first translated catalog on, renaming one English id must fail the completeness gate for
+  from the first translated catalog on, renaming one English id MUST fail the completeness gate for
   every shipped locale other than English, naming the id as missing.
   In a container: the read-only CLI and a root write run each executed twice against the same
   fixture image, once under `LANG=C` and once under a shipped locale, compared on exactly four
@@ -74,16 +75,16 @@ Network answers in automated tests are otherwise injected from fixtures.
   first translated catalog on, whose own entry carries the same four comparisons and requires the
   translated run to print that locale's text.
   Neither pair is claimed to cover a path its fixture does not reach.
-- `TEST-5` One script (`scripts/docker-test.sh`) runs the container tests on the developer's machine only;
-  CI does not run Docker tests (CI builds and runs static checks).
+- `TEST-5` One script (`scripts/docker-test.sh`) MUST run the container tests on the developer's machine
+  only, and CI MUST NOT run Docker tests (CI builds and runs static checks).
   The write cases run against the container's own `/etc/apt`, with no path override of any kind:
   there is no runtime override, because the writer reads no environment variable, and, once those
-  cases land, the write entry point they use must exist only in a build compiled with the test-only
-  `apt_scout_write_harness` cfg, which `scripts/docker-test.sh` must set with a build flag passed to
-  that crate's own compilation when it builds that binary and which no release build may set.
+  cases land, the write entry point they use MUST exist only in a build compiled with the test-only
+  `apt_scout_write_harness` cfg, which `scripts/docker-test.sh` MUST set with a build flag passed to
+  that crate's own compilation when it builds that binary, and a release build MUST NOT set it.
   The toolchain inside its build container comes from the published `rustup-init` binary checked
   against the `.sha256` served from the same origin, never from a script piped into a shell: the
-  container has the checkout mounted read-write, so the content it executes must be verifiable.
+  container has the checkout mounted read-write, so the content it executes MUST be verifiable.
   CI compiles that cfg build as well, so the file cannot rot unseen: the `check` job runs clippy a
   second time with `RUSTFLAGS=--cfg apt_scout_write_harness`, and a deliberate syntax error in
   `src/harness.rs` is reported by that pass and by no other.
@@ -92,16 +93,16 @@ Network answers in automated tests are otherwise injected from fixtures.
   TUI milestone additionally requires a laptop launch against safe fixture/mock data for user visual
   inspection, followed by runtime checks in local Ubuntu Docker emulation; visual acceptance
   requires explicit user confirmation.
-- `TEST-6` Pop!_OS is tested in an Ubuntu 22.04 container with the real `pop-default-settings` package
+- `TEST-6` Pop!_OS MUST be tested in an Ubuntu 22.04 container with the real `pop-default-settings` package
   downloaded from `apt.pop-os.org` (pinned by file checksum in the test fixtures, downloaded once
   and cached; the download is a test setup step, not a test of the live service): its `os-release`
   and the deb822 `system.sources` template from its `postinst` are the fixture.
-  Linux Mint is covered by its documented `os-release` (`ID=linuxmint`, `VERSION_CODENAME=wilma`,
+  Linux Mint MUST be covered by its documented `os-release` (`ID=linuxmint`, `VERSION_CODENAME=wilma`,
   `UBUNTU_CODENAME=noble`) in a container.
   Neither is a full installation, only the files this tool reads and writes.
-- `TEST-7` Live-network smoke tests (real Launchpad, geo sources) are manual, never part of CI, because
-  they are rate limited and flaky.
-- `TEST-8` (planned) Man-page verification checks `man/apt-scout.1` formatting (for example with `mandoc -Tlint`) and
-  confirms `man apt-scout` renders in a disposable Ubuntu container.
-  Every example must match `--help` and the implemented CLI; do not document planned flags as
+- `TEST-7` Live-network smoke tests (real Launchpad, geo sources) MUST be manual and MUST never be part
+  of CI, because they are rate limited and flaky.
+- `TEST-8` (planned) Man-page verification MUST check `man/apt-scout.1` formatting (for example with
+  `mandoc -Tlint`) and MUST confirm `man apt-scout` renders in a disposable Ubuntu container.
+  Every example MUST match `--help` and the implemented CLI; a planned flag MUST NOT be documented as
   available.
