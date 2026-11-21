@@ -32,7 +32,7 @@ done
 # The loops below filter on "$*": the versions stay there and the mode flags stay out.
 if [ "${#versions[@]}" -gt 0 ]; then set -- "${versions[@]}"; else set --; fi
 
-# SPEC.md supports amd64 (and i386). Build and run amd64 everywhere; on Apple Silicon Docker emulates it.
+# `docs/spec/platform.md` supports amd64 (and i386). Build and run amd64 everywhere; on Apple Silicon Docker emulates it.
 target=x86_64-unknown-linux-musl
 platform=linux/amd64
 
@@ -222,7 +222,7 @@ rc=0; got=$(run none ubuntu:24.04 /apt-scout --country LT 2>&1) || rc=$?
 if [ "$rc" = 1 ] && [[ "$got" == *"no mirror list is available"* ]] && [[ "$got" == *"launchpad.net"* ]] && [[ "$got" == *"mirrors.ubuntu.com/LT.txt"* ]]; then pass "no network -> clear error, exit 1"; else fail "no network -> exit $rc: $got"; fi
 
 # 10. Live: with only third-party apt sources, inventory must stop before reference/mirror probing.
-#     `--list` is the read-only mode whatever the uid (SPEC.md CLI table), so this case stays about
+#     `--list` is the read-only mode whatever the uid (docs/spec/cli.md table), so this case stays about
 #     the inventory and never asks to write.
 rc=0; got=$(run bridge ubuntu:24.04 sh -c 'rm -f /etc/apt/sources.list; rm -rf /etc/apt/sources.list.d; mkdir -p /etc/apt/sources.list.d; printf "deb https://packages.example.org/ubuntu noble main\\n" > /etc/apt/sources.list.d/third-party.list; /apt-scout --list --no-geo --country LT' 2>&1) || rc=$?
 #    The inventory line the case reads is now the `Sources` heading plus the skip line naming the
@@ -768,7 +768,7 @@ echo run1-rc=\$rc1
 host=\$(grep -oE 'URIs: [a-z]+://[^ /]+' /etc/apt/sources.list.d/ubuntu.sources | head -n 1 | sed -E 's|^URIs: [a-z]+://||; s|/.*||')
 echo written-host=\$host
 # The recommendation names the mirror's country, not the run's: this run asked for LT and selected
-# a foreign mirror, so a line that still says Lithuania is the bug SPEC.md CLI forbids.
+# a foreign mirror, so a line that still says Lithuania is the bug docs/spec/cli.md forbids.
 echo rec=\$(grep -E '— (freshest|closest)' /tmp/run1 | head -n 1)
 echo BLOCKED-BEGIN; cat /tmp/lt-hosts; echo BLOCKED-END
 echo RUN1; cat /tmp/run1" 2>&1) || rc=$?
@@ -984,7 +984,7 @@ else
 fi
 
 # W33 (S10) Offline: the interactive confirmation, answered no. A `n` is the user's decision and not
-#   a failure: exit 0, `/etc/apt` byte-identical, no second backup, and the sentence `SPEC.md` CLI and
+#   a failure: exit 0, `/etc/apt` byte-identical, no second backup, and the sentence docs/spec/cli.md and
 #   `man/apt-scout.1` EXIT STATUS name. The seed write runs in the setup, so the snapshot this case
 #   compares is the post-write state a declined restore must leave alone; a run that wrote through
 #   the answer would show as same=no. The prompt is on stdout with no trailing newline, so the

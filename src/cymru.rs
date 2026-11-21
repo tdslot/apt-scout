@@ -1,4 +1,4 @@
-//! Team Cymru IP-to-ASN lookup over plain DNS TXT (SPEC.md, Pipeline step 2 and 5). std has no TXT
+//! Team Cymru IP-to-ASN lookup over plain DNS TXT (docs/spec/pipeline.md step 2 and 5). std has no TXT
 //! API and an async resolver crate contradicts the no-async rule, so this is a small UDP client.
 //! The packet builder and the answer parser are pure and tested; only `lookup`, `lookup_name` and
 //! their one shared query loop touch the network.
@@ -175,7 +175,7 @@ pub fn asn_from_txt(txt: &str) -> Option<String> {
     normalize_asn(txt.split('|').next()?.trim())
 }
 
-/// `AS64496` -> `64496.asn.cymru.com.`, the query that names the AS holder (SPEC step 2: AS data
+/// `AS64496` -> `64496.asn.cymru.com.`, the query that names the AS holder (`docs/spec/pipeline.md` step 2: AS data
 /// comes from DNS, never from a web API). `None` for a value that is not `AS<digits>`.
 pub fn asn_query_name(asn: &str) -> Option<String> {
     let digits = asn.strip_prefix("AS")?;

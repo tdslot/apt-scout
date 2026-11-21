@@ -785,8 +785,9 @@ fn sweep_targets(captured: &[Captured], owner_uid: u32) -> Result<(), ApplyError
 
 /// Remove this program's own leftover temp files from one directory.
 ///
-/// `SPEC.md` promises that an interrupted write's temp files are cleaned up on the next run, and a
-/// name of ours left in `/etc/apt` would falsify this module's "no half-written files". Four
+/// `docs/spec/errors.md` promises that an interrupted write's temp files are cleaned up on
+/// the next run, and a name of ours left in `/etc/apt` would falsify the "no half-written
+/// files" that `docs/spec/apply.md` requires. Four
 /// conditions bound what a privileged `unlink` may be steered to by a name: this program's prefix,
 /// a regular file, the run's own uid, and at most `TEMP_TRIES` names per directory. An entry that
 /// fails one of them is left alone and never reused.

@@ -16,6 +16,12 @@
 
 **Freshness**: A mirror is fresh when its `<codename>-updates` lag is within `MAX_LAG` (24 hours). The release pocket is not compared and `-security` lag is informational. Stale mirrors are rejected; lagging but fresh mirrors rank lower.
 
+**Pocket**: One suite of an Ubuntu archive: `<codename>`, `<codename>-updates`, `<codename>-security` or `<codename>-backports`. Each has its own `InRelease`, and freshness is always read for one pocket at a time.
+
+**InRelease**: The signed metadata file at `dists/<suite>/InRelease`, where `<suite>` is `<codename>` for the base pocket and `<codename>-<pocket>` for the rest. Its `Date` field is the signing time, and its OpenPGP signature is what the `verified` status reports.
+
+**MAX_LAG**: The 24-hour limit on a mirror’s `-updates` lag. Past it the mirror is stale and rejected.
+
 **verified** (signature status): The `<codename>-updates` `InRelease` carries a good OpenPGP signature from the Ubuntu archive keyring. The only status a write may trust, and the ranked table's `verified` column shows it as `yes`.
 
 **invalid** (signature status): The `InRelease` was readable but is unsigned, altered, or signed by an unknown key. The table shows it as `no`, and the exact status belongs to `--verbose`.
