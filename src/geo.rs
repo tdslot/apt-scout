@@ -1,4 +1,4 @@
-//! Server country and AS from third-party sources (SPEC.md, Pipeline step 2). Everything here is
+//! Server country and AS from third-party sources (docs/spec/pipeline.md step 2). Everything here is
 //! optional: any failure leaves the answer unknown and the run continues (SPEC.md, Resilience).
 //! Parsers are pure and tested on saved (anonymised) fixtures; answers are untrusted and validated.
 

@@ -18,7 +18,7 @@
 
 **Pocket**: One suite of an Ubuntu archive: `<codename>`, `<codename>-updates`, `<codename>-security` or `<codename>-backports`. Each has its own `InRelease`, and freshness is always read for one pocket at a time.
 
-**InRelease**: The signed metadata file at `dists/<codename>-<pocket>/InRelease`. Its `Date` field is the signing time, and its OpenPGP signature is what the `verified` status reports.
+**InRelease**: The signed metadata file at `dists/<suite>/InRelease`, where `<suite>` is `<codename>` for the base pocket and `<codename>-<pocket>` for the rest. Its `Date` field is the signing time, and its OpenPGP signature is what the `verified` status reports.
 
 **MAX_LAG**: The 24-hour limit on a mirror’s `-updates` lag. Past it the mirror is stale and rejected.
 

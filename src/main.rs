@@ -31,7 +31,7 @@ const REFERENCE: &str = "http://archive.ubuntu.com/ubuntu";
 const TEXT_LIST: &str = "http://mirrors.ubuntu.com";
 /// Candidates probed per run (SPEC step 4).
 const MAX_CANDIDATES: usize = 30;
-/// The `--top` default (SPEC.md CLI: `--top <N>` shows N best mirrors, default 5).
+/// The `--top` default (docs/spec/cli.md: `--top <N>` shows N best mirrors, default 5).
 const DEFAULT_TOP: usize = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,7 +46,7 @@ struct Args {
     yes: bool,
     /// `--verbose`: per-mirror detail and each rejection's full reason.
     verbose: bool,
-    /// `--no-color`: no escapes in the report, whatever the terminal is (SPEC.md Output).
+    /// `--no-color`: no escapes in the report, whatever the terminal is (docs/spec/output.md).
     no_color: bool,
     /// `--restore`: put the newest backup back instead of applying a mirror.
     restore: bool,
@@ -70,7 +70,7 @@ fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args, Strin
         restore: false,
     };
     // The first flag of the mirror pipeline this run was given, spelled as the user typed it. A
-    // restore sets none of them, so the two can never be in one run (SPEC.md CLI).
+    // restore sets none of them, so the two can never be in one run (docs/spec/cli.md).
     let mut pipeline: Option<String> = None;
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
@@ -154,7 +154,7 @@ fn note_pipeline(slot: &mut Option<String>, flag: &str) {
 }
 
 /// The usage error a restore and a flag of the mirror pipeline make together. A restore replaces
-/// the source of the rewrite, so there is no mirror to look up, rank or plan with (SPEC.md CLI).
+/// the source of the rewrite, so there is no mirror to look up, rank or plan with (docs/spec/cli.md).
 fn restore_conflict(flag: &str) -> String {
     format!(
         "{flag} cannot be combined with --restore: a restore reads the newest backup and never \
@@ -177,7 +177,7 @@ fn version_requested(arg: &str) -> bool {
 }
 
 /// The one line `--version` prints. The version is the crate's own, so it cannot drift from
-/// `Cargo.toml` and needs no second place to be bumped (SPEC.md CLI). A constant, like `HELP`: the
+/// `Cargo.toml` and needs no second place to be bumped (docs/spec/cli.md). A constant, like `HELP`: the
 /// line is built at compile time, so there is nothing to allocate at the one place that prints it.
 const VERSION_LINE: &str = concat!("apt-scout ", env!("CARGO_PKG_VERSION"));
 
@@ -243,7 +243,7 @@ EXAMPLES
   sudo apt-scout                      detect country, write the best mirror
   sudo apt-scout --country DE --yes   no prompt";
 
-/// What this run does about writing, from its flags and its uid (SPEC.md CLI: the uid decides
+/// What this run does about writing, from its flags and its uid (docs/spec/cli.md: the uid decides
 /// whether the run writes). Every flag is an override, never a step in the workflow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -261,7 +261,7 @@ enum Mode {
 fn decide(restore: bool, list: bool, root: bool, yes: bool) -> Mode {
     if restore {
         // A restore never reaches the mirror pipeline, so `--list` cannot narrow it and the uid is
-        // the only thing that decides whether it writes (SPEC.md CLI).
+        // the only thing that decides whether it writes (docs/spec/cli.md).
         Mode::Restore {
             confirm: root && !yes,
         }
@@ -279,7 +279,7 @@ fn decide(restore: bool, list: bool, root: bool, yes: bool) -> Mode {
 fn sudo_command(args: &Args) -> String {
     // A restore's line is exactly this whatever else the run was given: the backup and the write
     // are the whole command, and a copied line that carried a shortened or widened run would be a
-    // different command than the one it repeats (SPEC.md CLI).
+    // different command than the one it repeats (docs/spec/cli.md).
     if args.restore {
         return "sudo apt-scout --restore".to_string();
     }
@@ -291,7 +291,7 @@ fn sudo_command(args: &Args) -> String {
         line.push_str(" --no-geo");
     }
     // A `sudo` line that dropped this one would run a different candidate set, so the flag that
-    // decided the set has to travel with it (SPEC.md CLI: the line repeats the flags of the run).
+    // decided the set has to travel with it (docs/spec/cli.md: the line repeats the flags of the run).
     if args.any {
         line.push_str(" --any");
     }
@@ -337,7 +337,7 @@ fn already_at_mirror(file: &sources::FileReport, selected_uri: &str) -> bool {
 /// is reported as success, and when nothing eligible exists at all the plan is refused.
 ///
 /// The skips it collects are read here and nowhere else: they name the refusal in the error, and
-/// `Sources` has already listed them per entry before probing (SPEC.md Apply), so the report repeats
+/// `Sources` has already listed them per entry before probing (docs/spec/apply.md), so the report repeats
 /// none of them.
 fn build_plan(
     root: &Path,
@@ -350,7 +350,7 @@ fn build_plan(
     let mut writes = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
     for file in &inventory.files {
-        // A file the inventory could not read is never inspected silently: SPEC.md Apply requires
+        // A file the inventory could not read is never inspected silently: docs/spec/apply.md requires
         // every skipped file to be reported with its reason.
         if let Some(issue) = &file.issue {
             skipped.push(format!("{}: {issue}", file.path.display()));
@@ -641,7 +641,7 @@ fn no_eligible_hint(list_source: &str) -> String {
 /// The last line a write prints, and the only command it names. That write was made by a root run
 /// started as `sudo apt-scout …`, which has exited by the time this line is read, so the reader is
 /// back in their own unprivileged shell: the command must carry its own `sudo`, or the one thing
-/// the run tells them to do next fails with permission denied (SPEC.md Output).
+/// the run tells them to do next fails with permission denied (docs/spec/output.md).
 fn next_step_hint() -> &'static str {
     "Next: run 'sudo apt update' to refresh the package lists."
 }
@@ -667,7 +667,7 @@ fn touched_line(touched: &apply::Touched) -> String {
 /// The closing block a finished mirror write prints: the `changed …` sentence and the next step, as
 /// the one string the write path hands to `println!`. Separated from that `println!` so a unit test
 /// can hold the line a write ends with as a whole and not the hint on its own: a test of the
-/// sentence alone cannot tell whether that line still carries it (SPEC.md Output).
+/// sentence alone cannot tell whether that line still carries it (docs/spec/output.md).
 ///
 /// It takes the touched list itself and not the per-file lines, so a sentence handed `wrote <path>`
 /// is not a mistake a caller can make: the write path and its test hand it the same list, and a
@@ -711,7 +711,7 @@ fn no_eligible_report(mode: Mode, list_source: &str) -> Vec<String> {
 /// going to write exits 1.
 fn no_eligible_uri(mode: Mode, args: &Args, list_source: &str) -> Result<u8, (u8, String)> {
     match mode {
-        // `--list` is read-only whatever the uid and exits 0 (SPEC.md Apply).
+        // `--list` is read-only whatever the uid and exits 0 (docs/spec/apply.md).
         Mode::List => Ok(0),
         Mode::Recommend => {
             println!(
@@ -743,7 +743,7 @@ fn no_fresh_mirror() -> (u8, String) {
 }
 
 /// The lines a run prints, assembled in section order as the facts arrive and printed once, so a
-/// slow probe phase cannot interleave with the report (SPEC.md CLI: the ranked table, the
+/// slow probe phase cannot interleave with the report (docs/spec/cli.md: the ranked table, the
 /// recommendation with its reason, and every rejected mirror with its reason).
 #[derive(Default)]
 struct Report(Vec<String>);
@@ -775,7 +775,7 @@ impl Report {
     }
 }
 
-/// The two forms the accent takes (SPEC.md Output). `#E95420` is Ubuntu's orange, and it is a 24-bit
+/// The two forms the accent takes (docs/spec/output.md). `#E95420` is Ubuntu's orange, and it is a 24-bit
 /// colour, so it has to be named in one of two ways: `TrueColor` when the terminal says it can render
 /// it, and `EightBit` otherwise. Naming the fallback rather than letting a terminal drop the sequence
 /// is what keeps the degrade honest — `38;2` is silently ignored or misdrawn by a term that does not
@@ -811,7 +811,7 @@ impl Accent {
     }
 }
 
-/// The inks the report uses: the whole vocabulary of SPEC.md Output, so no render site can invent
+/// The inks the report uses: the whole vocabulary of docs/spec/output.md, so no render site can invent
 /// another one. Display only — a decision, a comparison, an ordering, a path, a written byte and an
 /// exit code never read it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -825,7 +825,7 @@ enum Style {
     /// because the accent is the only ink whose exact bytes depend on the terminal.
     Accent(Accent),
     /// The same brand ink, bold: the identity line and every section heading. The weight is part of the
-    /// structure ink and not decoration (SPEC.md Output): in the 256-colour form the accent's `166`
+    /// structure ink and not decoration (docs/spec/output.md): in the 256-colour form the accent's `166`
     /// sits close to the semantic red, and bold is most terminals' bright variant, so the two stop
     /// looking alike next to each other. The spinner keeps plain weight, where no red sits beside it.
     AccentBold(Accent),
@@ -846,14 +846,14 @@ impl Style {
     }
 }
 
-/// SPEC.md Output: colour appears only when all three inputs agree — stdout is a terminal, `--no-color`
+/// docs/spec/output.md: colour appears only when all three inputs agree — stdout is a terminal, `--no-color`
 /// was not given, and `NO_COLOR` is unset. Pure, so a test proves every combination without owning a
 /// terminal.
 fn colour_enabled(stdout_is_terminal: bool, no_color_flag: bool, no_color_set: bool) -> bool {
     stdout_is_terminal && !no_color_flag && !no_color_set
 }
 
-/// The one environment read colour makes. `var_os`, because SPEC.md Output counts `NO_COLOR` as set
+/// The one environment read colour makes. `var_os`, because docs/spec/output.md counts `NO_COLOR` as set
 /// whatever its value is, the empty one included, and a non-UTF-8 value is still a value. It reaches
 /// no decision, no path, no written byte and no exit code. `accent_from_env` below is the second and
 /// last display-only read colour makes, and the same sentence constrains it.
@@ -861,7 +861,7 @@ fn no_color_from_env() -> bool {
     std::env::var_os("NO_COLOR").is_some()
 }
 
-/// The second, and last, environment read colour makes (SPEC.md Output): which form the accent takes.
+/// The second, and last, environment read colour makes (docs/spec/output.md): which form the accent takes.
 /// It is a capability report and not an input — it reaches no decision, no path, no written byte and
 /// no exit code, so two runs that differ only in `COLORTERM` print the same words, write the same
 /// bytes and exit with the same code, and only the accent's escape differs. A non-UTF-8 value names
@@ -874,7 +874,7 @@ fn accent_from_env() -> Accent {
     )
 }
 
-/// The rule, pure so a test proves both branches without a terminal (SPEC.md Output): `COLORTERM`
+/// The rule, pure so a test proves both branches without a terminal (docs/spec/output.md): `COLORTERM`
 /// reading `truecolor` or `24bit`, in any case, means the exact colour, and everything else — a bare
 /// `COLORTERM`, a `256`, a value from another program, and unset itself — means the 256-colour cube.
 fn accent_for(colourterm: Option<&str>) -> Accent {
@@ -920,7 +920,7 @@ impl Painter {
         }
     }
 
-    /// The accent ink at plain weight: the spinner's frame, and nothing else (SPEC.md Output).
+    /// The accent ink at plain weight: the spinner's frame, and nothing else (docs/spec/output.md).
     fn accent(&self, text: &str) -> String {
         paint(Style::Accent(self.accent), text, self.colour)
     }
@@ -961,7 +961,7 @@ trait Sink {
     fn rewrite(&mut self, line: &str);
 
     /// Erase the live line, leaving the cursor where it was: a warning that follows keeps its own line
-    /// (SPEC.md Output).
+    /// (docs/spec/output.md).
     fn clear(&mut self);
 
     /// Write the line that ends the progress and stays: it stops being transient.
@@ -977,7 +977,7 @@ struct StderrSink<W: Write> {
 
 impl StderrSink<io::Stderr> {
     /// The only constructor a run has, so the progress line cannot be pointed at standard output,
-    /// where it would land in the report a pipe or a log captures (SPEC.md Output).
+    /// where it would land in the report a pipe or a log captures (docs/spec/output.md).
     fn new() -> Self {
         StderrSink { err: io::stderr() }
     }
@@ -1009,7 +1009,7 @@ impl<W: Write> Sink for StderrSink<W> {
 }
 
 /// The line that ends the progress and stays: the counts the ranked title carries, and the time from
-/// the loading phase to the end of ranking, with one decimal place (SPEC.md Output). Pure.
+/// the loading phase to the end of ranking, with one decimal place (docs/spec/output.md). Pure.
 fn done_line(usable: usize, rejected: usize, elapsed: Duration) -> String {
     format!(
         "done — {usable} usable, {rejected} rejected in {:.1} s",
@@ -1018,7 +1018,7 @@ fn done_line(usable: usize, rejected: usize, elapsed: Duration) -> String {
 }
 
 /// One Braille cell of the animation, advanced one frame about every `SPIN_INTERVAL` for as long as a
-/// phase is active (SPEC.md Output). Ten cells, so the loop takes about a second to turn over.
+/// phase is active (docs/spec/output.md). Ten cells, so the loop takes about a second to turn over.
 const SPIN: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 /// About ten frames a second: fast enough to read as motion, cheap enough that a frame costs nothing
@@ -1026,14 +1026,14 @@ const SPIN: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧'
 const SPIN_INTERVAL: Duration = Duration::from_millis(100);
 
 /// The frame the animation shows once a phase has been active for `elapsed`. A pure function of the
-/// time, so the animation can be asserted without a clock, a thread or a terminal (SPEC.md Output).
+/// time, so the animation can be asserted without a clock, a thread or a terminal (docs/spec/output.md).
 fn spinner_frame(elapsed: Duration) -> char {
     let frame = (elapsed.as_millis() / SPIN_INTERVAL.as_millis()) as usize;
     SPIN[frame % SPIN.len()]
 }
 
 /// The one line the animation draws: the frame and the phase's own text, so the probing count rides
-/// inside the same frame instead of becoming a second line (SPEC.md Output). The frame is the accent
+/// inside the same frame instead of becoming a second line (docs/spec/output.md). The frame is the accent
 /// and the text beside it is not: the Braille cell is the one thing on the line that is the tool's
 /// own mark, and a coloured phase would be a second vocabulary for the words. Pure.
 fn spinner_line(elapsed: Duration, text: &str, ink: Painter) -> String {
@@ -1044,7 +1044,7 @@ fn spinner_line(elapsed: Duration, text: &str, ink: Painter) -> String {
 /// learns that the line it asked for is on the screen — a phase is visible the moment the run names
 /// it, not on the next frame — and that a line is gone before a warning takes one of its own.
 /// `Phase` is the run naming a phase and `Text` is the same phase's line changing under it: the frame
-/// is a pure function of the time **this** phase has been active (SPEC.md Output), so a phase starts
+/// is a pure function of the time **this** phase has been active (docs/spec/output.md), so a phase starts
 /// the clock and a count does not.
 enum Tick {
     Phase(String, mpsc::SyncSender<()>),
@@ -1054,7 +1054,7 @@ enum Tick {
 }
 
 /// What one wait on the animation's channel produced. Its own type so the loop below can be driven by
-/// a scripted wait in a test: no thread, no sleep and no terminal (SPEC.md Output).
+/// a scripted wait in a test: no thread, no sleep and no terminal (docs/spec/output.md).
 enum Wake {
     Message(Tick),
     Closed,
@@ -1067,7 +1067,7 @@ enum Wake {
 /// the phase did not; a `Hide` erases the line and acknowledges, `Stop` or a closed channel ends the
 /// loop, and a timeout is what advances the frame. So the frame moves with time and not with a change
 /// of count — the whole point of the ticker: a phase that runs for five seconds visibly moves — and a
-/// long run still opens every phase on the first cell (SPEC.md Output). A frame does nothing but
+/// long run still opens every phase on the first cell (docs/spec/output.md). A frame does nothing but
 /// draw, so no probe's timeout, measurement, rejection or join order changes because one was drawn.
 fn run_ticker<S: Sink>(sink: &mut S, ink: Painter, mut wait: impl FnMut(Duration) -> Wake) {
     let mut text: Option<String> = None;
@@ -1183,7 +1183,7 @@ impl Ticker {
     }
 
     /// Erase the line and wait until it is gone, so a warning that follows starts on a line of its own
-    /// and nothing the animation drew can overwrite it (SPEC.md Output).
+    /// and nothing the animation drew can overwrite it (docs/spec/output.md).
     fn hide(&self) {
         let (ack, acked) = mpsc::sync_channel(0);
         if self.tx.send(Tick::Hide(ack)).is_err() {
@@ -1213,14 +1213,14 @@ impl Drop for Ticker {
 /// The probing line: `probing 3 mirrors… 1/3`. `done` is how many probes the whole run has finished
 /// and `total` how many it has to probe, which `await_probes` reads from the probes themselves rather
 /// than from the joins. Both grow when the one widening adds candidates, so the line never runs
-/// backwards (SPEC.md Output). Pure, so the count can be asserted without a terminal.
+/// backwards (docs/spec/output.md). Pure, so the count can be asserted without a terminal.
 fn probing_line(done: usize, total: usize) -> String {
     let noun = if total == 1 { "mirror" } else { "mirrors" };
     format!("probing {total} {noun}… {done}/{total}")
 }
 
 /// The status line a run shows while it works: one line, on standard error, rewritten in place, and
-/// only when standard error is a terminal (SPEC.md Output). With no terminal there is no `Ticker` at
+/// only when standard error is a terminal (docs/spec/output.md). With no terminal there is no `Ticker` at
 /// all — nothing is started to draw a line — so a piped run takes the same code path and writes
 /// nothing: no line, no frame and no "still working" notice.
 struct Progress<S: Sink + Send + 'static> {
@@ -1276,7 +1276,7 @@ impl<S: Sink + Send + 'static> Progress<S> {
         }
     }
 
-    /// The four phases SPEC.md Output names, in the order a run reaches them.
+    /// The four phases docs/spec/output.md names, in the order a run reaches them.
     fn load(&mut self) {
         self.phase("loading the mirror list".to_string());
     }
@@ -1285,7 +1285,7 @@ impl<S: Sink + Send + 'static> Progress<S> {
         self.phase("verifying the reference".to_string());
     }
 
-    /// The candidates probed **so far** (SPEC.md Output). The first line of the run starts the probing
+    /// The candidates probed **so far** (docs/spec/output.md). The first line of the run starts the probing
     /// phase; every later one is the same phase counting higher.
     fn probe(&mut self, done: usize, total: usize) {
         let line = probing_line(done, total);
@@ -1310,7 +1310,7 @@ impl<S: Sink + Send + 'static> Progress<S> {
     }
 
     /// End the progress where no summary belongs: the line is erased and the animation stopped and
-    /// joined, so the report that prints next cannot have a frame written over it (SPEC.md Output). A
+    /// joined, so the report that prints next cannot have a frame written over it (docs/spec/output.md). A
     /// run that stops before ranking prints no `done` line, because there is no count to give.
     fn stop(&mut self) {
         self.clear();
@@ -1327,7 +1327,7 @@ impl<S: Sink + Send + 'static> Progress<S> {
 
     /// End the progress at the end of ranking: the animation is stopped first, so no frame may follow
     /// the summary or the report's first line, and the line becomes the one summary that stays
-    /// (SPEC.md Output).
+    /// (docs/spec/output.md).
     fn finish(&mut self, usable: usize, rejected: usize) {
         if !self.enabled() {
             return;
@@ -1346,7 +1346,7 @@ const PROBE_POLL: Duration = Duration::from_millis(50);
 /// Wait for every probe with the line counting the probes that have **finished**, and hand back the
 /// joins in candidate order. `handle.join()` blocks in candidate order, so a loop that joins first
 /// would count the joins: a slow first mirror would freeze the line while the other twenty-eight are
-/// already done, which is not "the candidates probed so far" (SPEC.md Output). Polling the probes
+/// already done, which is not "the candidates probed so far" (docs/spec/output.md). Polling the probes
 /// gives the animation a new count as each one lands, and the results still come back in candidate
 /// order, so nothing downstream depends on which probe answered first.
 fn await_probes<T, S: Sink + Send + 'static>(
@@ -1355,7 +1355,7 @@ fn await_probes<T, S: Sink + Send + 'static>(
 ) -> Vec<thread::Result<T>> {
     // `n/m` counts the candidates probed so far in the run, not in this batch: the one widening adds
     // to the same candidate set, so the second pass continues at `30/60` instead of restarting at
-    // `0/30` after the viewer already saw `30/30` (SPEC.md Output).
+    // `0/30` after the viewer already saw `30/30` (docs/spec/output.md).
     let batch = handles.len();
     let done_before = progress.probed;
     let total = done_before + batch;
@@ -1437,7 +1437,7 @@ fn origin_label(any: bool, country_known: bool, given: bool) -> &'static str {
 
 /// The country a recommendation names: the selected mirror's own, which `detail_of` recorded from the
 /// list. It is the mirror's and not the run's, because the two differ once a run is not narrowed to
-/// its own country (SPEC.md CLI); `unknown` covers a mirror whose probe recorded none.
+/// its own country (docs/spec/cli.md); `unknown` covers a mirror whose probe recorded none.
 fn recommendation_country<'a>(
     details: &'a std::collections::HashMap<String, Detail>,
     url: &str,
@@ -1446,7 +1446,7 @@ fn recommendation_country<'a>(
 }
 
 /// The run's identity: version, release and the country the run used, with the source of the
-/// country, because `--country` is an override and the line says which one won (SPEC.md CLI). It is
+/// country, because `--country` is an override and the line says which one won (docs/spec/cli.md). It is
 /// the accent, so the first line a run prints is the one that says whose tool this is.
 fn header_identity(
     version: &str,
@@ -1463,7 +1463,7 @@ fn header_identity(
 /// The facts about where the answer came from: the server's AS, the mirror list source and the
 /// freshness reference. The server's AS is proof that the AS comparison happened at all and not a
 /// fact a person choosing a mirror acts on, so the default line keeps `mirrors:` and `reference:` and
-/// the AS is `--verbose`'s (SPEC.md Output).
+/// the AS is `--verbose`'s (docs/spec/output.md).
 fn header_context(
     server_as: Option<&str>,
     list_source: &str,
@@ -1513,7 +1513,7 @@ fn as_note(rows: &[Row], reason: Option<&str>, verbose: bool) -> Option<String> 
 }
 
 /// `Ranked — 5 of 12 usable, 7 rejected`, with one clause per column that needs one underneath the
-/// title (SPEC.md Output): the column words are the only place a reader learns that `behind` is
+/// title (docs/spec/output.md): the column words are the only place a reader learns that `behind` is
 /// freshness and `latency` is the network. `verified`'s clause says what the three cell values mean
 /// without repeating the `yes`/`no`/`?` rule, which `--help` spells out.
 fn ranked_title(shown: usize, usable: usize, rejected: usize, ink: Painter) -> String {
@@ -1534,7 +1534,7 @@ struct Row<'a> {
     signature: &'a verify::SignatureStatus,
     /// `12929 same` when the run has the mirror's AS; the column exists when any row has one. The
     /// default report never fills it in, because the AS number and its match are proof that the
-    /// tie-break was auditable and not a fact a reader acts on (SPEC.md Output).
+    /// tie-break was auditable and not a fact a reader acts on (docs/spec/output.md).
     as_cell: Option<String>,
     /// The host this mirror redirected to, when it is not its own host (SPEC step 7).
     redirect_host: Option<&'a str>,
@@ -1631,7 +1631,7 @@ fn ranked_rows(rows: &[Row], ink: Painter) -> Vec<String> {
 /// `redir:<host>` for a redirect to another host, cut so one long name cannot wrap the table. The
 /// `-security` lag this cell used to carry is proof about a pocket that decides nothing, and
 /// `Detail` prints that pocket's date and lag in full, so the default report spends no column on it
-/// (SPEC.md Output). `None` when the row has no note, so the column can be omitted.
+/// (docs/spec/output.md). `None` when the row has no note, so the column can be omitted.
 fn note_cell(row: &Row) -> Option<String> {
     row.redirect_host
         .map(|host| format!("redir:{}", host_prefix(host, REDIR_HOST_MAX)))
@@ -1652,7 +1652,7 @@ fn host_prefix(host: &str, room: usize) -> String {
 
 /// What `--verbose` prints about one mirror: the country, the resolved address, the AS and its
 /// holder, both pocket dates with their lag and the redirect the probe saw. The default report shows
-/// only the redirect, cut, so this is where the rest of the proof lives (SPEC.md Output). The
+/// only the redirect, cut, so this is where the rest of the proof lives (docs/spec/output.md). The
 /// `-security` lag is computed once, here, so no two places can disagree about it.
 fn detail_of(reference_security: Option<i64>, country: &str, outcome: &probe::Outcome) -> Detail {
     let security_lag = match (reference_security, outcome.security_date) {
@@ -1706,13 +1706,13 @@ fn table_rows<'a>(
 }
 
 /// The recommendation and the facts behind it: host, country, speed, `behind`, `latency` and the
-/// signature status (SPEC.md CLI), in one line so nothing repeats the table, and in the table's own
+/// signature status (docs/spec/cli.md), in one line so nothing repeats the table, and in the table's own
 /// words for the two numbers. The chosen mirror's AS and its match are proof that the tie-break was
 /// auditable, not facts a reader acts on when choosing a mirror, so only a `--verbose` run names them
-/// (SPEC.md Output). The signature is the same split: the default line names the column and its cell
+/// (docs/spec/output.md). The signature is the same split: the default line names the column and its cell
 /// — `verified yes`, `verified no`, `verified ?` — and the reason a check that did not pass did not
 /// pass is `--verbose`'s, added after that cell, because it is the proof and not the decision
-/// (SPEC.md Output).
+/// (docs/spec/output.md).
 fn recommendation(
     best: &fresh::Probed,
     country: &str,
@@ -1731,7 +1731,7 @@ fn recommendation(
         "closest"
     };
     // The cell is the default line's whole signature fact and it stays in the verbose line too:
-    // `--verbose` adds to the default report instead of replacing any part of it (SPEC.md Output),
+    // `--verbose` adds to the default report instead of replacing any part of it (docs/spec/output.md),
     // so what it adds is the reason a check that did not pass did not pass, after the cell that says
     // it did not. The verbatim replacement `freshest verified` was a defect: it dropped the cell's
     // value and the punctuation that separates the facts.
@@ -1807,7 +1807,7 @@ fn rejection(error: &probe::ProbeError) -> Reject {
 }
 
 /// `Rejected — 7` and one line per class of reason, with the count of mirrors that failed that way
-/// and the hosts themselves (SPEC.md Output: the `Rejected` counts grouped by class; step 8: every
+/// and the hosts themselves (docs/spec/output.md: the `Rejected` counts grouped by class; step 8: every
 /// rejected mirror with the reason it was rejected). The count is the class's own, and it sits
 /// between the class and the hosts it counts, so "how many mirrors failed this way" is read instead
 /// of counted off a list. Sorted by reason, so two runs that saw the same answers print the same
@@ -1848,7 +1848,7 @@ fn rejected_detail(rejected: &[Rejected], ink: Painter) -> Vec<String> {
 }
 
 /// The `Rejected` section, or nothing at all: a run that rejected nobody prints no heading and no
-/// `0` count (SPEC.md Output). `Report::block` skips an empty section, so the caller needs no case.
+/// `0` count (docs/spec/output.md). `Report::block` skips an empty section, so the caller needs no case.
 fn rejected_lines(rejected: &[Rejected], verbose: bool, ink: Painter) -> Vec<String> {
     if rejected.is_empty() {
         return Vec::new();
@@ -1861,7 +1861,7 @@ fn rejected_lines(rejected: &[Rejected], verbose: bool, ink: Painter) -> Vec<Str
 }
 
 /// What `--verbose` prints about one mirror beyond the table: country, address, AS holder, both
-/// pocket dates and the signature status (SPEC.md CLI: per-mirror detail).
+/// pocket dates and the signature status (docs/spec/cli.md: per-mirror detail).
 struct Detail {
     country: String,
     security_date: Option<i64>,
@@ -1938,7 +1938,7 @@ fn utc_stamp(secs: i64) -> String {
 }
 
 /// The `Sources` section: every inspected file, and every stanza and URI a write would rewrite or
-/// skip, with the reason (SPEC.md Apply: report each inspected file and each skipped entry). One
+/// skip, with the reason (docs/spec/apply.md: report each inspected file and each skipped entry). One
 /// line per file and per URI, so the section is a list, not a paragraph. Paths are relative to the
 /// apt root named in the title, which keeps the list narrow and unambiguous.
 fn sources_section(root: &Path, inventory: &sources::Inventory, ink: Painter) -> Vec<String> {
@@ -1993,7 +1993,7 @@ fn sources_section(root: &Path, inventory: &sources::Inventory, ink: Painter) ->
 
 /// Why the write leaves an entry alone, in the shortest true form. A `-security` stanza says so in
 /// its own words, because the inventory's third-party wording would call an official Ubuntu host a
-/// stranger (SPEC.md Apply: a security suite is never rewritten).
+/// stranger (docs/spec/apply.md: a security suite is never rewritten).
 fn skip_reason(entry: &sources::Entry) -> String {
     let security = entry.suites.iter().any(|s| s.ends_with("-security"));
     let other = entry.suites.iter().any(|s| !s.ends_with("-security"));
@@ -2008,7 +2008,7 @@ fn skip_reason(entry: &sources::Entry) -> String {
 
 /// The change a write would make, per target: the old URI and the new one. URI pairs rather than
 /// file lines, because the one thing that changes is the URI, and a long `sources.list` diff buries
-/// it (SPEC.md Apply: the old URI and the new one, the files it will change).
+/// it (docs/spec/apply.md: the old URI and the new one, the files it will change).
 fn plan_changes(
     root: &Path,
     inventory: &sources::Inventory,
@@ -2058,7 +2058,7 @@ fn plan_changes(
 /// The body of the `Planned change` section for a plan that will be written: the URI pairs and the
 /// backup directory the write creates. `backup` is `None` for a `--list` run, which creates no backup
 /// directory. What the write leaves alone is not here: `Sources` already reported every skip, and the
-/// confirmation repeats none of them (SPEC.md CLI). Alternatives appear only when the run has some,
+/// confirmation repeats none of them (docs/spec/cli.md). Alternatives appear only when the run has some,
 /// and this run has none — extra mirrors as comments are a TUI option.
 fn planned_change_lines(
     root: &Path,
@@ -2080,7 +2080,7 @@ fn planned_change_lines(
 
 fn run() -> Result<u8, (u8, String)> {
     let args = parse_args().map_err(|e| (2, e))?;
-    // SPEC.md Output: colour is decided once, at startup, from the three inputs that all have to
+    // docs/spec/output.md: colour is decided once, at startup, from the three inputs that all have to
     // agree. Nothing below re-reads a terminal or an environment variable, so a report cannot be
     // half painted.
     let ink = Painter::new(
@@ -2091,13 +2091,13 @@ fn run() -> Result<u8, (u8, String)> {
         ),
         accent_from_env(),
     );
-    // The uid decides whether this run may write (SPEC.md CLI). `require_root` is the writer's own
+    // The uid decides whether this run may write (docs/spec/cli.md). `require_root` is the writer's own
     // check, so the decision and the writer can never disagree about what root is.
     let root = apply::require_root().is_ok();
     let mode = decide(args.restore, args.list, root, args.yes);
     // `--restore` replaces the source of the rewrite: the newest backup instead of the mirror
     // pipeline. It reaches no distribution, no geolocation and no network, so it branches here,
-    // before anything the mirror run would do (SPEC.md CLI).
+    // before anything the mirror run would do (docs/spec/cli.md).
     if let Mode::Restore { confirm } = mode {
         return run_restore(&args, ink, root, confirm);
     }
@@ -2161,7 +2161,7 @@ fn run() -> Result<u8, (u8, String)> {
     // What the header prints, and the name a widened run's note repeats.
     let country_label = country_name.unwrap_or("any");
 
-    // SPEC.md Output: progress is for a person watching the run work, so the sink is inert unless
+    // docs/spec/output.md: progress is for a person watching the run work, so the sink is inert unless
     // standard error is a terminal. The clock starts here, before the list loads, so the summary
     // spans the four phases it names.
     let mut progress = Progress::new(StderrSink::new(), io::stderr().is_terminal(), ink);
@@ -2238,7 +2238,7 @@ fn run() -> Result<u8, (u8, String)> {
         }
         // No phase after the list load ran, so there is no summary to print: the line is erased and the
         // animation joined, so the report that follows starts on its own line and nothing can draw
-        // over it (SPEC.md Output).
+        // over it (docs/spec/output.md).
         progress.stop();
         report.print();
         return no_eligible_uri(mode, &args, list_source);
@@ -2258,7 +2258,7 @@ fn run() -> Result<u8, (u8, String)> {
         }
         Err(e) => {
             // A warning keeps its own line: the live progress line is erased first, so the two never
-            // share one (SPEC.md Output).
+            // share one (docs/spec/output.md).
             progress.clear();
             eprintln!(
                 "warning: cannot read the reference release from {REFERENCE}: {e}. Using the newest mirror date as the baseline instead, so lag is relative to the best candidate."
@@ -2317,7 +2317,7 @@ fn run() -> Result<u8, (u8, String)> {
             Some("the server's AS is unknown, so no mirror can match it".to_string()),
         )
     } else {
-        // The AS lookup is not one of the four phases SPEC.md Output names, and it may print a note of
+        // The AS lookup is not one of the four phases docs/spec/output.md names, and it may print a note of
         // its own; the live line goes first so a note keeps its own line.
         progress.clear();
         resolve_mirror_asns(
@@ -2386,7 +2386,7 @@ fn run() -> Result<u8, (u8, String)> {
             reference.as_ref(),
             args.verbose,
         )];
-        // SPEC.md Output: the reason a run widened is one line directly under the header and before
+        // docs/spec/output.md: the reason a run widened is one line directly under the header and before
         // the table. It belongs to this block, not the ranked one, so the no-fresh-mirror return
         // prints it too.
         header.extend(set_note(
@@ -2406,7 +2406,7 @@ fn run() -> Result<u8, (u8, String)> {
     // column, so it has no gap to explain.
     ranked_lines.extend(as_note(&rows, as_error.as_deref(), args.verbose));
     report.block(ranked_lines);
-    // SPEC.md Output: the status line ends with the ranking it was counting, and becomes the one line
+    // docs/spec/output.md: the status line ends with the ranking it was counting, and becomes the one line
     // that stays. Everything below only assembles what the report will say, so a failure there cannot
     // glue its message onto a live line.
     progress.finish(ranked.len(), rejected.len());
@@ -2419,7 +2419,7 @@ fn run() -> Result<u8, (u8, String)> {
         return Err(no_fresh_mirror());
     };
     // The AS cell is only asked for in a `--verbose` run: the default recommendation names no AS, so
-    // the map lookup that would fill it in is not even made (SPEC.md Output).
+    // the map lookup that would fill it in is not even made (docs/spec/output.md).
     let best_cell = args
         .verbose
         .then(|| as_cell(&mirror_asn, server_asn.as_deref(), &best.url))
@@ -2489,7 +2489,7 @@ fn run() -> Result<u8, (u8, String)> {
                 )),
             },
             // A refused plan names the entries it refused, so there is nothing left to list; a
-            // `--list` run reports it and still exits 0 (SPEC.md CLI table).
+            // `--list` run reports it and still exits 0 (docs/spec/cli.md table).
             Err((code, why)) => match mode {
                 Mode::List => planned.push(format!("  a write would be refused: {why}")),
                 _ => return Err((code, why)),
@@ -2569,7 +2569,7 @@ fn run() -> Result<u8, (u8, String)> {
 /// carries and the writer's own validation of it.
 fn run_restore(args: &Args, ink: Painter, root: bool, ask: bool) -> Result<u8, (u8, String)> {
     if !root {
-        // SPEC.md CLI: a non-root restore prints the one line and exits 3 before the backup is
+        // docs/spec/cli.md: a non-root restore prints the one line and exits 3 before the backup is
         // opened. Nothing below this point has read a byte of it.
         println!("{}", sudo_command(args));
         return Ok(3);
@@ -2621,7 +2621,7 @@ fn run_restore(args: &Args, ink: Painter, root: bool, ask: bool) -> Result<u8, (
 
 /// The whole block a finished restore prints: the `Restore` heading, then the lines that name the
 /// backup. Assembled here rather than at the call site so the one accent site a run's own report
-/// never reaches can be painted by a test, in the form `SPEC.md` Output gives it. `restored` is read
+/// never reaches can be painted by a test, in the form docs/spec/output.md gives it. `restored` is read
 /// from the plan that was written, so the block names the backup that was actually put back.
 fn restore_report(
     ink: Painter,
@@ -2722,7 +2722,7 @@ fn restore_lines(
     lines
 }
 
-/// `dpkg --print-architecture`; only amd64 and i386 have mirror choice (SPEC.md Scope). The path is
+/// `dpkg --print-architecture`; only amd64 and i386 have mirror choice (docs/spec/platform.md). The path is
 /// fixed rather than resolved through `PATH`, because this run reaches the write and SPEC.md's
 /// Privilege boundary forbids a write-path command resolved from the environment.
 const DPKG: &str = "/usr/bin/dpkg";
@@ -2757,7 +2757,7 @@ fn signature_cell(status: &verify::SignatureStatus) -> &'static str {
     }
 }
 
-/// The `verified` column in its ink: `yes` green, `no` and `?` yellow (SPEC.md Output). The cell
+/// The `verified` column in its ink: `yes` green, `no` and `?` yellow (docs/spec/output.md). The cell
 /// names itself; the ink repeats it for a reader who scans the column, and it never paints `?` the
 /// colour of a pass.
 fn signature_cell_painted(status: &verify::SignatureStatus, ink: Painter) -> String {
@@ -2773,7 +2773,7 @@ fn signature_cell_painted(status: &verify::SignatureStatus, ink: Painter) -> Str
 /// Why a check that is not a pass is not one, in the one wording both places that need it read: the
 /// `--verbose` recommendation appends it after the table's cell, and [`signature_words`] wraps it for
 /// the `Detail` panel. `Verified` has no reason: `verified yes` is the whole of what `gpgv` reported,
-/// so `--verbose` adds nothing there and the default line stands unchanged (SPEC.md Output).
+/// so `--verbose` adds nothing there and the default line stands unchanged (docs/spec/output.md).
 fn signature_reason(status: &verify::SignatureStatus) -> Option<&'static str> {
     match status {
         verify::SignatureStatus::Verified(_) => None,
@@ -3238,7 +3238,7 @@ fn mirror_roots<'a>(
 /// entry entered it. An entry that fails candidate validation is left out **and said so**, on the same
 /// channel as the fallback warning, rather than silently trusted (SPEC: Apply). Returned as text, so
 /// the caller decides when the line lands: it may have a live progress line to erase first
-/// (SPEC.md Output).
+/// (docs/spec/output.md).
 fn rejected_note(list: &str, rejected: &[String]) -> Option<String> {
     if rejected.is_empty() {
         return None;
@@ -3254,7 +3254,7 @@ fn rejected_note(list: &str, rejected: &[String]) -> Option<String> {
 /// own. Extracted from `run()` so the order is pinned by a test rather than by reading it: the line
 /// goes up **before** the work (the load is the longest silent stretch of a run — Launchpad up to
 /// 10 s, then `mirrors.ubuntu.com` up to another 10 s) and is erased after it, so a warning or an
-/// error that follows never lands on top of a live line (SPEC.md Output).
+/// error that follows never lands on top of a live line (docs/spec/output.md).
 fn load_with_progress<S: Sink + Send + 'static>(
     net: &dyn Fetch,
     country: Option<Country<'_>>,
@@ -3289,7 +3289,7 @@ fn load_with_progress<S: Sink + Send + 'static>(
 ///
 /// The lines this load has to tell the user are pushed onto `notes` instead of written here, because
 /// the caller owns a live progress line that has to be erased before the first of them lands
-/// (SPEC.md Output). A note is produced whether the load succeeds or not, so the caller prints them
+/// (docs/spec/output.md). A note is produced whether the load succeeds or not, so the caller prints them
 /// before it handles the result.
 ///
 /// Contract for `roots`: every mirror in the returned `Vec<Mirror>` has its `(host, path)` in it.
@@ -3525,7 +3525,7 @@ mod tests {
     }
 
     /// `--no-geo` has nothing but `--country` or `--any` to tell it where the server is, so the usage
-    /// error names both and either satisfies it (SPEC.md CLI: `--any` needs no country at all).
+    /// error names both and either satisfies it (docs/spec/cli.md: `--any` needs no country at all).
     #[test]
     fn no_geo_needs_a_country_or_any() {
         let args = parse_args_from(["--no-geo"].into_iter().map(str::to_string)).unwrap();
@@ -4145,7 +4145,7 @@ mod tests {
     /// The phase goes up **before** the work it names. The list load is up to 20 s of silence — 10 s of
     /// Launchpad, then 10 s of `mirrors.ubuntu.com` — so a line printed after it returns is the one
     /// phase a person never sees happen, which is the complaint the progress line exists to answer
-    /// (SPEC.md Output).
+    /// (docs/spec/output.md).
     #[test]
     fn the_list_phase_is_shown_before_the_list_is_loaded() {
         let trace = Trace::default();
@@ -4957,7 +4957,7 @@ mod tests {
 
     /// The recommendation names the **mirror's** country, not the run's: the two are the same value
     /// only while every run is narrowed to its own country, so a widened or `--any` run would
-    /// otherwise report a country the selected mirror is not in (SPEC.md CLI).
+    /// otherwise report a country the selected mirror is not in (docs/spec/cli.md).
     #[test]
     fn the_recommendation_names_the_mirrors_country() {
         let best = probed(MIRROR, verify::SignatureStatus::verified_for_test());
@@ -5041,7 +5041,7 @@ mod tests {
 
     #[test]
     fn the_uid_and_the_flags_decide_whether_the_run_writes() {
-        // `--list` never writes, whatever the uid, and exits 0 (SPEC.md CLI table).
+        // `--list` never writes, whatever the uid, and exits 0 (docs/spec/cli.md table).
         assert_eq!(decide(false, true, false, false), Mode::List);
         assert_eq!(decide(false, true, true, false), Mode::List);
         assert_eq!(decide(false, true, true, true), Mode::List);
@@ -5348,8 +5348,8 @@ mod tests {
     }
 
     /// Every entry the plan refuses is still reported to the user — in the `Sources` section, before
-    /// probing, which is where SPEC.md Apply puts it — and the confirmation that follows repeats none
-    /// of them (SPEC.md CLI). The two reports read the same apt files, so a skip cannot fall between
+    /// probing, which is where docs/spec/apply.md puts it — and the confirmation that follows repeats none
+    /// of them (docs/spec/cli.md). The two reports read the same apt files, so a skip cannot fall between
     /// them.
     #[test]
     fn a_skip_is_named_in_sources_and_never_again_in_the_confirmation() {
@@ -5358,7 +5358,7 @@ mod tests {
             "sources.list",
             "deb http://archive.ubuntu.com/ubuntu noble main\ndeb https://security.ubuntu.com/ubuntu noble-security main\n",
         );
-        // Not valid UTF-8: the inventory reports the file instead of dropping it (SPEC.md Apply:
+        // Not valid UTF-8: the inventory reports the file instead of dropping it (docs/spec/apply.md:
         // every skipped file with its reason).
         std::fs::write(apt.0.join("sources.list.d/bad.list"), [0xff, 0xfe]).expect("fixture file");
         let hosts = listed(&["archive.ubuntu.com", "mirror.example"]);
@@ -5395,7 +5395,7 @@ mod tests {
 
     /// The confirmation names the files, the URI pairs and the backup directory it will create — and
     /// nothing it would only repeat. `Sources` already listed every skip, alternatives appear only
-    /// when the run has some, and this run has none (SPEC.md CLI).
+    /// when the run has some, and this run has none (docs/spec/cli.md).
     #[test]
     fn the_planned_change_names_the_uri_pairs_and_the_backup_and_no_skip() {
         let apt = TempApt::new("planned");
@@ -5529,7 +5529,7 @@ mod tests {
     #[test]
     fn the_run_level_exit_codes_are_pinned() {
         let args = parse_args_from(["--country", "LT"].into_iter().map(str::to_string)).unwrap();
-        // No eligible URI, `--list`: read-only whatever the uid (SPEC.md CLI table).
+        // No eligible URI, `--list`: read-only whatever the uid (docs/spec/cli.md table).
         assert_eq!(no_eligible_uri(Mode::List, &args, "Launchpad"), Ok(0));
         // No eligible URI, non-root: the `sudo` line and exit 3.
         assert_eq!(no_eligible_uri(Mode::Recommend, &args, "Launchpad"), Ok(3));
@@ -5571,7 +5571,7 @@ mod tests {
     /// `InRelease` answered 404 because the release moved to `old-releases.ubuntu.com`, which has no
     /// mirrors. A reader who met 4 for the second case and looked it up learned the first, so the
     /// one line this block gives a code has to carry both meanings, in the words that tell them
-    /// apart (SPEC.md Non-functional, Pipeline 8).
+    /// apart (docs/spec/non-functional.md, Pipeline 8).
     #[test]
     fn the_help_line_for_exit_code_four_names_both_meanings() {
         let line = HELP
@@ -6292,7 +6292,7 @@ mod tests {
     /// any" and no code path printed one: an alternative mirror is another **checked** mirror, written
     /// as a `# alternative:` comment, and a non-interactive run checks exactly one, so it has none to
     /// print — the promise belongs to the TUI and to no line of this report (GLOSSARY: Alternative
-    /// mirror; SPEC.md Output). The confirmation's own test is what proves the report prints none.
+    /// mirror; docs/spec/output.md). The confirmation's own test is what proves the report prints none.
     #[test]
     fn the_help_promises_no_alternatives_the_report_never_prints() {
         assert!(
@@ -6303,7 +6303,7 @@ mod tests {
     }
 
     /// "N of M usable" counts what is shown against what survived, and the legend underneath states
-    /// one clause per column that needs one, in the columns' own words (SPEC.md Output): without it
+    /// one clause per column that needs one, in the columns' own words (docs/spec/output.md): without it
     /// `behind` has no baseline and `latency` could be read as freshness.
     #[test]
     fn the_ranked_title_counts_what_is_shown() {
@@ -6345,7 +6345,7 @@ mod tests {
     }
 
     /// Nothing was rejected, so there is no `Rejected — 0` heading: a section with nothing to say
-    /// prints nothing at all, no heading and no `0` count (SPEC.md Output).
+    /// prints nothing at all, no heading and no `0` count (docs/spec/output.md).
     #[test]
     fn a_report_with_no_rejection_prints_no_rejected_heading() {
         assert!(rejected_lines(&[], false, Painter::plain()).is_empty());
@@ -6358,16 +6358,16 @@ mod tests {
         assert_eq!(report.0, ["apt-scout 0.1.0 · Ubuntu 24.04 (noble)"]);
     }
 
-    /// The recommendation's reason carries every fact SPEC.md CLI asks for in it, in the table's own
+    /// The recommendation's reason carries every fact docs/spec/cli.md asks for in it, in the table's own
     /// words for the two numbers, and never a second spelling of the same fact — the signature
     /// included: the default line names the column and its cell, and the exact status is `--verbose`'s
-    /// (SPEC.md Output).
+    /// (docs/spec/output.md).
     #[test]
     fn the_recommendation_carries_country_behind_latency_and_signature() {
         let best = probed(MIRROR, verify::SignatureStatus::verified_for_test());
         // The default line: no AS, because the AS the tie-break used is proof of how the ranking was
         // audited, not a fact a person choosing a mirror acts on, and the signature in the table's
-        // own words (SPEC.md Output).
+        // own words (docs/spec/output.md).
         assert_eq!(
             recommendation(
                 &best,
@@ -6456,7 +6456,7 @@ mod tests {
         }
     }
 
-    /// `-v` adds to the default report instead of replacing any part of it (SPEC.md Output). The two
+    /// `-v` adds to the default report instead of replacing any part of it (docs/spec/output.md). The two
     /// renderings are compared to each other, never each to a copy of itself. A `--verbose` run
     /// printed `freshest verified` where the default printed `freshest, verified yes`, so the cell's
     /// value and the comma that separates the freshness word from it were replaced rather than added
@@ -6577,7 +6577,7 @@ mod tests {
         );
     }
 
-    /// Each class of reason carries its own count, which is the reading `SPEC.md` Output and the man
+    /// Each class of reason carries its own count, which is the reading docs/spec/output.md and the man
     /// page promise: "how many mirrors failed *this way*". The expectation is derived from this
     /// test's input — the labels spelled out here, the hosts it hands over and the number it counts
     /// off them, in the host order it saw them — so no rendered line is copied from a run, a count
@@ -6738,7 +6738,7 @@ mod tests {
     }
 
     /// The Sources section is the inventory, one line per file and per URI, with the reason a URI
-    /// is skipped (SPEC.md Apply). A host another country's Launchpad entry names is `rewrite`, a
+    /// is skipped (docs/spec/apply.md). A host another country's Launchpad entry names is `rewrite`, a
     /// listed host at a path outside the listed tree is `skip`, while the PPA and `-security` lines
     /// keep their own reasons.
     #[test]
@@ -6786,7 +6786,7 @@ mod tests {
 
     /// The header says which country won and where the answer came from; a run whose reference was
     /// unreachable says that instead of pretending it had one. The server's AS is `--verbose`'s, so
-    /// the default line keeps `mirrors:` and `reference:` and nothing else (SPEC.md Output).
+    /// the default line keeps `mirrors:` and `reference:` and nothing else (docs/spec/output.md).
     #[test]
     fn the_header_names_the_release_country_and_reference() {
         assert_eq!(
@@ -7081,7 +7081,7 @@ mod tests {
     }
 
     /// The default report is the decision, and this is the test that keeps it so: one assertion per
-    /// fact `SPEC.md` Output moved to `--verbose`, so a leak names itself instead of hiding in a
+    /// fact docs/spec/output.md moved to `--verbose`, so a leak names itself instead of hiding in a
     /// diff of the whole block. Each of these would fail on the report the previous release printed.
     /// The recommended mirror's own signature is **invalid** here on purpose: it is the run in which
     /// the default recommendation printed the exact status, so the assertion below has something to
@@ -7391,7 +7391,7 @@ mod tests {
 
     /// Every styled site in one report — the identity line, the four headings, the `verified` column,
     /// both diff signs, a rejection reason — built with whichever painter it is given, so a colour run
-    /// and a plain run can be compared line for line (SPEC.md Output). It is a `--verbose` report, so
+    /// and a plain run can be compared line for line (docs/spec/output.md). It is a `--verbose` report, so
     /// the styled `verified` cells and the `Detail` heading are both in it.
     fn painted_report(
         ink: Painter,
@@ -7479,7 +7479,7 @@ mod tests {
         out
     }
 
-    /// SPEC.md Output: colour appears only when the three inputs agree. One lone `false` is enough to
+    /// docs/spec/output.md: colour appears only when the three inputs agree. One lone `false` is enough to
     /// turn it off, and no pair of them turns it back on.
     #[test]
     fn colour_needs_all_three_conditions() {
@@ -7513,7 +7513,7 @@ mod tests {
     }
 
     /// The accent's two forms, each pinned as its own literal, and `accent_for` choosing between them
-    /// (SPEC.md Output). The two sides of the `assert_ne!` are two separately written expectations, so
+    /// (docs/spec/output.md). The two sides of the `assert_ne!` are two separately written expectations, so
     /// collapsing the branch — returning `TrueColor` for everything, or `EightBit` for everything —
     /// fails an `accent_for` assertion below instead of passing both.
     #[test]
@@ -7607,7 +7607,7 @@ mod tests {
         );
     }
 
-    /// The three ways colour is off (SPEC.md Output): stdout is not a terminal — a pipe, a file, or the
+    /// The three ways colour is off (docs/spec/output.md): stdout is not a terminal — a pipe, a file, or the
     /// container matrix, whose cases read captured output — `--no-color`, and `NO_COLOR` set to any
     /// value, the empty one included. What this does **not** cover is the accent choice itself: the
     /// TTY gate is exercised by the matrix, but which of the two accent forms is printed is pinned by
@@ -7641,7 +7641,7 @@ mod tests {
         );
     }
 
-    /// The same report painted: every other byte identical, and each SPEC.md Output site carries the
+    /// The same report painted: every other byte identical, and each docs/spec/output.md site carries the
     /// ink it names. Column width is part of the comparison, so painting a cell before padding it
     /// would fail here.
     #[test]
@@ -7658,7 +7658,7 @@ mod tests {
         let stripped: Vec<String> = coloured.iter().map(|line| strip_escapes(line)).collect();
         assert_eq!(stripped, plain);
 
-        // Site by site (SPEC.md Output): the accent on the identity line and every section heading,
+        // Site by site (docs/spec/output.md): the accent on the identity line and every section heading,
         // and in the bold form `SGR 1;38;5;166` — one sequence, because the weight is what separates
         // the structure ink from the semantic red; bold on the recommended host alone otherwise;
         // green `yes` and `+` lines; yellow `no` and `?`; red rejection reasons and `-` lines; dim
@@ -7699,7 +7699,7 @@ mod tests {
         // The recommended host keeps bold.
         assert!(any("\u{1b}[1mhttps://mirror.example/ubuntu/\u{1b}[0m"));
         // And neither accent weight reaches a semantic cell: a table cell, a diff line, a rejection
-        // reason and a dim column heading keep the ink SPEC.md Output gives them and gain nothing.
+        // reason and a dim column heading keep the ink docs/spec/output.md gives them and gain nothing.
         // Both forms are probed, because a cell painted in the bold accent does not contain the plain
         // accent's opening bytes.
         for cell in [
@@ -7731,7 +7731,7 @@ mod tests {
     }
 
     /// `--no-color` is a flag of its own and has no short form, so no one can bundle or guess it
-    /// (SPEC.md CLI: the one implemented flag without one).
+    /// (docs/spec/cli.md: the one implemented flag without one).
     #[test]
     fn no_color_parses_and_has_no_short_form() {
         let args =
@@ -7826,7 +7826,7 @@ mod tests {
     }
 
     /// A piped or logged stderr is silent: no line, no frame, no thread — nothing is started to draw
-    /// one, so the silence is structural rather than a branch inside the loop (SPEC.md Output).
+    /// one, so the silence is structural rather than a branch inside the loop (docs/spec/output.md).
     #[test]
     fn progress_writes_nothing_when_stderr_is_not_a_terminal() {
         let mut progress = Progress::new(RecordingSink::default(), false, Painter::plain());
@@ -7847,7 +7847,7 @@ mod tests {
     }
 
     /// At a terminal the run names each phase it is in and how far probing got, and it ends with the one
-    /// summary line: nothing transient survives into the report (SPEC.md Output).
+    /// summary line: nothing transient survives into the report (docs/spec/output.md).
     #[test]
     fn progress_names_each_phase_and_ends_with_the_summary() {
         let mut progress = Progress::new(RecordingSink::default(), true, Painter::plain());
@@ -7890,7 +7890,7 @@ mod tests {
         assert_eq!(probing_line(1, 3), "probing 3 mirrors… 1/3");
     }
 
-    /// "The candidates probed so far" (SPEC.md Output): the count comes from the probes that have
+    /// "The candidates probed so far" (docs/spec/output.md): the count comes from the probes that have
     /// finished, not from the joins, so it starts at the truth and moves while the slow ones run —
     /// with the first probe slow, a join-driven count would sit on `1/2` while `2/2` was the truth.
     #[test]
@@ -7925,7 +7925,7 @@ mod tests {
     }
 
     /// The one widening probes more candidates into the same set, so the line continues the count:
-    /// a viewer who saw `2/2` is never shown `0/1` next (SPEC.md Output: `n/m` is the candidates
+    /// a viewer who saw `2/2` is never shown `0/1` next (docs/spec/output.md: `n/m` is the candidates
     /// probed **so far** in the run).
     #[test]
     fn the_probe_count_continues_into_the_widening_pass() {
@@ -7997,7 +7997,7 @@ mod tests {
     }
 
     /// The frame is a pure function of the time a phase has been active: ten Braille cells, one every
-    /// `SPIN_INTERVAL`, and it starts over rather than sticking (SPEC.md Output).
+    /// `SPIN_INTERVAL`, and it starts over rather than sticking (docs/spec/output.md).
     #[test]
     fn the_spinner_frame_is_a_pure_function_of_time() {
         assert_eq!(SPIN, ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']);
@@ -8015,7 +8015,7 @@ mod tests {
     }
 
     /// The one line a frame carries: the cell, a space, then the phase's own text, so the probing count
-    /// rides inside the same frame instead of becoming a second line (SPEC.md Output).
+    /// rides inside the same frame instead of becoming a second line (docs/spec/output.md).
     #[test]
     fn the_frame_line_carries_the_probing_count() {
         assert_eq!(
@@ -8032,7 +8032,7 @@ mod tests {
         assert_eq!(line.lines().count(), 1);
     }
 
-    /// The spinner's frame is the accent and the phase's words beside it are not (SPEC.md Output):
+    /// The spinner's frame is the accent and the phase's words beside it are not (docs/spec/output.md):
     /// the Braille cell is painted, the text is left exactly as a plain run prints it, and the two
     /// accent forms differ on the same frame.
     #[test]
@@ -8136,7 +8136,7 @@ mod tests {
         assert_eq!(acked.try_recv(), Ok(()));
     }
 
-    /// The frame is a pure function of the time **this** phase has been active (SPEC.md Output), so a
+    /// The frame is a pure function of the time **this** phase has been active (docs/spec/output.md), so a
     /// phase starts on the first cell however long the run has been going, while a count change under
     /// the same phase leaves the clock where it was. Without the reset each phase's first frame would
     /// be a function of the whole run's elapsed time instead.
@@ -8186,7 +8186,7 @@ mod tests {
 
     /// A warning keeps its own line: `hide` erases the live line and acknowledges the erase, so nothing
     /// the animation drew can sit over the warning, and the next phase starts a fresh line
-    /// (SPEC.md Output).
+    /// (docs/spec/output.md).
     #[test]
     fn the_ticker_hides_the_line_before_a_warning_and_resumes() {
         let mut sink = RecordingSink::default();
@@ -8244,7 +8244,7 @@ mod tests {
     }
 
     /// The animation never outlives the summary: it is joined before the `done` line is written, so no
-    /// frame can land on the summary or on the report's first line (SPEC.md Output).
+    /// frame can land on the summary or on the report's first line (docs/spec/output.md).
     #[test]
     fn progress_stops_its_ticker_before_the_done_line() {
         let mut progress = Progress::new(RecordingSink::default(), true, Painter::plain());
@@ -8289,7 +8289,7 @@ mod tests {
 
     /// An early exit stops and joins the animation **before** it prints: the line is erased, no
     /// `done` line follows a run with no count, and nothing can draw a frame over the report that
-    /// prints next (SPEC.md Output). Hiding the line and printing while the thread still lived was the
+    /// prints next (docs/spec/output.md). Hiding the line and printing while the thread still lived was the
     /// earlier shape, and it left the report's first line at the mercy of a frame.
     #[test]
     fn an_early_stop_joins_the_animation_before_the_report() {
@@ -8330,7 +8330,7 @@ mod tests {
         assert!(sink.events.is_empty(), "{:?}", sink.events);
     }
 
-    /// The one line that survives, with one decimal place, as SPEC.md Output spells it.
+    /// The one line that survives, with one decimal place, as docs/spec/output.md spells it.
     #[test]
     fn the_summary_line_has_one_decimal_place() {
         assert_eq!(

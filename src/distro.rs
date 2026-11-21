@@ -1,4 +1,4 @@
-//! Detect the distribution from os-release (see SPEC.md, Pipeline step 1).
+//! Detect the distribution from os-release (see docs/spec/pipeline.md step 1).
 
 use std::fs;
 

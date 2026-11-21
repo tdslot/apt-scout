@@ -19,7 +19,7 @@ This file is the map: the requirement text lives in `docs/spec/`, one file per a
   A requirement uses those terms and no others.
 - `ROADMAP.md` is the execution ledger: task order, states, merged pull requests and verification
   evidence.
-  It is the only place that answers "is this built yet".
+  The `State` column below summarises it, and where the two disagree `ROADMAP.md` wins.
 
 ## Scope (v1)
 
@@ -39,18 +39,19 @@ Numbered requirements and their one-line statements are added per area.
 | --- | --- | --- | --- |
 | `CLI-` | `docs/spec/cli.md` | Command line, flags, exit codes | implemented, except `--refresh` and `--tui` |
 | `OUT-` | `docs/spec/output.md` | Default report, verbose report, progress | implemented |
-| `PIPE-` | `docs/spec/pipeline.md` | Shortlist, geo, probing, freshness, ranking | implemented, except the 24 h mirror-list cache |
+| `PIPE-` | `docs/spec/pipeline.md` | Shortlist, geo, probing, freshness, ranking | implemented, except the 24 h mirror-list cache and the compiled snapshot source |
 | `APPLY-` | `docs/spec/apply.md` | Plan, confirmation, backup, atomic write | implemented |
 | `RESTORE-` | `docs/spec/apply.md` | `--restore` | implemented |
 | `ERR-` | `docs/spec/errors.md` | Error classes and self-healing | implemented |
 | `LOC-` | `docs/spec/localization.md` | Locale selection and catalogs | not implemented |
 | `TEST-` | `docs/spec/testing.md` | Unit, CLI and container test contract | implemented |
-| `NFR-` | `docs/spec/non-functional.md` | Size, speed, dependencies, man page | implemented |
+| `NFR-` | `docs/spec/non-functional.md` | Size, speed, dependencies, man page | implemented for the shipped dependency set; `fluent-templates`, `ratatui` and `crossterm` are specified and absent |
 | `PLAT-` | `docs/spec/platform.md` | Distributions, codenames, architectures, Pop!_OS | implemented |
 | `TUI-` | `docs/spec/tui.md` | Terminal UI | not implemented |
 
-`State` is the author's reading of the code at the commit that wrote it. `ROADMAP.md` is the source
-of truth and records the pull request and evidence behind each line.
+Each `State` cell is one author's reading of the code at the commit that wrote it, and a row that claims
+`implemented` is a claim about shipped code.
+`ROADMAP.md` records the pull request and the evidence behind each line, and it is the source of truth.
 
 ## Privilege boundary and threat model
 

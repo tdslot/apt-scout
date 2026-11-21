@@ -2,7 +2,8 @@
 
 ## Purpose
 
-Durable design records for apt-scout: the normative spec chapters (`spec/`), the decision records (`decisions/`), and the privilege-boundary record.
+Durable design records for apt-scout: the normative spec chapters (`spec/`), the decision records
+(`decisions/`), and the privilege-boundary record.
 
 `threat-model.md` is the privilege-boundary record: what reaches the one process that writes as root, that the program never obtains privilege for itself, the S1–S17 security acceptance tests that gate D9, the twelve rulings in sections 7 and 8, the state of every `SPEC.md` delta those rulings require, and the tests and residual risks the record accepts.
 
@@ -28,7 +29,8 @@ Task order, task states, merged PRs, and verification evidence live in `ROADMAP.
 - One change: the entry in the decision record, the body text that depended on it, and Appendix A. Then apply the SPEC delta or name its new owner.
 - A second privileged entry point, a plan path, a setuid bit, and an internal `sudo` are ruled out; do not reintroduce them as an "option". A root-spawned second privileged binary is out for v1 as well (decision record 4.4): the size of the privileged code reopens the ruling, it does not authorize a second artifact (4.6).
 - The record's status line claims only what is true: twelve rulings decided (7.1–7.9 and G1–G3), `PENDING` items not yet in `SPEC.md`, and D6e open only while the independent security review has not returned PASS.
-- One sentence per line; no line outside a table exceeds 120 characters; tables only for enumerations.
+- One sentence per line; new text keeps every line outside a table under 120 characters; tables only for
+  enumerations. The long lines already in `threat-model.md` are D78's work, not a licence for new ones.
 - `spec/` is normative and says what apt-scout does; `decisions/` says why, one file per decision, and never restates a requirement; `threat-model.md` rules on the privilege boundary only.
 - English only.
 

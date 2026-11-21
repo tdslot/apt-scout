@@ -53,7 +53,7 @@ fn the_short_version_is_the_same_line() {
 
 /// The interaction rule is `--help`'s, unchanged: the argument that answers exits the process where
 /// the loop meets it, so the first of `--help` and `--version` a run was given wins, and a usage
-/// error before either still wins over both (SPEC.md CLI).
+/// error before either still wins over both (docs/spec/cli.md).
 #[test]
 fn the_first_of_help_and_version_wins_and_an_earlier_error_beats_both() {
     // Version first: the version, not the help text, whatever follows it.

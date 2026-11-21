@@ -32,18 +32,13 @@ Opens only with `--tui`, after probing finishes (a progress view is shown while 
   fresh mirror among the existing candidates.
   Keep the step count minimal, but never hide information the user needs.
   Base path (3 steps):
-  1.
-     Mirror table with the `Recommended` mirror pre-checked and a one-line summary of what will
+  1. Mirror table with the `Recommended` mirror pre-checked and a one-line summary of what will
      change; `Enter` continues.
-  2.
-     Confirmation dialog `Apply changes? [Yes]`: lists the files to change, old URI -> new URI,
-     alternatives, and the backup path; `Yes` focused.
-     As root, `Enter` validates the plan and writes it, so the dialog is the confirmation and
-     `--yes` is not needed.
-     As a non-root uid, `Enter` prints the one line `sudo apt-scout --tui` and exits 3; the TUI
-     writes nothing.
-  3.
-     Result screen: as root, `applied <mirror> to <files>`, the backup path the write created, how
+  2. Confirmation dialog `Apply changes? [Yes]`: lists the files to change, old URI -> new URI,
+     alternatives, and the backup path; `Yes` focused. As root, `Enter` validates the plan and
+     writes it, so the dialog is the confirmation and `--yes` is not needed. As a non-root uid,
+     `Enter` prints the one line `sudo apt-scout --tui` and exits 3; the TUI writes nothing.
+  3. Result screen: as root, `applied <mirror> to <files>`, the backup path the write created, how
      to undo (`--restore`), and the suggested `sudo apt update`; as a non-root uid,
      `nothing written, run sudo apt-scout --tui`, the files the write would change and the backup
      path it would create. `Enter` exits.

@@ -10,21 +10,17 @@
    `mirrors.ubuntu.com` country list.
    Sources are tried in order and the first valid answer wins; web sources use HTTPS except
    Canonical's endpoint noted below; AS comes from DNS.
-   1.
-      Country: Canonical `http://geoip.ubuntu.com/lookup` (XML, field `CountryCode`; the same
+   1. Country: Canonical `http://geoip.ubuntu.com/lookup` (XML, field `CountryCode`; the same
       endpoint the Ubuntu installer uses; plain HTTP, so treat the answer as untrusted and validate
-      it).
-      Fallbacks: `https://ifconfig.co/json` (`country_iso`, operator asks for at most 1 automated
-      request per minute), `https://ipinfo.io/json` (`country`),
+      it). Fallbacks: `https://ifconfig.co/json` (`country_iso`, operator asks for at most 1
+      automated request per minute), `https://ipinfo.io/json` (`country`),
       `https://www.cloudflare.com/cdn-cgi/trace` (`loc=<CC>`).
-   2.
-      AS of the server: Team Cymru DNS, TXT query for `<reversed-ip>.origin.asn.cymru.com` (IPv6:
+   2. AS of the server: Team Cymru DNS, TXT query for `<reversed-ip>.origin.asn.cymru.com` (IPv6:
       `<nibble-reversed-ip>.origin6.asn.cymru.com`; answer `AS | prefix | CC | registry | date`; the
-      `CC` is the registry country, not a location, so it is never used as the server country).
-      No web API and no HTTP: plain DNS through the system resolver.
-      Fallback in the current implementation: the already-fetched `ifconfig.co` or `ipinfo.io`
-      `asn`/`org` fields.
-      RIPEstat is planned, not yet implemented.
+      `CC` is the registry country, not a location, so it is never used as the server country). No
+      web API and no HTTP: plain DNS through the system resolver. Fallback in the current
+      implementation: the already-fetched `ifconfig.co` or `ipinfo.io` `asn`/`org` fields. RIPEstat
+      is planned, not yet implemented.
    - To query Cymru the server's public IP is needed: take it from whichever HTTP source
      answered (geoip, ifconfig.co, ipinfo, Cloudflare `ip=`).
      If none answered, AS is unknown.
@@ -58,29 +54,24 @@ Invalid country/unsupported architecture must fail before geolocation or any HTT
 Resolve this before invoking geo or mirror-list sources.
 
 3. **Load mirror list**, first success wins, source shown in output:
-   1.
-      Launchpad `https://launchpad.net/ubuntu/+archivemirrors` (HTML, ~316 KB, ~560 mirrors in ~80
-      countries).
-      Measured structure: a `<tr class="head">` row with `<th colspan="2">Country</th>` starts each
-      country; each mirror row has a `/ubuntu/+mirror/<id>` link, one `<a href>` per protocol
-      (`https`, `http`, `ftp`, `rsync`; only `http(s)` are used), a speed (`10 Gbps`), and a status
-      `<span class="distromirrorstatus{UP|UNKNOWN|...}">`.
-      Launchpad's own status (`UP` = up to date) is used as a hint, never as proof of freshness.
-      Measured: 82 country sections, 562 mirror rows, only `UP` and `UNKNOWN` statuses seen, speeds
-      from `128 Kbps` to `100 Gbps`, and 2 rows with only `ftp`/`rsync` links (skip them, they
-      cannot be probed over HTTP).
-      The parser must tolerate missing protocols and unknown statuses, and is tested against a saved
-      fixture of this page.
+   1. Launchpad `https://launchpad.net/ubuntu/+archivemirrors` (HTML, ~316 KB, ~560 mirrors in ~80
+      countries). Measured structure: a `<tr class="head">` row with `<th colspan="2">Country</th>`
+      starts each country; each mirror row has a `/ubuntu/+mirror/<id>` link, one `<a href>` per
+      protocol (`https`, `http`, `ftp`, `rsync`; only `http(s)` are used), a speed (`10 Gbps`), and
+      a status `<span class="distromirrorstatus{UP|UNKNOWN|...}">`. Launchpad's own status (`UP` =
+      up to date) is used as a hint, never as proof of freshness. Measured: 82 country sections, 562
+      mirror rows, only `UP` and `UNKNOWN` statuses seen, speeds from `128 Kbps` to `100 Gbps`, and
+      2 rows with only `ftp`/`rsync` links (skip them, they cannot be probed over HTTP). The parser
+      must tolerate missing protocols and unknown statuses, and is tested against a saved fixture of
+      this page.
    2. `http://mirrors.ubuntu.com/<CC>.txt` (plain text, one URL per line, already ordered by
       geographic proximity, ~6 URLs, no speed or status).
       Used when Launchpad fails or returns no mirror for the country.
       One country's file per run: `mirrors.txt` holds one line, `http://archive.ubuntu.com/ubuntu/`
       (measured 2026-11-13), so it is not a wider source, and no run fetches another country's file.
-   3.
-      Planned, not implemented (D28): disk cache `~/.cache/apt-scout/mirrors.json` (valid 24 h;
+   3. Planned, not implemented (D28): disk cache `~/.cache/apt-scout/mirrors.json` (valid 24 h;
       stale cache used only if all else fails, with a warning)
-   4.
-      Planned, not implemented: snapshot compiled into the binary (dated; warn when older than 90 days)
+   4. Planned, not implemented: snapshot compiled into the binary (dated; warn when older than 90 days)
 
    Each network source: one 10 s time budget per call covering redirects (no retries in v1: a
 failure falls through to the next source), response validated (non-empty, at least one well-formed

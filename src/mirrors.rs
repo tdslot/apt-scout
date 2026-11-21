@@ -1,4 +1,4 @@
-//! Mirror lists (see SPEC.md, Pipeline step 3): parsers are pure and tested on saved fixtures.
+//! Mirror lists (see docs/spec/pipeline.md step 3): parsers are pure and tested on saved fixtures.
 
 use std::fmt;
 
@@ -191,7 +191,7 @@ pub fn parse_text_list(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Why a candidate URL was rejected (SPEC.md, Apply: candidate hygiene).
+/// Why a candidate URL was rejected (docs/spec/apply.md: candidate hygiene).
 #[derive(Debug, PartialEq)]
 pub enum Reject {
     Scheme(String),

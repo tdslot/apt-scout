@@ -1,4 +1,4 @@
-//! Team Cymru IP-to-ASN lookup over plain DNS TXT (SPEC.md, Pipeline step 2 and 5). std has no TXT
+//! Team Cymru IP-to-ASN lookup over plain DNS TXT (docs/spec/pipeline.md step 2 and 5). std has no TXT
 //! API and an async resolver crate contradicts the no-async rule, so this is a small UDP client.
 //! The packet builder and the answer parser are pure and tested; only `lookup`, `lookup_name` and
 //! their one shared query loop touch the network.

@@ -1,4 +1,4 @@
-//! Freshness from InRelease `Date:` (SPEC.md, Pipeline steps 6-9). Pure functions, no network.
+//! Freshness from InRelease `Date:` (docs/spec/pipeline.md steps 6-9). Pure functions, no network.
 
 use std::fmt;
 

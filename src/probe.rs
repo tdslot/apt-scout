@@ -1,4 +1,4 @@
-//! Probe one mirror (SPEC.md, Pipeline step 7): freshness and OpenPGP status from the full
+//! Probe one mirror (docs/spec/pipeline.md step 7): freshness and OpenPGP status from the full
 //! `-updates` `InRelease`, the head of `-security` for the informational date, time to first byte,
 //! and throughput on a ranged sample. Uses `Fetch`, so it is testable.
 
