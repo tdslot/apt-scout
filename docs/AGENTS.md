@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Durable design records for apt-scout: the normative spec chapters (`spec/`), the decision records
+Durable design records for apt-scout: the normative spec chapters (`spec/`), the history archive (`history/`), the decision records
 (`decisions/`), and the privilege-boundary record.
 
 `threat-model.md` is the privilege-boundary record: what reaches the one process that writes as root, that the program never obtains privilege for itself, the S1–S17 security acceptance tests that gate D9, the twelve rulings in sections 7 and 8, the state of every `SPEC.md` or `spec/` delta those rulings require, and the tests and residual risks the record accepts.
@@ -52,3 +52,4 @@ Task order, task states, merged PRs, and verification evidence live in `ROADMAP.
   with a `MUST`/`SHOULD`/`MAY` obligation in the sentence that opens each one, `(planned)`, no history
   or rationale, and the layout rule this folder also applies.
 - `decisions/` holds one file per decision and an index of the ids recorded elsewhere; it has no `AGENTS.md` of its own and is covered by this file.
+- `history/` is the evidence archive: one file per milestone plus the change log, moved out of `ROADMAP.md` by D77. It is read-only history — a correction goes in a new entry, never into a past one — and it states no rules.
