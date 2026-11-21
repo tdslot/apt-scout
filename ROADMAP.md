@@ -158,7 +158,8 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   carry no evidence block, and their long single-line claims are D84.
 - [ ] D84. Trim the task claims that are still over 1000 characters in `ROADMAP.md` (19 of them, the longest
   about 3 000): each is one claim plus its rationale, and the rationale belongs in the archive or in an ADR, not
-  in the ledger line.- [ ] D78. Apply the style contract in `docs/AGENTS.md` to `docs/threat-model.md` (21 lines over 1000 characters). Rulings and content unchanged. [docs/AGENTS.md]
+  in the ledger line.
+- [ ] D78. Apply the style contract in `docs/AGENTS.md` to `docs/threat-model.md` (21 lines over 1000 characters). Rulings and content unchanged. [docs/AGENTS.md]
 - [ ] D79. Rule the localization question: `docs/spec/localization.md` requires `fluent-templates` 0.15.1 and a `locales/` tree that do not exist, while `AGENTS.md` states a one-dependency rule. Say whether localization is v1 and fix whichever document is wrong. [SPEC: docs/spec/localization.md]
 - [ ] D80. Rule the TUI and `--refresh` scope: both are specified and neither is implemented, and `--refresh` is an unknown option today. [SPEC: docs/spec/tui.md, docs/spec/cli.md]
 - [ ] D81. Rule the mirror-list cache (D28): specified with a 24 h validity and never implemented. [SPEC: docs/spec/pipeline.md]
