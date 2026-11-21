@@ -111,6 +111,8 @@ done
 ```
 
 A row whose statement was reworded in the chapter and not in `SPEC.md` prints `untraceable`.
+The loop proves each cell occurs verbatim somewhere in its chapter; it does not prove the cell is the
+requirement's first sentence, because a truncated prefix also occurs. That boundary is a review rule.
 Each requirement states its obligation with one of the three keywords on the line that names its id:
 
 ```

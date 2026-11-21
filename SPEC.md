@@ -43,7 +43,7 @@ and `partial:` with what is missing where it implements only part of it.
 | `APPLY-2` | `docs/spec/apply.md` | Source discovery and inventory MUST be read-only. | implemented |
 | `APPLY-3` | `docs/spec/apply.md` | The run MUST rewrite per URI token, not per file or line. | implemented |
 | `APPLY-4` | `docs/spec/apply.md` | For deb822 (`/etc/apt/sources.list.d/*.sources`) the run MUST read a stanza's `URIs:` field as one or more URIs, recognize continuation lines, repeated fields, comments and stanza boundaries, and rewrite only the matching tokens. | implemented |
-| `APPLY-5` | `docs/spec/apply.md` | For legacy sources (`/etc/apt/sources.list`, `*.list`) the run MUST recognize `deb`/`deb-src` lines, bracketed options such as `[arch=... | implemented |
+| `APPLY-5` | `docs/spec/apply.md` | For legacy sources (`/etc/apt/sources.list`, `*.list`) the run MUST recognize `deb`/`deb-src` lines, bracketed options such as `[arch=... signed-by=...]`, comments and URI tokens, and MUST rewrite only the URI token. | implemented |
 | `APPLY-6` | `docs/spec/apply.md` | `mirror://` and `mirror+file:` URIs (older installs) MUST be left unchanged and reported with an explanation. | implemented |
 | `APPLY-7` | `docs/spec/apply.md` | In the TUI the first checked mirror in rank order MUST become the active URI. | planned |
 | `APPLY-8` | `docs/spec/apply.md` | Before writing, the run MUST check that the target is a regular file (do not follow symlinks), MUST keep mode and owner, and MUST leave no half-written file. | implemented |
@@ -151,7 +151,7 @@ and `partial:` with what is missing where it implements only part of it.
 | `TUI-5` | `docs/spec/tui.md` | The user MUST be able to check several mirrors. | planned |
 | `TUI-6` | `docs/spec/tui.md` | The TUI MUST implement these keys (arrows are primary; `j/k` MAY be omitted). | planned |
 | `TUI-7` | `docs/spec/tui.md` | Zero-effort flow: defaults MUST be right, so pressing `Enter` through the flow MUST save the best fresh mirror among the existing candidates. | planned |
-| `TUI-8` | `docs/spec/tui.md` | Extra steps MUST appear only when the user must be informed or decide: selection has warnings (e.g. | planned |
+| `TUI-8` | `docs/spec/tui.md` | Extra steps MUST appear only when the user must be informed or decide: selection has warnings (e.g. only http, lag near `MAX_LAG`, different country), a custom mirror failed its probe, no fresh mirror found, the write failed (show the reason and the state of the backup, which is untouched). | planned |
 | `TUI-9` | `docs/spec/tui.md` | Every dialog MUST show its available keys in a footer bar. | planned |
 | `TUI-10` | `docs/spec/tui.md` | Applying from the TUI MUST use the same writer as the default run: as root, `Enter` on the confirmation validates the plan and writes it; as a non-root uid the TUI writes nothing and prints the `sudo apt-scout --tui` line. | planned |
 | `TUI-11` | `docs/spec/tui.md` | The TUI MUST restore the terminal state on exit, panic or Ctrl-C. | planned |
