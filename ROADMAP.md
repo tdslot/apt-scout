@@ -404,7 +404,8 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
 
 **Status: OPEN** — none of these blocks the next milestone; each is a decision or a cleanup the restructure deliberately left in place.
 
-- [ ] D76. Convert `docs/spec/` chapters to numbered requirements: `MUST`/`SHOULD`/`MAY`, one requirement per bullet, stable ids from each file’s prefix, `(planned)` markers, and one index row per id in `SPEC.md`, and the one-sentence-per-line rule is not met tree-wide yet. [SPEC: docs/spec/AGENTS.md]
+- [x] D76a. Give every requirement a stable id, a `(planned)` marker where the code does not implement it, and one row per id in the `SPEC.md` index. Done in this branch: 117 ids across ten chapters, 32 marked planned and 6 marked partial. [SPEC: docs/spec/AGENTS.md]
+- [ ] D76b. Give the requirements the normative voice: `MUST`/`SHOULD`/`MAY` per requirement, which means judging each of the 117 ids and rewording only where the current sentence does not already state an obligation. [SPEC: docs/spec/AGENTS.md]
 - [ ] D77. Slim this file: over 300 KB in more than 450 lines, over 100 of them longer than 1000 characters. Move the delivery history to an archive and keep the ledger readable. [No SPEC]
 - [ ] D78. Apply the style contract in `docs/AGENTS.md` to `docs/threat-model.md` (21 lines over 1000 characters). Rulings and content unchanged. [docs/AGENTS.md]
 - [ ] D79. Rule the localization question: `docs/spec/localization.md` requires `fluent-templates` 0.15.1 and a `locales/` tree that do not exist, while `AGENTS.md` states a one-dependency rule. Say whether localization is v1 and fix whichever document is wrong. [SPEC: docs/spec/localization.md]

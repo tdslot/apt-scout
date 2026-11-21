@@ -4,14 +4,14 @@ Principle: the program solves its own problems when safe, and otherwise says exa
 where, why, and what to do.
 Vague messages ("Unknown error", "Something went wrong", bare `No such file`) are forbidden.
 
-- Every error message states: **what** failed, **which path/URL/value**, **why** (the underlying
+- `ERR-1` Every error message states: **what** failed, **which path/URL/value**, **why** (the underlying
   OS or HTTP error, kept verbatim), and **how to fix** it.
   Example:
   `Cannot write /var/backups/apt-scout/: permission denied (os error 13). The path is not writable even as root, which means a read-only mount or an immutable attribute; nothing was written.`
-- Error types carry context at the failure point (path, URL, step name); never discard the source
+- `ERR-2` Error types carry context at the failure point (path, URL, step name); never discard the source
   error.
   No `unwrap()` on IO or parsing.
-- Self-heal automatically (and tell the user in one line what was done):
+- `ERR-3` Self-heal automatically (and tell the user in one line what was done):
   - `/var/backups/apt-scout` is created by the writer and verified after creation to be a
     directory, owned by root, mode 0700, and not a symlink; a pre-existing path that fails any of
     these is a hard abort with nothing written.
@@ -33,22 +33,22 @@ Vague messages ("Unknown error", "Something went wrong", bare `No such file`) ar
     Geolocation and AS failures are `note:` lines and the run continues without them (`SPEC.md` resilience).
   - Interrupted write: temp files are cleaned up on the next run; the original file is never
     left half-written.
-- There is no cache to heal, because v1 keeps none: no cache directory and no cache file exist, so
+- `ERR-4` There is no cache to heal, because v1 keeps none: no cache directory and no cache file exist, so
   the mirror list, the geo answers and the AS lookups are fetched afresh on every run and no stale
   copy is ever served.
-- Do not self-heal when it is unsafe: never guess which apt file to overwrite, never continue
+- `ERR-5` Do not self-heal when it is unsafe: never guess which apt file to overwrite, never continue
   after a failed backup, and self-healing never creates a file in `/etc/apt`.
   That last prohibition is about self-healing, not about planned writes: the only file apt-scout
   ever creates there is the planned `sources.list.d/system-security.sources` on Pop!_OS (see Apply),
   which comes from the validated plan and is opened with `create_new`.
   Stop and explain instead.
-- No silent data-source fallbacks: whenever a fallback is used, print which one and why.
+- `ERR-6` No silent data-source fallbacks: whenever a fallback is used, print which one and why.
   Message text falling back to English is not a data-source fallback and is not announced (see
   Localization).
-- Exit codes (see Non-functional) always accompany a message that explains the cause.
-- Tests cover the message content for the common failures (missing dir, permission denied,
+- `ERR-7` Exit codes (see Non-functional) always accompany a message that explains the cause.
+- `ERR-8` Tests cover the message content for the common failures (missing dir, permission denied,
   unreachable network, unknown distro).
-- Docker integration tests for source discovery/apply/restore must use disposable Ubuntu
+- `ERR-9` Docker integration tests for source discovery/apply/restore must use disposable Ubuntu
   containers and isolated `/etc/apt` fixtures.
   Never mount or mutate the developer host's `/etc/apt`; test rollback, manifest path validation,
   permissions, and byte-exact restore in the container.
