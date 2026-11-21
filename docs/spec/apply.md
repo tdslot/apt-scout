@@ -12,7 +12,7 @@
   It carries no freshness baseline of its own: the caller establishes one from the canonical
   reference when that reference has a verified `-updates` `Date` read inside the signed region,
   otherwise from the newest candidate in this run that carries one, after the clock-skew sanity
-  guard of step 8, and the writer holds the selected mirror's proof against it before the first
+  guard of `pipeline.md` step 8, and the writer holds the selected mirror's proof against it before the first
   byte, refusing outright when no verified baseline was supplied, because a writer that may not
   fetch cannot establish one.
   The write aborts, before its first byte, on any missing field, any mismatch with the file on disk,

@@ -29,7 +29,7 @@ use http::{Fetch, Net};
 const LAUNCHPAD: &str = "https://launchpad.net/ubuntu/+archivemirrors";
 const REFERENCE: &str = "http://archive.ubuntu.com/ubuntu";
 const TEXT_LIST: &str = "http://mirrors.ubuntu.com";
-/// Candidates probed per run (SPEC step 4).
+/// Candidates probed per run (`docs/spec/pipeline.md` step 4).
 const MAX_CANDIDATES: usize = 30;
 /// The `--top` default (docs/spec/cli.md: `--top <N>` shows N best mirrors, default 5).
 const DEFAULT_TOP: usize = 5;
@@ -706,8 +706,9 @@ fn no_eligible_report(mode: Mode, list_source: &str) -> Vec<String> {
     lines
 }
 
-/// No apt source file holds an official Ubuntu archive URI, so the run stops before probing. docs/spec/apply.md: `--list` exits 0, a non-root run prints the `sudo` line and exits 3, and a root run that was
-/// going to write exits 1.
+/// No apt source file holds an official Ubuntu archive URI, so the run stops before probing.
+/// (`docs/spec/apply.md`) `--list` exits 0, a non-root run prints the `sudo` line and
+/// exits 3, and a root run that was going to write exits 1.
 fn no_eligible_uri(mode: Mode, args: &Args, list_source: &str) -> Result<u8, (u8, String)> {
     match mode {
         // `--list` is read-only whatever the uid and exits 0 (docs/spec/apply.md).
@@ -731,7 +732,7 @@ fn no_eligible_uri(mode: Mode, args: &Args, list_source: &str) -> Result<u8, (u8
     }
 }
 
-/// Nothing survived the freshness and reachability checks (SPEC step 9): there is no mirror to
+/// Nothing survived the freshness and reachability checks (`docs/spec/pipeline.md` step 9): there is no mirror to
 /// recommend, and a run that cannot recommend writes nothing.
 fn no_fresh_mirror() -> (u8, String) {
     (
@@ -800,7 +801,9 @@ impl Accent {
 
     /// The same colour with `SGR 1` in front of it, so the lifted accent is **one** sequence and not
     /// two escapes: a terminal that maps bold to the bright variant pulls it away from the dark red
-    /// end `38;5;166` sits at, which is what keeps a heading from reading as a rejection (docs/spec/output.md). Written out rather than composed at runtime because `paint` owns the one format.
+    /// end `38;5;166` sits at, which is what keeps a heading from reading as a rejection
+    /// (`docs/spec/output.md`).
+    /// Written out rather than composed at runtime because `paint` owns the one format.
     fn bold_code(self) -> &'static str {
         match self {
             Accent::TrueColor => "1;38;2;233;84;32",
@@ -922,7 +925,9 @@ impl Painter {
         paint(Style::Accent(self.accent), text, self.colour)
     }
 
-    /// The accent ink bold: the identity line and every section heading, and nothing else (docs/spec/output.md). The two are the same colour and differ by weight, so the structure ink cannot be
+    /// The accent ink bold: the identity line and every section heading, and nothing else
+    /// (`docs/spec/output.md`).
+    /// The two are the same colour and differ by weight, so the structure ink cannot be
     /// mistaken for the red a rejection reason or a `-` diff line carries.
     fn accent_bold(&self, text: &str) -> String {
         paint(Style::AccentBold(self.accent), text, self.colour)
@@ -1226,7 +1231,7 @@ struct Progress<S: Sink + Send + 'static> {
     /// The animation, when there is one. `None` is a piped run.
     ticker: Option<Ticker>,
     started: Instant,
-    /// How many probes this run has finished. Pass 1 and the one widening of SPEC step 4 both count
+    /// How many probes this run has finished. Pass 1 and the one widening of `docs/spec/pipeline.md` step 4 both count
     /// into it, because both probe the run's one candidate set: a count that restarted would show a
     /// viewer `30/30` and then `0/30` for the same set.
     probed: usize,
@@ -1416,7 +1421,7 @@ fn probe_candidates<S: Sink + Send + 'static>(
 
 /// Where the country in the header came from, and whether it constrains anything. Under `--any` the
 /// country is display-only, so the header says `not a constraint` instead of reading like a filter
-/// that decided the candidate set (SPEC step 4); with no country at all it reads `any (--any)`.
+/// that decided the candidate set (`docs/spec/pipeline.md` step 4); with no country at all it reads `any (--any)`.
 fn origin_label(any: bool, country_known: bool, given: bool) -> &'static str {
     if any {
         match (country_known, given) {
@@ -1495,7 +1500,7 @@ fn titled(left: &str, right: &str, ink: Painter) -> String {
 }
 
 /// The one line under the table when no row has AS data: the run's own reason for it, because a
-/// column of `unknown` would read as an answer (SPEC step 9). Only `--verbose` has that column, so
+/// column of `unknown` would read as an answer (`docs/spec/pipeline.md` step 9). Only `--verbose` has that column, so
 /// only a `--verbose` run has the gap to explain: the default table never shows an AS, and a note
 /// apologising for a column it does not print would be a fact with nothing behind it.
 fn as_note(rows: &[Row], reason: Option<&str>, verbose: bool) -> Option<String> {
@@ -1532,7 +1537,7 @@ struct Row<'a> {
     /// default report never fills it in, because the AS number and its match are proof that the
     /// tie-break was auditable and not a fact a reader acts on (docs/spec/output.md).
     as_cell: Option<String>,
-    /// The host this mirror redirected to, when it is not its own host (SPEC step 7).
+    /// The host this mirror redirected to, when it is not its own host (`docs/spec/pipeline.md` step 7).
     redirect_host: Option<&'a str>,
 }
 
@@ -1553,12 +1558,12 @@ const REDIR_HOST_MAX: usize = 16;
 /// one, and it costs one column, so `REDIR_HOST_MAX` bounds the cell whether or not it was cut.
 const CUT_MARKER: char = '~';
 
-/// The ranked table (SPEC step 9): rank, mirror, behind, speed, latency, AS, verified, notes. The AS
+/// The ranked table (`docs/spec/pipeline.md` step 9): rank, mirror, behind, speed, latency, AS, verified, notes. The AS
 /// column is left out entirely when no row has AS data, so it can never read as "every mirror is
 /// unknown"; the notes column is left out when no shown row has a note, so a plain table gains no
 /// empty column.
 fn ranked_rows(rows: &[Row], ink: Painter) -> Vec<String> {
-    // Both facts SPEC step 9 asks for, in one cell: the ASN the lookup answered and whether it is
+    // Both facts `docs/spec/pipeline.md` step 9 asks for, in one cell: the ASN the lookup answered and whether it is
     // the server's. A fixed printed width would either cut a 6-digit ASN or waste columns on a
     // 4-digit one, so the column is as wide as the widest cell it holds.
     let as_width = rows
@@ -1666,7 +1671,8 @@ fn detail_of(reference_security: Option<i64>, country: &str, outcome: &probe::Ou
 /// The rows the table prints, in rank order and capped at `top`, each carrying the AS cell (a
 /// `--verbose` fact) and the redirect the `notes` column shows. The note fact and the facts `Detail`
 /// prints are read from the run's own probe results (`details`) instead of being recomputed here, so
-/// the table and `--verbose` describe the same run (SPEC steps 7 and 8). No decision reads `verbose`:
+/// the table and `--verbose` describe the same run (`docs/spec/pipeline.md` steps 7 and 8).
+/// No decision reads `verbose`:
 /// it decides only whether the AS cell is filled in at all.
 fn table_rows<'a>(
     ranked: &'a [fresh::Probed],
@@ -1747,7 +1753,7 @@ fn recommendation(
     )
 }
 
-/// Why a candidate is not in the ranked table (SPEC step 8), normalized so the section groups
+/// Why a candidate is not in the ranked table (`docs/spec/pipeline.md` step 8), normalized so the section groups
 /// mirrors instead of repeating one sentence per host. `--verbose` prints the full reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Reject {
@@ -1911,7 +1917,8 @@ fn detail_section(
     out
 }
 
-/// Unix seconds as `2026-11-12 08:29 UTC`: ASCII digits and one shape in every locale (docs/spec/localization.md), so a copied date stays a date.
+/// Unix seconds as `2026-11-12 08:29 UTC`: ASCII digits and one shape in every locale
+/// (`docs/spec/localization.md`), so a copied date stays a date.
 fn utc_stamp(secs: i64) -> String {
     let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400);
@@ -2129,7 +2136,7 @@ fn run() -> Result<u8, (u8, String)> {
         }
     }
     // `--any` needs no country at all: the country is display-only there, so a failed detection is
-    // not a reason to stop (SPEC step 2 and step 4).
+    // not a reason to stop (`docs/spec/pipeline.md` step 2 and step 4).
     let country = match (args.country.clone().or(geo.country.clone()), args.any) {
         (Some(found), _) => Some(found),
         (None, true) => None,
@@ -2181,7 +2188,7 @@ fn run() -> Result<u8, (u8, String)> {
     kept.retain(|m| seen.insert(candidate_key(&m.url)));
     // A narrowed set keeps list order and takes the first 30; a set that is not narrowed to one
     // country is capped by Launchpad's declared link speed, then URL, because the page names about
-    // 560 mirrors and probing them all is not a burst any run makes (SPEC step 4).
+    // 560 mirrors and probing them all is not a burst any run makes (`docs/spec/pipeline.md` step 4).
     let cands = if args.any {
         global_selection(&kept, MAX_CANDIDATES)
     } else {
@@ -2264,7 +2271,7 @@ fn run() -> Result<u8, (u8, String)> {
     let mut rejected: Vec<Rejected> = Vec::new();
     let mut results = probe_candidates(&cands, &codename, &arch, &mut progress, &mut rejected);
 
-    // SPEC step 4: one extra pass, and only from an empty set. `--any` already made the set every
+    // `docs/spec/pipeline.md` step 4: one extra pass, and only from an empty set. `--any` already made the set every
     // country, so an empty one means nothing usable anywhere. Everything below ranks one union and
     // never learns that a widening happened, except the `note:` line the header block carries.
     let widening = if args.any {
@@ -2281,7 +2288,7 @@ fn run() -> Result<u8, (u8, String)> {
         )
     };
 
-    // Read-only ranking baseline (SPEC step 8): the canonical archive; when it was unreachable, the
+    // Read-only ranking baseline (`docs/spec/pipeline.md` step 8): the canonical archive; when it was unreachable, the
     // newest candidate date, verified or not, because ranking must work without `gpgv`. Read over the
     // union, so a widened mirror is not called stale against pass 1's newest date.
     let baseline = ranking_baseline(reference.as_ref(), &results);
@@ -2295,7 +2302,8 @@ fn run() -> Result<u8, (u8, String)> {
             .filter_map(|o| o.verified_updates)
             .collect(),
     );
-    // AS of each candidate (SPEC step 5): informational, never a reason to fail; skipped with --no-geo.
+    // AS of each candidate (`docs/spec/pipeline.md` step 5): informational, never a reason to
+    // fail; skipped with --no-geo.
     // A failed lookup is kept as the reason the table has no AS column, instead of a silent `unknown`.
     let server_asn = geo.asn.clone();
     let (mirror_asn, as_error): (
@@ -2397,7 +2405,7 @@ fn run() -> Result<u8, (u8, String)> {
     let mut ranked_lines = vec![ranked_title(rows.len(), ranked.len(), rejected.len(), ink)];
     ranked_lines.extend(ranked_rows(&rows, ink));
     // A `--verbose` run with no AS data says why under the table, once, instead of printing a column
-    // of `unknown` that implies the lookup happened (SPEC step 9). The default table has no such
+    // of `unknown` that implies the lookup happened (`docs/spec/pipeline.md` step 9). The default table has no such
     // column, so it has no gap to explain.
     ranked_lines.extend(as_note(&rows, as_error.as_deref(), args.verbose));
     report.block(ranked_lines);
@@ -2419,7 +2427,8 @@ fn run() -> Result<u8, (u8, String)> {
         .verbose
         .then(|| as_cell(&mirror_asn, server_asn.as_deref(), &best.url))
         .flatten();
-    // The mirror's own country, not the run's: only the mirror's is a fact about the mirror (docs/spec/cli.md), and the two differ once a run is not narrowed to one country.
+    // The mirror's own country, not the run's: only the mirror's is a fact about the mirror
+    // (`docs/spec/cli.md`), and the two differ once a run is not narrowed to one country.
     let best_country = recommendation_country(&details, &best.url);
     report.block(vec![
         ink.accent_bold("Recommendation"),
@@ -2788,7 +2797,7 @@ fn signature_words(status: &verify::SignatureStatus) -> String {
 }
 
 /// The `as` cell value for one mirror: the ASN Team Cymru answered and whether it is the server's,
-/// together (`12929 same`), because SPEC step 9 asks for both facts and one cell can carry both.
+/// together (`12929 same`), because `docs/spec/pipeline.md` step 9 asks for both facts and one cell can carry both.
 /// `None` when the run has no AS answer for this mirror at all, which the table prints as
 /// `unknown`: never imply an AS preference the lookup did not support.
 fn as_cell(
@@ -2847,7 +2856,7 @@ fn mirror_host_port(url: &str) -> Option<(String, u16)> {
     Some((host.to_string(), port))
 }
 
-/// The AS Team Cymru names for one candidate, and (with `--verbose`) its holder name (SPEC step 5).
+/// The AS Team Cymru names for one candidate, and (with `--verbose`) its holder name (`docs/spec/pipeline.md` step 5).
 /// `name` is display detail only: grouping and ranking read `asn`, never `name`.
 struct ResolvedAs {
     ip: std::net::IpAddr,
@@ -3009,7 +3018,7 @@ fn attach_names(
     }
 }
 
-/// Read-only fallback baseline (SPEC step 8): the newest candidate date, but a date more than
+/// Read-only fallback baseline (`docs/spec/pipeline.md` step 8): the newest candidate date, but a date more than
 /// `MAX_LAG_SECS` ahead of the median is treated as bogus and ignored, so one mirror with a wrong
 /// clock cannot make every other mirror look stale. Verified or not: ranking must work without `gpgv`.
 fn display_baseline_fallback(mut dates: Vec<i64>) -> Option<i64> {
@@ -3044,14 +3053,14 @@ fn write_baseline(
 
 /// The country a run narrows to: the code the `mirrors.ubuntu.com` fallback needs and the name
 /// Launchpad groups its entries under. `None` only under `--any` with no country known, where the
-/// country is display-only and nothing needs narrowing (SPEC step 4).
+/// country is display-only and nothing needs narrowing (`docs/spec/pipeline.md` step 4).
 struct Country<'a> {
     cc: &'a str,
     name: &'a str,
 }
 
 /// What one mirror-list source produced. `found` is what this run probes; `rest` is the same loaded
-/// list un-narrowed, kept so the one widening of SPEC step 4 can add every other country without a
+/// list un-narrowed, kept so the one widening of `docs/spec/pipeline.md` step 4 can add every other country without a
 /// second fetch, and `None` when the list names one country and cannot widen. `roots` is the rewrite
 /// eligibility set (see `load_candidates` for its contract).
 #[derive(Debug)]
@@ -3064,7 +3073,7 @@ struct LoadedCandidates {
 
 /// `cap` mirrors out of a set that is **not** narrowed to one country, chosen by Launchpad's own
 /// declared link speed, descending, then by URL so the answer is deterministic. `None` sorts last:
-/// a mirror that declares no speed is not read as a fast one (SPEC step 4). This decides what is
+/// a mirror that declares no speed is not read as a fast one (`docs/spec/pipeline.md` step 4). This decides what is
 /// probed and never what ranks.
 fn global_selection(all: &[mirrors::Mirror], cap: usize) -> Vec<mirrors::Mirror> {
     let speed = |m: &mirrors::Mirror| mirrors::declared_speed_bps(m.speed.as_deref().unwrap_or(""));
@@ -3074,12 +3083,12 @@ fn global_selection(all: &[mirrors::Mirror], cap: usize) -> Vec<mirrors::Mirror>
 }
 
 /// The dedupe key of one candidate: a trailing slash and the case of the host do not make a second
-/// mirror, so the same entry can never be probed twice (SPEC step 4).
+/// mirror, so the same entry can never be probed twice (`docs/spec/pipeline.md` step 4).
 fn candidate_key(url: &str) -> String {
     url.trim_end_matches('/').to_ascii_lowercase()
 }
 
-/// What pass 1 found out about SPEC step 4's one widening: whether it was not asked for, not needed,
+/// What pass 1 found out about `docs/spec/pipeline.md` step 4's one widening: whether it was not asked for, not needed,
 /// done, or impossible with the list this run loaded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Widening {
@@ -3098,7 +3107,7 @@ enum Widening {
 /// reported by whoever ran the batch, so a batch answer is never ambiguous about a mirror.
 type ProbeBatch = Vec<(mirrors::Mirror, Result<probe::Outcome, probe::ProbeError>)>;
 
-/// The freshness baseline a read-only run ranks against (SPEC step 8): the canonical reference;
+/// The freshness baseline a read-only run ranks against (`docs/spec/pipeline.md` step 8): the canonical reference;
 /// when it was unreachable, the newest sane candidate date, verified or not, because ranking must
 /// work without `gpgv`. It is a function of the candidate set, so a widened run ranks the union
 /// against the union's newest date instead of pass 1's.
@@ -3136,7 +3145,7 @@ fn usable_mirrors(
         .count()
 }
 
-/// SPEC step 4's one automatic widening, and the only place it may happen: when the run's own
+/// `docs/spec/pipeline.md` step 4's one automatic widening, and the only place it may happen: when the run's own
 /// country yielded nothing usable, add the mirrors the **already loaded** list names for every other
 /// country, probe them in one extra pass and append them to the same results, so one pipeline ranks
 /// one union. `--any` never widens. A run that found one usable mirror in its own country never
@@ -3183,7 +3192,7 @@ fn widen_if_empty(
 
 /// The one line a widened run owes the user, in `as_note`'s voice, printed under the report header
 /// and before the table: the one thing this feature must not do is silently prefer a foreign mirror
-/// (SPEC step 4). `--any` never widens, and a run whose candidate set did not change says nothing.
+/// (`docs/spec/pipeline.md` step 4). `--any` never widens, and a run whose candidate set did not change says nothing.
 fn set_note(
     widening: &Widening,
     any: bool,
@@ -3268,17 +3277,17 @@ fn load_with_progress<S: Sink + Send + 'static>(
     loaded
 }
 
-/// SPEC step 3: Launchpad first, then `mirrors.ubuntu.com/<CC>.txt`. Returns the candidates, the
+/// `docs/spec/pipeline.md` step 3: Launchpad first, then `mirrors.ubuntu.com/<CC>.txt`. Returns the candidates, the
 /// name of the source that supplied them, the run's mirror roots and the un-narrowed list; every
 /// failed source is reported with its reason.
 ///
 /// `narrow` is false under `--any`, where the country stops constraining the candidate set: `found`
-/// is then every kept mirror the list names, whatever country it puts it in (SPEC step 4).
+/// is then every kept mirror the list names, whatever country it puts it in (`docs/spec/pipeline.md` step 4).
 ///
 /// A Launchpad page that parsed is a loaded list even when the country filter kept nothing: `found`
 /// is then empty and `rest` is every other country's entry, so a run whose own country the page does
-/// not name reaches the one widening of SPEC step 4 instead of failing with no list at all. The
-/// `<CC>.txt` fallback still has its turn first (SPEC step 3), and only a fallback that names
+/// not name reaches the one widening of `docs/spec/pipeline.md` step 4 instead of failing with no list at all. The
+/// `<CC>.txt` fallback still has its turn first (`docs/spec/pipeline.md` step 3), and only a fallback that names
 /// nothing of its own hands the page back.
 ///
 /// The lines this load has to tell the user are pushed onto `notes` instead of written here, because
@@ -3303,9 +3312,10 @@ fn load_candidates(
         |m: &mirrors::Mirror| mirrors::validate_url(&m.url).is_ok() && (!https_only || m.https);
     let mut failures = Vec::new();
     // A page that answered stays in hand even when the country filter kept nothing, because a country
-    // with no entry at all is exactly the case SPEC step 4's widening exists for and that page names
-    // every other country. It is held, not returned: the fallback below still has its turn (SPEC step
-    // 3 reads it when Launchpad returns no mirror for the country), and this page is what the run
+    // with no entry at all is exactly the case `docs/spec/pipeline.md` step 4's widening exists for
+    // and that page names every other country. It is held, not returned: the fallback below still
+    // has its turn (`docs/spec/pipeline.md` step 3 reads it when Launchpad returns no mirror
+    // for the country), and this page is what the run
     // falls back to when the fallback yields nothing.
     let mut answered_by_launchpad: Option<LoadedCandidates> = None;
     match net.get(LAUNCHPAD, http::MAX_PAGE, None) {
@@ -3362,7 +3372,7 @@ fn load_candidates(
     let notes_before_fallback = notes.len();
 
     // `mirrors.ubuntu.com` names one country per run and no run fetches another country's file, so
-    // without a country there is no file to ask for and nothing to widen to (SPEC step 4). The list
+    // without a country there is no file to ask for and nothing to widen to (`docs/spec/pipeline.md` step 4). The list
     // that is left cannot supply every country, and the run says so instead of pretending.
     let Some(country) = country else {
         failures.push(
@@ -4470,7 +4480,7 @@ mod tests {
 
     /// `--any` removes the country from the candidate set instead of replacing it: every country's
     /// kept entry is what the run probes, and the same list is still on hand for the one widening
-    /// (SPEC step 4).
+    /// (`docs/spec/pipeline.md` step 4).
     #[test]
     fn any_does_not_narrow_the_candidates_to_one_country() {
         let net = Canned(vec![(LAUNCHPAD, Ok(LAUNCHPAD_OK))]);
@@ -4529,7 +4539,7 @@ mod tests {
 
     /// Without a country the `mirrors.ubuntu.com` fallback has no file to ask for, so a `--any` run
     /// with no country and no Launchpad says so instead of reading one country's list as every
-    /// country's (SPEC step 4).
+    /// country's (`docs/spec/pipeline.md` step 4).
     #[test]
     fn any_without_a_country_says_the_fallback_needs_one() {
         let net = Canned(vec![(LAUNCHPAD, Err(503))]);
@@ -4543,7 +4553,7 @@ mod tests {
     }
 
     /// The no-preference rule: one usable mirror in the run's own country and the set is left exactly
-    /// as it was, so widening can never top up a working run (SPEC step 4).
+    /// as it was, so widening can never top up a working run (`docs/spec/pipeline.md` step 4).
     #[test]
     fn widening_is_not_triggered_when_one_usable_mirror_exists() {
         let mut results = vec![(
@@ -4685,7 +4695,7 @@ mod tests {
     }
 
     /// A run whose only list is the one-country `mirrors.ubuntu.com` file cannot widen, and it says
-    /// so instead of silently ranking one country as if it were every country (SPEC step 4).
+    /// so instead of silently ranking one country as if it were every country (`docs/spec/pipeline.md` step 4).
     #[test]
     fn a_run_whose_only_list_names_one_country_cannot_widen() {
         let mut results = vec![(
@@ -4748,7 +4758,7 @@ mod tests {
     /// The case the feature exists for: a country Launchpad has no section for. The page that
     /// answered is still a loaded list, the fallback that names one country has nothing, and the run
     /// widens from that page and ranks the other countries' mirrors — without a second fetch and
-    /// without the "no mirror list is available" exit (SPEC step 4).
+    /// without the "no mirror list is available" exit (`docs/spec/pipeline.md` step 4).
     #[test]
     fn a_country_the_page_does_not_name_widens_from_the_page_in_hand() {
         // The fixture's country sections do not include Iceland, and nothing is canned for
@@ -4864,7 +4874,7 @@ mod tests {
 
     /// A set that is not narrowed to one country is capped by Launchpad's declared link speed,
     /// descending, then by URL: the page names about 560 mirrors and probing them all is not a burst
-    /// any run makes (SPEC step 4). A mirror that declares no speed sorts last.
+    /// any run makes (`docs/spec/pipeline.md` step 4). A mirror that declares no speed sorts last.
     #[test]
     fn the_global_selection_is_capped_by_declared_speed_then_url() {
         let page = mirrors::parse_launchpad(&String::from_utf8_lossy(LAUNCHPAD_OK))
@@ -4912,7 +4922,7 @@ mod tests {
     }
 
     /// Under `--any` the country stays visible in the header and says it decides nothing: a run that
-    /// ignores the country must not read as one narrowed to it (SPEC step 4).
+    /// ignores the country must not read as one narrowed to it (`docs/spec/pipeline.md` step 4).
     #[test]
     fn any_is_not_a_constraint_on_the_header() {
         assert_eq!(
@@ -6073,7 +6083,7 @@ mod tests {
         b"-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nOrigin: Ubuntu\nDate: Thu, 12 Nov 2026  2:19:32 UTC\n";
 
     /// One mirror answering every pocket a probe asks for. `http::Canned` always ends where it
-    /// started, so a redirect (SPEC step 7) can only come from a fake that owns the `-updates`
+    /// started, so a redirect (`docs/spec/pipeline.md` step 7) can only come from a fake that owns the `-updates`
     /// final URL.
     struct Mirror {
         security: Option<&'static [u8]>,
@@ -6400,7 +6410,9 @@ mod tests {
 
     /// The default recommendation speaks the table's word for the signature and never the exact
     /// status: a mirror whose check could not run reads `verified ?` and one whose signature was
-    /// invalid reads `verified no`, while the phrases that say *why* stay `--verbose`'s (docs/spec/output.md). Without this the default line printed the same `unverified (…)` text `Detail` does.
+    /// invalid reads `verified no`, while the phrases that say *why* stay `--verbose`'s
+    /// (`docs/spec/output.md`).
+    /// Without this the default line printed the same `unverified (…)` text `Detail` does.
     #[test]
     fn the_default_recommendation_says_the_tables_word_never_the_proof() {
         let unchecked = &verify::SignatureStatus::Unavailable("no gpgv in this image".into());

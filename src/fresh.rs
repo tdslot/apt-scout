@@ -90,7 +90,7 @@ pub fn parse_date(value: &str) -> Result<i64, DateError> {
 
 /// A `Date` parsed from inside an `InRelease`'s cleartext-signed region.
 /// The field is private and `release_date` is the only function that builds one, so holding a
-/// `SignedDate` means the strict parse accepted this body's armour (SPEC step 8). It authorizes
+/// `SignedDate` means the strict parse accepted this body's armour (`docs/spec/pipeline.md` step 8). It authorizes
 /// nothing on its own: the freshness trust boundary is `verify::VerifiedDate`, and no function here
 /// can turn a `SignedDate` into one. Verification reads the region again, from the bytes `gpgv`
 /// accepted, and only then is there a proof.
@@ -103,7 +103,7 @@ impl SignedDate {
     }
 }
 
-/// Extract the `Date:` header from the cleartext-signed region only (SPEC step 8): anything but
+/// Extract the `Date:` header from the cleartext-signed region only (`docs/spec/pipeline.md` step 8): anything but
 /// whitespace-only lines before the armour is refused, because `gpgv` hashes nothing there.
 ///
 /// It hands out a `SignedDate`, a parse result and not a proof. The trust boundary is
@@ -138,7 +138,7 @@ pub fn release_date(text: &str) -> Result<SignedDate, DateError> {
 }
 
 /// Extract the `Date:` header of an InRelease, scanning from the first line (today's tolerance).
-/// Read-only ranking, lag and display use this; on its own it authorizes nothing (SPEC step 8).
+/// Read-only ranking, lag and display use this; on its own it authorizes nothing (`docs/spec/pipeline.md` step 8).
 pub fn release_date_tolerant(text: &str) -> Result<i64, DateError> {
     for line in text.lines() {
         if let Some(v) = line.strip_prefix("Date:") {
@@ -161,7 +161,7 @@ pub fn is_stale(lag_secs: i64) -> bool {
     lag_secs > MAX_LAG_SECS
 }
 
-/// What the ranker needs to know about a probed mirror (SPEC step 9).
+/// What the ranker needs to know about a probed mirror (`docs/spec/pipeline.md` step 9).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Probed {
     pub url: String,
@@ -177,7 +177,7 @@ pub struct Probed {
     pub throughput_bps: u64,
     pub latency_ms: u64,
     pub same_as: bool,
-    /// Verification result of this mirror's deciding `-updates` InRelease (SPEC step 8).
+    /// Verification result of this mirror's deciding `-updates` InRelease (`docs/spec/pipeline.md` step 8).
     pub signature: SignatureStatus,
 }
 

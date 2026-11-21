@@ -32,7 +32,7 @@ regression proves all three facts at once: the prefix verifies under `gpgv`, the
 yields no date for it, and read-only ranking still uses the displayed date.
 Unit tests that need a real `gpgv` and keyring skip when `/usr/bin/gpgv` or the archive keyring is
 absent (developer hosts), and the Docker cases are the end-to-end proof of the positive path.
-Releases whose reference `InRelease` returns 404 are handled by the exit-4 rule in step 8.
+Releases whose reference `InRelease` returns 404 are handled by the exit-4 rule in `pipeline.md` step 8.
 `focal-updates` was still receiving updates on 2026-11-11 (`Date` 2026-11-11), so freshness stays
 meaningful for 20.04; keep a focal fixture. `i386` is in scope but covered by fixtures only (no i386
 image).

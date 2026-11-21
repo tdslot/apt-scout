@@ -150,7 +150,7 @@ pub fn parse_launchpad(html: &str) -> Result<Vec<Mirror>, ParseError> {
 /// `None` for anything else, including the empty cell the page leaves for a mirror that declares no
 /// speed. Integer-suffix units only, because those are what the page prints: a value it does not
 /// print is not guessed, and an unknown speed sorts last instead of being read as a fast one
-/// (SPEC step 4).
+/// (`docs/spec/pipeline.md` step 4).
 pub fn declared_speed_bps(speed: &str) -> Option<u64> {
     let (number, unit) = speed.split_once(char::is_whitespace)?;
     let multiplier: u64 = match unit.trim() {

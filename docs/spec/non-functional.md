@@ -60,7 +60,7 @@
   because nothing consumes its signature.
   Missing/invalid `gpgv` or keyring, unsigned/changed/unknown-key data, oversize data, and execution
   errors are shown explicitly and are never `Verified`.
-  Only a `Date` from inside the cleartext-signed region (step 8) is ever trusted: bytes before
+  Only a `Date` from inside the cleartext-signed region (`pipeline.md` step 8) is ever trusted: bytes before
   `-----BEGIN PGP SIGNED MESSAGE-----` or after `-----BEGIN PGP SIGNATURE-----` are outside what
   `gpgv` signs, so a `Date` read there is shown and ranked, is never a verified date and never
   authorizes a write.

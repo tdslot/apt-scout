@@ -18,7 +18,8 @@ const SAMPLE_BYTES: u64 = 1_048_576;
 const MIN_SAMPLE: u64 = 64 * 1024;
 
 /// Both `Date`s of one `-updates` `InRelease`: the tolerant one ranking uses, and the verified one a
-/// write may trust (SPEC step 8, ruling 4). The verified date is not read here: verification hands it
+/// write may trust (`docs/spec/pipeline.md` step 8, ruling 4).
+/// The verified date is not read here: verification hands it
 /// out, so a caller cannot pair this body's shown date with a proof of its own (D25).
 struct PocketDate {
     shown: i64,
@@ -31,18 +32,18 @@ pub struct Outcome {
     /// The `-updates` `InRelease` `Date` used for lag, ranking and display (tolerant parse).
     pub updates_date: i64,
     /// The `Date` verification read inside the region it hashed, `Some` only when that pass handed
-    /// one out; the only date a write may trust (SPEC step 8).
+    /// one out; the only date a write may trust (`docs/spec/pipeline.md` step 8).
     pub verified_updates: Option<verify::VerifiedDate>,
     /// OpenPGP status of the deciding `-updates` InRelease. Ranking can use unverified dates, but
     /// write decisions must require `Verified`.
     pub updates_signature: SignatureStatus,
-    /// Informational only (SPEC step 8): `None` when the mirror has no `-security` InRelease.
+    /// Informational only (`docs/spec/pipeline.md` step 8): `None` when the mirror has no `-security` InRelease.
     pub security_date: Option<i64>,
     /// Time to first byte of the deciding `-updates` request: DNS, TCP, TLS and one round trip,
     /// measured before any body byte arrives (`docs/spec/pipeline.md` step 7). Not a download time.
     pub latency_ms: u64,
     pub throughput_bps: u64,
-    /// Set when the mirror answered from a different host than the one listed (SPEC step 7).
+    /// Set when the mirror answered from a different host than the one listed (`docs/spec/pipeline.md` step 7).
     pub redirected_to: Option<String>,
 }
 
@@ -105,7 +106,7 @@ fn date_of_verified(
     ))
 }
 
-/// The informational `-security` pocket (SPEC step 8): only `Date:` is used, so a ranged read of the
+/// The informational `-security` pocket (`docs/spec/pipeline.md` step 8): only `Date:` is used, so a ranged read of the
 /// head is enough. Its signature is deliberately not checked — nothing may consume it.
 fn date_of_cheap(net: &dyn Fetch, base: &str, suite: &str) -> Result<i64, String> {
     let url = inrelease_url(base, suite);
