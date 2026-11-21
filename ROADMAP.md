@@ -404,7 +404,7 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
 
 **Status: OPEN** — none of these blocks the next milestone; each is a decision or a cleanup the restructure deliberately left in place.
 
-- [x] D76a. Give every requirement a stable id, a `(planned)` marker where the code does not implement it, and one row per id in the `SPEC.md` index. Done in this branch: 117 ids across ten chapters, 33 marked planned and 5 marked partial. [SPEC: docs/spec/AGENTS.md]
+- [x] D76a. Give every requirement a stable id, a `(planned)` marker where the code does not implement it, and one row per id in the `SPEC.md` index. Done in this branch: 117 ids across ten chapters, 32 marked planned and 6 marked partial. [SPEC: docs/spec/AGENTS.md]
 - [ ] D76b. Give the requirements the normative voice: `MUST`/`SHOULD`/`MAY` per requirement, which means judging each of the 117 ids and rewording only where the current sentence does not already state an obligation. [SPEC: docs/spec/AGENTS.md]
 - [ ] D77. Slim this file: over 300 KB in more than 450 lines, over 100 of them longer than 1000 characters. Move the delivery history to an archive and keep the ledger readable. [No SPEC]
 - [ ] D78. Apply the style contract in `docs/AGENTS.md` to `docs/threat-model.md` (21 lines over 1000 characters). Rulings and content unchanged. [docs/AGENTS.md]

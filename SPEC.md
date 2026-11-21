@@ -33,9 +33,8 @@ This file is the map: the requirement text lives in `docs/spec/`, one file per a
 ## Requirement index
 
 One row per requirement, in file order. An id is assigned once and never renumbered.
-`State` is `planned` where the code does not implement the requirement at all, and `partial:` with
-what is missing where it implements only part of it; `ROADMAP.md` records the work that closes each
-gap.
+`State` is `planned` where the code does not implement the requirement at all,
+and `partial:` with what is missing where it implements only part of it.
 
 | ID | File | Requirement | State |
 | --- | --- | --- | --- |
@@ -55,34 +54,34 @@ gap.
 | `APPLY-13` | `docs/spec/apply.md` | If no URI is rewritable (for example arm64, or a system already using a third-party mirror), say | implemented |
 | `APPLY-14` | `docs/spec/apply.md` | Candidate hygiene (mirror lists are partly fetched over plain HTTP): every candidate, from any | implemented |
 | `APPLY-15` | `docs/spec/apply.md` | After apply, suggest `sudo apt update`; do not run it. | implemented |
-| `CLI-1` | `docs/spec/cli.md` | `-c`, `--country <CC>` — ISO 3166 alpha-2 override. Always wins over detection. | implemented |
-| `CLI-2` | `docs/spec/cli.md` | `-a`, `--any` — Ignore the detected and the given country: consider the mirrors the list names for every country and rank them together. | implemented |
-| `CLI-3` | `docs/spec/cli.md` | `--refresh` — Not implemented: a run given it fails as an unknown option (exit 2), as a run given the `-R` reserved for it does. | planned |
-| `CLI-4` | `docs/spec/cli.md` | `-n`, `--no-geo` — No geolocation lookups at all. Requires `--country`, or `--any`, which needs no country; AS preference is skipped. | implemented |
-| `CLI-5` | `docs/spec/cli.md` | `-t`, `--top <N>` — Show N best mirrors (default 5). | implemented |
-| `CLI-6` | `docs/spec/cli.md` | `-s`, `--https-only` — Only consider https mirrors. | implemented |
-| `CLI-7` | `docs/spec/cli.md` | `--tui` — Not implemented: a run given it fails as an unknown option (exit 2), so no TUI mode exists, and the table below carries one row for it… | planned |
-| `CLI-8` | `docs/spec/cli.md` | `-l`, `--list` — Table and planned change only; never writes, whatever the uid. | implemented |
-| `CLI-9` | `docs/spec/cli.md` | `-y`, `--yes` — Skip the one confirmation before a write in a root run. | implemented |
-| `CLI-10` | `docs/spec/cli.md` | `-r`, `--restore` — Restore the newest backup instead of applying a mirror. Root is needed for the read of the backup and for the write. | implemented |
-| `CLI-11` | `docs/spec/cli.md` | `-v`, `--verbose` — The proof behind the default report (Output): each row's AS number and same/`diff`/`unknown` match, the server's AS, each row's… | implemented |
-| `CLI-12` | `docs/spec/cli.md` | `--no-color` — No colour in the report, whatever the terminal is. Display only; Output states the rules. No short form. | implemented |
-| `CLI-13` | `docs/spec/cli.md` | `-V`, `--version` — Print the one line `apt-scout <version>` and exit 0. The version is the crate's own, so it cannot drift from `Cargo.toml`. | implemented |
-| `CLI-14` | `docs/spec/cli.md` | `apt-scout` — No: discovery, ranking, the recommendation with its reason, the one line `sudo apt-scout`, exit 3. | implemented |
-| `CLI-15` | `docs/spec/cli.md` | `sudo apt-scout` — Yes: the same discovery and recommendation, one confirmation (`--yes` skips it), the write. | implemented |
-| `CLI-16` | `docs/spec/cli.md` | `apt-scout --list` — No: the ranked table and the change a write would make, exit 0. | implemented |
-| `CLI-17` | `docs/spec/cli.md` | `apt-scout --tui` — Not implemented: a usage error (exit 2), exactly as `--refresh` and `-R` are, so a `--tui` run has no write, no backup and no… | planned |
-| `CLI-18` | `docs/spec/cli.md` | `apt-scout --restore` — No: the one line `sudo apt-scout --restore`, exit 3. | implemented |
-| `CLI-19` | `docs/spec/cli.md` | `sudo apt-scout --restore` — Yes: the newest backup, after one confirmation (`--yes` skips it). | implemented |
+| `CLI-1` | `docs/spec/cli.md` | `-c`, `--country <CC>` | implemented |
+| `CLI-2` | `docs/spec/cli.md` | `-a`, `--any` | implemented |
+| `CLI-3` | `docs/spec/cli.md` | `--refresh` | planned |
+| `CLI-4` | `docs/spec/cli.md` | `-n`, `--no-geo` | implemented |
+| `CLI-5` | `docs/spec/cli.md` | `-t`, `--top <N>` | implemented |
+| `CLI-6` | `docs/spec/cli.md` | `-s`, `--https-only` | implemented |
+| `CLI-7` | `docs/spec/cli.md` | `--tui` | planned |
+| `CLI-8` | `docs/spec/cli.md` | `-l`, `--list` | implemented |
+| `CLI-9` | `docs/spec/cli.md` | `-y`, `--yes` | implemented |
+| `CLI-10` | `docs/spec/cli.md` | `-r`, `--restore` | implemented |
+| `CLI-11` | `docs/spec/cli.md` | `-v`, `--verbose` | implemented |
+| `CLI-12` | `docs/spec/cli.md` | `--no-color` | implemented |
+| `CLI-13` | `docs/spec/cli.md` | `-V`, `--version` | implemented |
+| `CLI-14` | `docs/spec/cli.md` | `apt-scout` (non-root) does not write: discovery, ranking, the recommendation with its reason, the one line `sudo apt-scout`, exit 3. | implemented |
+| `CLI-15` | `docs/spec/cli.md` | `sudo apt-scout` (root) writes: the same discovery and recommendation, one confirmation (`--yes` skips it), the write. | implemented |
+| `CLI-16` | `docs/spec/cli.md` | `apt-scout --list` (any) does not write: the ranked table and the change a write would make, exit 0. | implemented |
+| `CLI-17` | `docs/spec/cli.md` | `apt-scout --tui` (any) — Not implemented: a usage error (exit 2), exactly as `--refresh` and `-R` are, so a `--tui` run has no write, no backup and… | planned |
+| `CLI-18` | `docs/spec/cli.md` | `apt-scout --restore` (non-root) does not write: the one line `sudo apt-scout --restore`, exit 3. | implemented |
+| `CLI-19` | `docs/spec/cli.md` | `sudo apt-scout --restore` (root) writes: the newest backup, after one confirmation (`--yes` skips it). | implemented |
 | `CLI-20` | `docs/spec/cli.md` | Every run of the mirror pipeline prints the ranked table, then the recommendation and its | implemented |
 | `CLI-21` | `docs/spec/cli.md` | A write confirms once: the files it will change, the old URI and the new one, and the backup | implemented |
-| `CLI-22` | `docs/spec/cli.md` | A non-root run without `--list` prints the table, the recommendation and one line, then exits 3: | implemented |
+| `CLI-22` | `docs/spec/cli.md` | A non-root run without `--list` prints the table, the recommendation and one line, then exits 3: … | implemented |
 | `CLI-23` | `docs/spec/cli.md` | `--tui` is opt-in and is never chosen for the user (not implemented yet: a run given it exits 2). | planned |
 | `CLI-24` | `docs/spec/cli.md` | `--restore` replaces the source of the rewrite: the newest backup instead of the mirror pipeline. | implemented |
 | `CLI-25` | `docs/spec/cli.md` | No step of the write is a mode the user types. | implemented |
 | `ERR-1` | `docs/spec/errors.md` | Every error message states: what failed, which path/URL/value, why (the underlying | implemented |
 | `ERR-2` | `docs/spec/errors.md` | Error types carry context at the failure point (path, URL, step name); never discard the source | implemented |
-| `ERR-3` | `docs/spec/errors.md` | Self-heal automatically (and tell the user in one line what was done): | implemented |
+| `ERR-3` | `docs/spec/errors.md` | Self-heal automatically (and tell the user in one line what was done): … | implemented |
 | `ERR-4` | `docs/spec/errors.md` | There is no cache to heal, because v1 keeps none: no cache directory and no cache file exist, so | implemented |
 | `ERR-5` | `docs/spec/errors.md` | Do not self-heal when it is unsafe: never guess which apt file to overwrite, never continue | implemented |
 | `ERR-6` | `docs/spec/errors.md` | No silent data-source fallbacks: whenever a fallback is used, print which one and why. | implemented |
@@ -102,7 +101,7 @@ gap.
 | `LOC-11` | `docs/spec/localization.md` | Never translated. Mirror hostnames, URIs, package names, file paths, option names, country | planned |
 | `LOC-12` | `docs/spec/localization.md` | Column alignment counts display columns, not characters, so a double-width script lines up | planned |
 | `LOC-13` | `docs/spec/localization.md` | Ordering never uses translated text. Where a run sorts, the key is a mirror URL, a message | planned |
-| `LOC-14` | `docs/spec/localization.md` | Manuals. The English page is the only one every release must carry. | planned |
+| `LOC-14` | `docs/spec/localization.md` | Manuals. The English page is the only one every release must carry. | partial: the localized pages are missing; the English page ships |
 | `NFR-1` | `docs/spec/non-functional.md` | Static musl binary. `ureq` with rustls, `fluent-templates` for the message catalogs, `ratatui` + | partial: only ureq ships; the catalog and TUI dependencies do not |
 | `NFR-2` | `docs/spec/non-functional.md` | English is the default and the fallback for every message, help text, error and manual. | implemented |
 | `NFR-3` | `docs/spec/non-functional.md` | Ship a comprehensive Linux man page at `man/apt-scout.1`, accessible as `man apt-scout`. | implemented |
@@ -125,8 +124,8 @@ gap.
 | `OUT-10` | `docs/spec/output.md` | Progress ends with one summary line. The ticker is stopped and the live line cleared before | implemented |
 | `OUT-11` | `docs/spec/output.md` | `NO_COLOR`, `COLORTERM` and, later, the locale are the only environment reads that may change | implemented |
 | `PIPE-1` | `docs/spec/pipeline.md` | Detect distro from `/etc/os-release`. | implemented |
-| `PIPE-2` | `docs/spec/pipeline.md` | Detect location of the server (country, then AS), skipped with `--no-geo`. | partial: RIPEstat and the AS cache are not implemented |
-| `PIPE-3` | `docs/spec/pipeline.md` | Load mirror list, first success wins, source shown in output: | partial: the 24 h cache and the compiled snapshot are not implemented |
+| `PIPE-2` | `docs/spec/pipeline.md` | Detect location of the server (country, then AS), skipped with `--no-geo`. | partial: the geo answer cache (country and AS) and RIPEstat are not implemented |
+| `PIPE-3` | `docs/spec/pipeline.md` | Load mirror list, first success wins, source shown in output: … | partial: the 24 h cache and the compiled snapshot are not implemented |
 | `PIPE-4` | `docs/spec/pipeline.md` | Filter: mirrors in the detected country only, unless `--any` is given, which removes the | implemented |
 | `PIPE-5` | `docs/spec/pipeline.md` | Resolve AS of candidates (skipped with `--no-geo`; informational, never a reason to fail | partial: the AS cache and IPv6-specific selection are not implemented |
 | `PIPE-6` | `docs/spec/pipeline.md` | Fetch reference once, before probing: from | implemented |
@@ -150,15 +149,15 @@ gap.
 | `TUI-3` | `docs/spec/tui.md` | Detail panel: full URL, country, AS number and name, resolved IP, scheme, time to first byte, | planned |
 | `TUI-4` | `docs/spec/tui.md` | Recommendation: the best-ranked mirror is pre-checked and carries the `Recommended` badge. | planned |
 | `TUI-5` | `docs/spec/tui.md` | Selection: multiple checkboxes. | planned |
-| `TUI-6` | `docs/spec/tui.md` | Keys (arrows are primary; `j/k` not required): | planned |
+| `TUI-6` | `docs/spec/tui.md` | Keys (arrows are primary; `j/k` not required): … | planned |
 | `TUI-7` | `docs/spec/tui.md` | Zero-effort flow: defaults must be right, so pressing `Enter` through the flow saves the best | planned |
 | `TUI-8` | `docs/spec/tui.md` | Extra steps appear only when the user must be informed or decide: selection has warnings (e.g. | planned |
 | `TUI-9` | `docs/spec/tui.md` | Every dialog shows its available keys in a footer bar. | planned |
 | `TUI-10` | `docs/spec/tui.md` | Applying from the TUI uses the same writer as the default run: as root, `Enter` on the | planned |
 | `TUI-11` | `docs/spec/tui.md` | Terminal state is always restored on exit, panic or Ctrl-C. | planned |
 
-A row that claims `implemented` is a claim about shipped code, and `ROADMAP.md` records the pull
-request and the evidence behind each line; where the two disagree, `ROADMAP.md` wins.
+A row that claims `implemented` is a claim about shipped code, and `ROADMAP.md`
+records the pull request and the evidence behind each line; where the two disagree, `ROADMAP.md` wins.
 
 ## Privilege boundary and threat model
 

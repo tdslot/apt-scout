@@ -107,7 +107,7 @@
   id or another value that is identical in every locale.
   A rejection carries its message id and its arguments and is rendered when it is printed, so no
   order can depend on the locale a run happens to print in.
-- `LOC-14` (planned) **Manuals.** The English page is the only one every release must carry.
+- `LOC-14` **Manuals.** The English page is the only one every release must carry.
   A locale that carries a catalog is owed its own page at `man/<locale>/man1/apt-scout.1`, installed
   to `/usr/share/man/<locale>/man1/`, where `<locale>` is the system name man-db resolves: `lt`, and
   `zh_CN` for the `zh-Hans` catalog, because man-db looks up a locale name and not a script tag.
