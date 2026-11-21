@@ -25,7 +25,9 @@ pull request as the tests.
   An id is assigned once and never renumbered; a withdrawn requirement keeps its id and is marked
   withdrawn.
   The index in `SPEC.md` lists every id with one line and its state.
-- A requirement the code does not implement yet carries `(planned)` after its id.
+- A requirement the code does not implement yet carries `(planned)` after its id. A requirement that is only
+  partly implemented keeps no marker — the requirement stands as written — and its index row says
+`partial:` with what is missing.
 - Terms come from `../../GLOSSARY.md`.
   A term the glossary lacks is added there first, in the same pull request.
 - One sentence per line inside a paragraph or list item; a sentence too long to read is wrapped at

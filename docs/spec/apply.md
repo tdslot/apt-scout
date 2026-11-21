@@ -107,7 +107,7 @@
   Malformed lines and unsupported URI schemes are reported and never guessed.
 - `APPLY-6` `mirror://` / `mirror+file:` URIs (older installs): leave unchanged and report them with an
   explanation.
-- `APPLY-7` Alternatives: in the TUI, the first checked mirror in rank order becomes the active URI.
+- `APPLY-7` (planned) Alternatives: in the TUI, the first checked mirror in rank order becomes the active URI.
   Other checked mirrors are written as commented lines `# alternative: <uri>` above the changed
   line, so the user can switch quickly. apt has no failover across URIs, so alternatives are
   documentation only.

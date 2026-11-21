@@ -34,7 +34,7 @@
   `locales/<tag>/main.ftl` (one Fluent catalog per locale, `en` the source of truth), `tui/`.
   Keep `sources`, `rank`, `fresh`, `l10n` pure except the one environment read; HTTP is injected as
   a function so tests use canned responses.
-- `NFR-7` Test fixtures: Ubuntu 22.04 `sources.list`, 24.04 `ubuntu.sources`, multi-URI stanza,
+- `NFR-7` (planned) Test fixtures: Ubuntu 22.04 `sources.list`, 24.04 `ubuntu.sources`, multi-URI stanza,
   `Enabled: no`, comments, `deb-src`, arm64 ports, `InRelease`, mirror list HTML and text.
   D7 tests read-only source inventory/parsers; D8 tests byte-preserving rewrite output and URI round
   trips.

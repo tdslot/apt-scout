@@ -68,7 +68,7 @@ Behavior by mode:
 - `CLI-22` A non-root run without `--list` prints the table, the recommendation and one line, then exits 3:
   `sudo apt-scout` with the flags of that run repeated.
   It opens no apt file for writing.
-- `CLI-23` `--tui` is opt-in and is never chosen for the user (not implemented yet: a run given it exits 2).
+- `CLI-23` (planned) `--tui` is opt-in and is never chosen for the user (not implemented yet: a run given it exits 2).
   The default run is non-interactive, so no flag turns the TUI off.
 - `CLI-24` `--restore` replaces the source of the rewrite: the newest backup instead of the mirror pipeline.
   Root is needed for that read as well as for the write, so the non-root run prints only

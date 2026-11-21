@@ -50,7 +50,7 @@ messages inside disposable containers with isolated `/etc/apt`; the restore case
 non-root run that opens no backup, a tampered copy, a target replaced behind the backup's back, and
 the confirmation answered `y` and `n` on standard input).
 Network answers in automated tests are otherwise injected from fixtures.
-- `TEST-4` Localization is tested in two layers, and a catalog ships only when both pass.
+- `TEST-4` (planned) Localization is tested in two layers, and a catalog ships only when both pass.
   In-process, over the files the binary carries: every `locales/*/main.ftl` parses (a failure names
   the file and position), the compiled catalogs load, the shipped set the binary reports equals the
   set of locale directories, every English message id exists in every shipped locale with the
@@ -101,7 +101,7 @@ Network answers in automated tests are otherwise injected from fixtures.
   Neither is a full installation, only the files this tool reads and writes.
 - `TEST-7` Live-network smoke tests (real Launchpad, geo sources) are manual, never part of CI, because
   they are rate limited and flaky.
-- `TEST-8` Man-page verification checks `man/apt-scout.1` formatting (for example with `mandoc -Tlint`) and
+- `TEST-8` (planned) Man-page verification checks `man/apt-scout.1` formatting (for example with `mandoc -Tlint`) and
   confirms `man apt-scout` renders in a disposable Ubuntu container.
   Every example must match `--help` and the implemented CLI; do not document planned flags as
   available.
