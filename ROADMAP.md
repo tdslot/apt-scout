@@ -193,7 +193,8 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
 - [ ] D88. Decide whether `scripts/citation-triage.py` runs in CI, and where: as a weekly advisory beside
   `scripts/check-sources.sh`, or as a required step that would fail a PR whose code moved a cited line. Required
   is what would have caught D87 breaking three citations of its own record, but the flag set is a triage, so a
-  required step fails today on 24 citations that are mostly correct. [.github/workflows/source-contract.yml]
+  required step fails today on a list that is mostly correct, and the entry states no count of it. 
+  [.github/workflows/source-contract.yml]
 - [x] D87. Audit the one process a root run spawns for its environment: `src/main.rs` ran `/usr/bin/dpkg --print-architecture`
   with the inherited environment, so a variable a user could set before `sudo` reached a process running as root,
   and the vector was the dynamic loader (`LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`): code execution in the root
