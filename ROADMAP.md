@@ -169,7 +169,8 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
 - [x] D82. Re-point the stale `path:line` citations in `docs/threat-model.md` that predated the restructure:
   16 distinct stale citations, 22 occurrences at 13 places in the record, re-pointed and each verified by the symbol on the cited
   line (`main.rs:861–862` is the `NO_COLOR` read, `:2510–2515` the non-root exit 3, `:3446–3448` the harness
-  dispatch). Every citation in the file now resolves inside its target.
+  dispatch). One cell moved with its citation: the terminal row now names the newline-free `print!` prompt
+  path (`main.rs:553`) beside `println!`. Every citation in the file now resolves inside its target.
 - [ ] D86. Audit the rest of the `path:line` citations in `docs/threat-model.md` against the code, not just their
   bounds: 207 citations into `src/` and `scripts/` resolve, but a line number can drift and stay in range. A
   token-window triage — the identifiers on the citing line against the five lines either side of the cited one —
