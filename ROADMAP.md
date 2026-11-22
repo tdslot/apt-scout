@@ -173,15 +173,16 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   prompt path (`main.rs:553`) beside `println!`, and the S16 bullet says that W10 and W11 add
   tmpfs-only mounts (`:123`, `:455`). Every citation in the file now resolves inside its target.
 - [ ] D86. Audit the rest of the `path:line` citations in `docs/threat-model.md` against the code, not just their
-  bounds: 207 citations into `src/` and `scripts/` resolve, but a line number can drift and stay in range. A
-  token-window triage — the identifiers on the citing line against the five lines either side of the cited one —
-  flags 37 occurrences over 33 distinct targets, and 34 citing lines carry no identifier a strict reader could match.
+  bounds: 208 citations into `src/` and `scripts/` resolve, but a line number can drift and stay in range.
+  A triage that compares the citing line's words of five letters or more with those of the five lines either
+  side of the cited one flags 22 citations over 19 distinct targets; the count moves with the window and the
+  token rule, so the rule above is the definition and a reader can reimplement it in ten lines.
   Five of the flagged ones were genuinely wrong — the `wrun` mount, `wro`'s flags, the fixture builder, the
   read-only-rootfs case and the verification temp directory — and all five are corrected, so this is not a cosmetic
-  backlog: each needs a reader, and a wrong fix is worse than a stale number. Two more remain, both found on this
-  branch: `threat-model.md:50` cites `src/verify.rs:144+`, which is not a plain `path:line`, and the
-  selected mirror URI is printed raw at `src/main.rs:2547` as well as `:771–773`, so B7 cites one of two
-  sites.
+  backlog: each needs a reader, and a wrong fix is worse than a stale number. Two more found on this branch are
+  open citations rather than stale ones: `threat-model.md:50` cites `src/verify.rs:144+`, which is not a plain 
+  `path:line`, and the selected mirror URI is printed raw at `src/main.rs:2547` as well as `:771–773`, so B7
+  cites one of two sites.
   [docs/AGENTS.md]
 - [ ] D83. Move the rationale and the measurement evidence out of the requirement bodies in `docs/spec/`: `docs/AGENTS.md` sends `why` to an ADR and evidence to `ROADMAP.md`, and D76b deliberately left both in place because deleting a measured claim (the Launchpad page structure in `pipeline.md` step 3, the 2026-11-11 freshness measurement in step 8, the `pop-default-settings` verification in `platform.md`) would drop input the parsers are tested against. Acceptance: every `because`, `so that`, `Verified from`, `Measured` and dated observation inside a requirement is either cited as `ADR-####` or moved to a ledger entry, and no requirement is left without the fact it needs to be testable. No behavior change. [docs/AGENTS.md, SPEC: docs/spec/AGENTS.md]
 
