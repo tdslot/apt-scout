@@ -191,8 +191,11 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   [docs/AGENTS.md]
 - [ ] D87. Audit the one process a root run spawns for its environment: `src/main.rs:2734` runs `/usr/bin/dpkg --print-architecture`
   with no `.env_clear()`, unlike the `gpgv` call (`src/verify.rs:234–246`), so a variable a user can set before
-  `sudo` reaches it, and `DPKG_ADMINDIR` is one such name. Whether root may inherit an environment at all
-  is a ruling `docs/threat-model.md` does not make, so the ruling comes before the code. [docs/threat-model.md]
+  `sudo` reaches it and is loaded before any of the program's code runs. The vector is the dynamic loader (`LD_PRELOAD`,
+  `LD_AUDIT`, `LD_LIBRARY_PATH`), so the outcome is code execution in the root process rather than a variable that reaches
+  it; `DPKG_ADMINDIR` is not consulted by `--print-architecture` at all. The record now states the inheritance in fact 5, the
+  threat row and A2; whether root may inherit an environment at all is the ruling, and it comes before the code.
+  [docs/threat-model.md]
 - [ ] D83. Move the rationale and the measurement evidence out of the requirement bodies in `docs/spec/`: `docs/AGENTS.md` sends `why` to an ADR and evidence to `ROADMAP.md`, and D76b deliberately left both in place because deleting a measured claim (the Launchpad page structure in `pipeline.md` step 3, the 2026-11-11 freshness measurement in step 8, the `pop-default-settings` verification in `platform.md`) would drop input the parsers are tested against. Acceptance: every `because`, `so that`, `Verified from`, `Measured` and dated observation inside a requirement is either cited as `ADR-####` or moved to a ledger entry, and no requirement is left without the fact it needs to be testable. No behavior change. [docs/AGENTS.md, SPEC: docs/spec/AGENTS.md]
 
 ## Change log
