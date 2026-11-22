@@ -162,11 +162,21 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   of what has to be built and hold no evidence, so moving them to `docs/history/` would hide the brief and trimming them
   decides what to build. The same pass rewraps the three long prose lines (28, 47, and 122, which is the shared
   acceptance block), 1.2–2.5 KB each on one line. Location is a human call; the rewrap follows it.
-- [ ] D78. Apply the style contract in `docs/AGENTS.md` to `docs/threat-model.md` (21 lines over 1000 characters). Rulings and content unchanged. [docs/AGENTS.md]
+- [x] D78. Apply the style contract in `docs/AGENTS.md` to `docs/threat-model.md`: one sentence per line and every
+  prose line under 120 characters, with the rulings and the content untouched. It had 21 lines over 1000
+  characters and now has none; 168 lines were rewrapped and the text is word for word the same, checked by
+  comparing the whitespace-normalized file before and after, because a wrap that adds or drops a word is the one
+  failure this kind of edit has. What is over 120 now is 20 table rows, which the contract exempts, and one line
+  whose content is a single `rg` command in a code span, which breaking would corrupt.
+  Two references into the file moved with the reflow and were re-pointed: B7 is `:366`, and the
+  `sources.list.d` sentence D86 quotes is `:231`, and the record also had one reference to itself:
+  the terminal row said escaping is D13 (`:152`), which is `:366` now. The quotation in D86 was a quotation of the code,
+  never of the record, and it now says so.
+  [docs/AGENTS.md]
 - [ ] D79. Rule the localization question: `docs/spec/localization.md` requires `fluent-templates` 0.15.1 and a `locales/` tree that do not exist, while `AGENTS.md` states a one-dependency rule. Say whether localization is v1 and fix whichever document is wrong. [SPEC: docs/spec/localization.md]
 - [ ] D80. Rule the TUI and `--refresh` scope: both are specified and neither is implemented, and `--refresh` is an
   unknown option today. The ruling reaches further than the flag: B7 defers terminal escaping to D13, which is the TUI
-  implementation, so a no-TUI ruling leaves the exposure named at `docs/threat-model.md:152` without an owner — a
+  implementation, so a no-TUI ruling leaves the exposure named at `docs/threat-model.md:366` without an owner — a
   root run printing a mirror URL or a rejected entry verbatim is `today`'s behaviour, not the TUI's.
   [SPEC: docs/spec/tui.md, docs/spec/cli.md]
 - [ ] D81. Rule the mirror-list cache (D28): specified with a 24 h validity and never implemented. [SPEC: docs/spec/pipeline.md]
@@ -177,19 +187,27 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   prompt path (`main.rs:553`) beside `println!`, and the S16 bullet says that W10 and W11 add
   tmpfs-only mounts (`:123`, `:455`). Every citation in the file now resolves inside its target.
 - [x] D86. Audit the `path:line` citations in `docs/threat-model.md` that the triage flags, against the code, not
-  just their bounds: `scripts/citation-triage.py` compares the words of five characters or more on the citing line
-  with those of the cited line and the five either side of it, and prints the citations that share none of them.
+  just their bounds: `scripts/citation-triage.py` compares the words of five characters or more in the unit that holds
+  a citation with those of the cited line and the five either side of it, and prints the citations that share none.
   Every one was read here against the line it names, and all of them are correct: the flags are word mismatches, not
-  drift: the sentence at `docs/threat-model.md:92` says the refusal is "not a directory; symlinks are not
-  followed" and cites `src/sources.rs:653`, which holds that string in an `issue: Some(...)` field, so the words that
-  matter are not the words the triage compares.
-  Two of the four citations D87 had moved were in that list before this branch fixed them, and two were not, so the
-  triage catches some drift, not all of it, and a reader stays the instrument.
+  drift. The record's sentence about `sources.list.d` (`docs/threat-model.md:231`) cites
+  `src/sources.rs:653`, where the refusal is the string "not a directory; symlinks are not followed" inside an
+  `issue: Some(...)` field, so the words that matter are not the words the triage compares.
+  The unit matters. Reading one physical line at a time flagged 22 citations, and D78's reflow raised that to 65
+  with no citation changed, because a wrapped fragment shares fewer words with the code than its sentence does.
+  Reading whole paragraphs swung the other way to 12, because consecutive bullets have no blank line between them
+  and a ten-bullet list became one unit: a coarser unit hides drift instead of inventing it. A unit is now a bullet,
+  a numbered item, a table row or a paragraph, with its indented continuation lines, and it prints 22 over 19
+  distinct targets on both the reflowed file and `develop`'s copy. All 22 are the citations audited by hand here.
+  The printed location is the line that carries the citation, not the line that opens its unit, so a reader lands
+  on the sentence rather than on the bullet's first line.
+  Two of the four citations D87 had moved were in the first list before this branch fixed them, and two were not, so
+  the triage catches some drift, not all of it, and a reader stays the instrument.
   A stricter check was built and abandoned: for each citation attached to a backticked name, require that name within
   five lines of the cited line. It flagged 5 of 32 named citations and all five were false, because an environment
-  variable never appears in the code that reads it and a sentence listing two functions pairs the second name with the
-  first citation. A check whose flags are mostly wrong teaches the reader to ignore it, so it was deleted rather than
-  tuned.
+  variable never appears in the code that reads it and a sentence listing two functions pairs the second name with
+  the first citation. A check whose flags are mostly wrong teaches the reader to ignore it, so it was deleted rather
+  than tuned.
   [docs/AGENTS.md]
 - [ ] D88. Decide whether `scripts/citation-triage.py` runs in CI, and where: as a weekly advisory beside
   `scripts/check-sources.sh`, or as a required step that would fail a PR whose code moved a cited line. Required

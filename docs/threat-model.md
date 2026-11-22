@@ -1,28 +1,116 @@
 # D6e — Privilege boundary threat model and privilege-escalation decision
 
-Status: **rulings decided; D6e NOT closed.** The rulings in section 7 are decided and human-approved, the design gaps the first review left open are ruled in section 8, and every `SPEC.md` delta they require is applied: Appendix A marks no item `PENDING`. D6e stays open only until the independent security review of this record returns PASS; `ROADMAP.md` records D6e `DONE` with PR #28 and does not record that final verdict on this document, so the two disagree on this one point, and D12 is where that is reconciled rather than here. This is the privilege-boundary decision record for apt-scout: the threat model, the self-reexec ruling, the write validation that gates D9, and the state of every `SPEC.md` delta the rulings require. The CLI ruling of 2026-11-12 removed the two-step plan split from the product: the plan is internal, one process writes, and section 5 records the validation that stands in its place.
-Base: `origin/develop` with `8bbfa72` (D6f, PR #29) merged into `docs/d6e-threat-model`; the `path:line` citations were re-checked at `8fd9d70`, the D6f ones at `8bbfa72`, the section 0 facts at `3f91170`, and the D11/D25 facts together with the 3.10 and Appendix A item 4 mechanism sentences at `ee010ba` (PR #43), with the localization delta in section 0 and in section 2's A2 note written against `df8d8ee`, and every environment statement reconciled to the shipped `NO_COLOR` read against `23907a2`; the D10 backup-and-restore citations in B5 and section 5 are taken at the head of PR #59, and the D11b ones in section 0, B5, sections 5 and 6 at the D11b branch head and again after PR #62's review split the restore engine; and every `path:line` citation in this record was re-pointed at `fa2a955` to the definition the sentence names, which is the re-check section 6 now states the rule for. Roadmap item: D6e (blocks D9, D10, D11, D12, and every later write).
-Authority: `ROADMAP.md` D6e/D6f/D9–D12, `SPEC.md` "Privilege boundary and threat model", "Apply", "Pipeline", "Testing", "TUI", and `AGENTS.md:108` (`Privilege-security gates`).
+Status: **rulings decided; D6e NOT closed.** The rulings in section 7 are decided and human-approved, the design
+  gaps the first review left open are ruled in section 8, and every `SPEC.md` delta they require is applied: Appendix
+  A marks no item `PENDING`.
+  D6e stays open only until the independent security review of this record returns PASS; `ROADMAP.md` records D6e
+  `DONE` with PR #28 and does not record that final verdict on this document, so the two disagree on this one point,
+  and D12 is where that is reconciled rather than here.
+  This is the privilege-boundary decision record for apt-scout: the threat model, the self-reexec ruling, the write
+  validation that gates D9, and the state of every `SPEC.md` delta the rulings require.
+  The CLI ruling of 2026-11-12 removed the two-step plan split from the product: the plan is internal, one process
+  writes, and section 5 records the validation that stands in its place.
+Base: `origin/develop` with `8bbfa72` (D6f, PR #29) merged into `docs/d6e-threat-model`; the `path:line` citations
+  were re-checked at `8fd9d70`, the D6f ones at `8bbfa72`, the section 0 facts at `3f91170`, and the D11/D25 facts
+  together with the 3.10 and Appendix A item 4 mechanism sentences at `ee010ba` (PR #43), with the localization delta
+  in section 0 and in section 2's A2 note written against `df8d8ee`, and every environment statement reconciled to the
+  shipped `NO_COLOR` read against `23907a2`; the D10 backup-and-restore citations in B5 and section 5 are taken at the
+  head of PR #59, and the D11b ones in section 0, B5, sections 5 and 6 at the D11b branch head and again after PR
+  #62's review split the restore engine; and every `path:line` citation in this record was re-pointed at `fa2a955` to
+  the definition the sentence names, which is the re-check section 6 now states the rule for.
+  Roadmap item: D6e (blocks D9, D10, D11, D12, and every later write).
+Authority: `ROADMAP.md` D6e/D6f/D9–D12, `SPEC.md` "Privilege boundary and threat model", "Apply", "Pipeline",
+  "Testing", "TUI", and `AGENTS.md:108` (`Privilege-security gates`).
 
-This document records four things: what the process that may write as root is allowed to touch, that the program never obtains privilege for itself, which tests must exist before D9 can merge, and what a write may trust about an `InRelease`. Section 7 is the decision record, section 8 records the three gaps the first review left open together with the ruling that closed each, and Appendix A states whether each `SPEC.md` delta is applied and, where it is not, who owns it. A superseded ruling is replaced in place, never annotated.
+This document records four things: what the process that may write as root is allowed to touch, that the program
+  never obtains privilege for itself, which tests must exist before D9 can merge, and what a write may trust about an
+  `InRelease`.
+  Section 7 is the decision record, section 8 records the three gaps the first review left open together with the
+  ruling that closed each, and Appendix A states whether each `SPEC.md` delta is applied and, where it is not, who
+  owns it.
+  A superseded ruling is replaced in place, never annotated.
 
 ---
 
 ## 0. Reading basis and current state
 
-Read for this document: `AGENTS.md` (whole file; `:108` `Privilege-security gates`), `ROADMAP.md` (whole file), `SPEC.md` (whole file), `GLOSSARY.md`, `src/verify.rs` (1–350), `src/http.rs` (1–250), `src/probe.rs` (1–180), `src/fresh.rs` (78–120), `src/sources.rs` (1–60, 380–520, 795–815), `src/main.rs` (1–120, 215–340, 485–585), `src/mirrors.rs` (245–300), `Cargo.toml`.
+Read for this document: `AGENTS.md` (whole file; `:108` `Privilege-security gates`), `ROADMAP.md` (whole file),
+  `SPEC.md` (whole file), `GLOSSARY.md`, `src/verify.rs` (1–350), `src/http.rs` (1–250), `src/probe.rs` (1–180),
+  `src/fresh.rs` (78–120), `src/sources.rs` (1–60, 380–520, 795–815), `src/main.rs` (1–120, 215–340, 485–585),
+  `src/mirrors.rs` (245–300), `Cargo.toml`.
 
 Facts that constrain the write. Each is the current code at this base, not a plan:
 
-1. **The writer exists and the CLI reaches it.** `src/apply.rs` is the writer, and its header states the contract it enforces (`src/apply.rs:2–7`); a root run builds the plan, prints it, confirms once unless `--yes`, and calls the writer (`src/main.rs:2517`, `src/main.rs:2535`), while `--list` builds and prints the same plan and returns 0 without calling it (`src/main.rs:2508`). The files a run creates are the verification temp directory (`src/verify.rs:128–133`) and its temp file (`src/verify.rs:213–226`), which it removes; a root run then creates the backup directory, its manifest and the planned targets.
-2. **The root check decides the run's mode, and exit code 3 has a producer.** `require_root` is `src/apply.rs:57`; the run calls it to choose between the `--list`, recommend and write modes (`src/main.rs:2098`, `decide` at `src/main.rs:261`) and the writer calls it again on its own entry point (`src/apply.rs:338`), so the mode decision and the writer cannot disagree about what root is. The non-root write path returns 3 after printing the `sudo` line (`src/main.rs:2510–2515`), and `main` passes whatever code `run()` returns straight through (`src/main.rs:3478–3494`).
-3. **`--tui` and `--refresh` do not exist; `--restore`, `--yes`, `--list`, `--any`, `--https-only`, `--no-geo`, `--verbose`, `--no-color`, `--version`, `--country`, `--top` and `--help` do.** `parse_args_from` accepts `--list`/`-l`, `--restore`/`-r`, `--yes`/`-y`, `--any`/`-a`, `--https-only`/`-s`, `--no-geo`/`-n`, `--verbose`/`-v`, `--no-color`, `--version`/`-V`, `--country`/`-c <CC>`, `--top`/`-t <N>` and `-h`/`--help` (`src/main.rs:59`), never bundles short flags so `-lyc NO` is an unknown option, and rejects everything else, the reserved `-R` among them; `--list` prints the change a write would make and returns 0, `--yes` becomes `Write { confirm: false }` and a restore becomes `Mode::Restore` (`src/main.rs:265`), and the two absent flags are unknown options and exit 2. `--verbose` adds per-mirror detail and the full rejection reasons and reaches no decision. `--no-color` is the one implemented flag without a short form, so `-N` is an unknown option too, and a run given it prints no escape sequence and decides nothing else (docs/spec/output.md, D42). A restore may not carry a mirror flag: `--country`, `--any`, `--top`, `--https-only`, `--list` and `--no-geo` with it are a usage error (exit 2) that names the typed flag and is refused in the parser, before any backup is opened (`src/main.rs:158`). D28 builds the cache `--refresh` needs, and D13 owns `--tui`.
-4. **No TUI exists.** `Cargo.toml` dependencies are `ureq` only; `ratatui`/`crossterm` arrive in D13. Terminal input is not an input today. Terminal *status* is read, through `std::io::IsTerminal`: whether stdout is a terminal decides whether the report carries colour (`src/main.rs:2089–2093`), and whether stderr is a terminal decides whether a progress line is drawn at all (`src/main.rs:2169`), so the same run under a pipe prints the same words and no escapes.
-5. **The environment variables the shipped code consumes are `TMPDIR`, `NO_COLOR` and `COLORTERM`; a fourth is planned.** `TMPDIR`, indirectly, through `std::env::temp_dir()` in `private_temp_dir` (`src/verify.rs:133`). `HOME`, `PATH`, and `XDG_*` are never read. `std::env::args()` is the CLI source (`src/main.rs:56`). `NO_COLOR`, through `std::env::var_os` and tested only for presence, so any value counts and the empty one counts (`no_color_from_env`, `src/main.rs:861–862`): it turns colour off in the decision at `src/main.rs:2089–2093` and chooses nothing else (docs/spec/output.md). `COLORTERM`, read once at `src/main.rs:872` and used only to pick between the truecolor accent and its 256-colour fallback (`:2094`), both fixed strings, so any value selects a printed string and nothing else. `LC_ALL`, else `LANG`, is planned and does not exist yet: read once at startup to choose the language the run prints in and for nothing else (docs/spec/localization.md, `ROADMAP.md` D30a). When it lands this fact reads "`TMPDIR`, `NO_COLOR`, `LC_ALL`, `LANG`", and the two display reads select printed text only: no decision, no path, no byte written, no exit code, and no module reached from `src/apply.rs` may read either.
-One child does not read the environment, and it does not inherit it either: `/usr/bin/dpkg --print-architecture` runs with the environment cleared (`src/main.rs:2740`), built the way the `gpgv` spawn is (`src/verify.rs:234–236`).
-6. **`InRelease` is verified with a fixed binary and keyring:** `/usr/bin/gpgv` (`src/verify.rs:18`), `/usr/share/keyrings/ubuntu-archive-keyring.gpg` (`src/verify.rs:19`), both `is_file`-checked before use (`src/verify.rs:181–195`), spawned with `env_clear()` plus `LC_ALL=C` (`src/verify.rs:235–246`), `--homedir` set to the private 0700 directory (`src/verify.rs:133–146`, `src/verify.rs:239`), stdin nulled (`src/verify.rs:244`), 10 s timeout (`src/verify.rs:23`), 1 MiB status cap (`src/verify.rs:24`), and `Verified` requires exit success plus `GOODSIG` plus `VALIDSIG` and no `BADSIG`/`ERRSIG`/`NO_PUBKEY` (`src/verify.rs:329–336`).
-7. **The freshness `Date` has a strict and a tolerant parse.** `fresh::release_date` reads `Date:` only inside the cleartext-signed region and refuses any body whose preamble is not whitespace-only (`src/fresh.rs:114–140`); `fresh::release_date_tolerant` keeps the whole-body scan that display and ranking use (`src/fresh.rs:142–154`). The probe keeps both: `updates_date` for lag and the table, `verified_updates` only when the strict parse succeeded (`src/fresh.rs:166–184`).
-8. **The write baseline is a value, and only the verifier mints it.** `Probed` carries the verifier's value in a `verified_updates` field (`src/fresh.rs:175`) and `Reference` carries one in the same field (`src/probe.rs:75`); `write_baseline` takes the canonical reference when that value is `Some` and otherwise the newest verified candidate, `None` when nothing verified (`src/main.rs:3083`), so a write fails closed. The value cannot be assembled from parts: `SignatureStatus::Verified` carries a `VerifiedProof` whose single field is private to `src/verify.rs` (`src/verify.rs:35`), `region_date` is the only expression in the crate that builds a `VerifiedDate` and it parses the bytes `gpgv` has just accepted (`src/verify.rs:115`), and the source-scan test `the_write_proof_is_minted_only_in_the_verifier` (`src/verify.rs:627`) refuses a second mint site anywhere in `src/`. D25 closed that before D11a wired the writer in (PR #43).
+1. **The writer exists and the CLI reaches it.** `src/apply.rs` is the writer, and its header states the contract it
+   enforces (`src/apply.rs:2–7`); a root run builds the plan, prints it, confirms once unless `--yes`, and calls the
+   writer (`src/main.rs:2517`, `src/main.rs:2535`), while `--list` builds and prints the same plan and returns 0
+   without calling it (`src/main.rs:2508`).
+   The files a run creates are the verification temp directory (`src/verify.rs:128–133`) and its temp file
+   (`src/verify.rs:213–226`), which it removes; a root run then creates the backup directory, its manifest and the
+   planned targets.
+2. **The root check decides the run's mode, and exit code 3 has a producer.** `require_root` is `src/apply.rs:57`; the
+   run calls it to choose between the `--list`, recommend and write modes (`src/main.rs:2098`, `decide` at
+   `src/main.rs:261`) and the writer calls it again on its own entry point (`src/apply.rs:338`), so the mode decision
+   and the writer cannot disagree about what root is.
+   The non-root write path returns 3 after printing the `sudo` line (`src/main.rs:2510–2515`), and `main` passes
+   whatever code `run()` returns straight through (`src/main.rs:3478–3494`).
+3. **`--tui` and `--refresh` do not exist; `--restore`, `--yes`, `--list`, `--any`, `--https-only`, `--no-geo`,
+   `--verbose`, `--no-color`, `--version`, `--country`, `--top` and `--help` do.** `parse_args_from` accepts
+   `--list`/`-l`, `--restore`/`-r`, `--yes`/`-y`, `--any`/`-a`, `--https-only`/`-s`, `--no-geo`/`-n`,
+   `--verbose`/`-v`, `--no-color`, `--version`/`-V`, `--country`/`-c <CC>`, `--top`/`-t <N>` and `-h`/`--help`
+   (`src/main.rs:59`), never bundles short flags so `-lyc NO` is an unknown option, and rejects everything else, the
+   reserved `-R` among them; `--list` prints the change a write would make and returns 0, `--yes` becomes
+   `Write { confirm: false }` and a restore becomes `Mode::Restore` (`src/main.rs:265`), and the two absent flags are
+   unknown options and exit 2.
+   `--verbose` adds per-mirror detail and the full rejection reasons and reaches no decision.
+   `--no-color` is the one implemented flag without a short form, so `-N` is an unknown option too, and a run given it
+   prints no escape sequence and decides nothing else (docs/spec/output.md, D42).
+   A restore may not carry a mirror flag: `--country`, `--any`, `--top`, `--https-only`, `--list` and `--no-geo` with
+   it are a usage error (exit 2) that names the typed flag and is refused in the parser, before any backup is opened
+   (`src/main.rs:158`).
+   D28 builds the cache `--refresh` needs, and D13 owns `--tui`.
+4. **No TUI exists.** `Cargo.toml` dependencies are `ureq` only; `ratatui`/`crossterm` arrive in D13.
+   Terminal input is not an input today.
+   Terminal *status* is read, through `std::io::IsTerminal`: whether stdout is a terminal decides whether the report
+   carries colour (`src/main.rs:2089–2093`), and whether stderr is a terminal decides whether a progress line is drawn
+   at all (`src/main.rs:2169`), so the same run under a pipe prints the same words and no escapes.
+5. **The environment variables the shipped code consumes are `TMPDIR`, `NO_COLOR` and `COLORTERM`; a fourth is
+   planned.** `TMPDIR`, indirectly, through `std::env::temp_dir()` in `private_temp_dir` (`src/verify.rs:133`).
+   `HOME`, `PATH`, and `XDG_*` are never read.
+   `std::env::args()` is the CLI source (`src/main.rs:56`).
+   `NO_COLOR`, through `std::env::var_os` and tested only for presence, so any value counts and the empty one counts
+   (`no_color_from_env`, `src/main.rs:861–862`): it turns colour off in the decision at `src/main.rs:2089–2093` and
+   chooses nothing else (docs/spec/output.md).
+   `COLORTERM`, read once at `src/main.rs:872` and used only to pick between the truecolor accent and its 256-colour
+   fallback (`:2094`), both fixed strings, so any value selects a printed string and nothing else.
+   `LC_ALL`, else `LANG`, is planned and does not exist yet: read once at startup to choose the language the run
+   prints in and for nothing else (docs/spec/localization.md, `ROADMAP.md` D30a).
+   When it lands this fact reads "`TMPDIR`, `NO_COLOR`, `LC_ALL`, `LANG`", and the two display reads select printed
+   text only: no decision, no path, no byte written, no exit code, and no module reached from `src/apply.rs` may read
+   either.
+One child does not read the environment, and it does not inherit it either: `/usr/bin/dpkg --print-architecture`
+  runs with the environment cleared (`src/main.rs:2740`), built the way the `gpgv` spawn is (`src/verify.rs:234–236`).
+6. **`InRelease` is verified with a fixed binary and keyring:** `/usr/bin/gpgv` (`src/verify.rs:18`),
+   `/usr/share/keyrings/ubuntu-archive-keyring.gpg` (`src/verify.rs:19`), both `is_file`-checked before use
+   (`src/verify.rs:181–195`), spawned with `env_clear()` plus `LC_ALL=C` (`src/verify.rs:235–246`), `--homedir` set to
+   the private 0700 directory (`src/verify.rs:133–146`, `src/verify.rs:239`), stdin nulled (`src/verify.rs:244`), 10 s
+   timeout (`src/verify.rs:23`), 1 MiB status cap (`src/verify.rs:24`), and `Verified` requires exit success plus
+   `GOODSIG` plus `VALIDSIG` and no `BADSIG`/`ERRSIG`/`NO_PUBKEY` (`src/verify.rs:329–336`).
+7. **The freshness `Date` has a strict and a tolerant parse.** `fresh::release_date` reads `Date:` only inside the
+   cleartext-signed region and refuses any body whose preamble is not whitespace-only (`src/fresh.rs:114–140`);
+   `fresh::release_date_tolerant` keeps the whole-body scan that display and ranking use (`src/fresh.rs:142–154`).
+   The probe keeps both: `updates_date` for lag and the table, `verified_updates` only when the strict parse succeeded
+   (`src/fresh.rs:166–184`).
+8. **The write baseline is a value, and only the verifier mints it.** `Probed` carries the verifier's value in a
+   `verified_updates` field (`src/fresh.rs:175`) and `Reference` carries one in the same field (`src/probe.rs:75`);
+   `write_baseline` takes the canonical reference when that value is `Some` and otherwise the newest verified
+   candidate, `None` when nothing verified (`src/main.rs:3083`), so a write fails closed.
+   The value cannot be assembled from parts: `SignatureStatus::Verified` carries a `VerifiedProof` whose single field
+   is private to `src/verify.rs` (`src/verify.rs:35`), `region_date` is the only expression in the crate that builds a
+   `VerifiedDate` and it parses the bytes `gpgv` has just accepted (`src/verify.rs:115`), and the source-scan test
+   `the_write_proof_is_minted_only_in_the_verifier` (`src/verify.rs:627`) refuses a second mint site anywhere in
+   `src/`.
+   D25 closed that before D11a wired the writer in (PR #43).
 
 ## 1. Assets and what root would touch
 
@@ -33,14 +121,16 @@ One child does not read the environment, and it does not inherit it either: `/us
 | `/etc/apt/sources.list.d/system-security.sources` (Pop!_OS only) | Does not exist before the run; created by the rewrite | Create with exclusive create, record in the manifest | Planned content exists as `PlannedFile { create_new: true }` (`src/sources.rs:36–41`); never created |
 | Backup directory `/var/backups/apt-scout/<UTC timestamp>/` | The only recovery path; if an attacker can write it, `--restore` becomes a root file-write primitive | Create 0700, write one copy per changed file, write the manifest, fsync | Does not exist; docs/spec/apply.md defines it |
 | Backup manifest inside that directory | Names the files `--restore` will overwrite; it is an *instruction to root* read back from disk | Written by root, later parsed by root | Undefined format; no code |
-| `/var/log` output or the terminal | Root writes to a terminal that the unprivileged user may share; terminal escape sequences printed as root execute in the user's terminal context, not in root's | Print the diff, confirmation, and result | Plain `println!`/`eprintln!` to the terminal, error text included (`src/main.rs:771–773`, `:2547`, `:3275`, `:3452`), and a `print!` that writes no newline for the prompt (`:553`, a static literal); no TUI; escaping is D13 (`:152`) |
+| `/var/log` output or the terminal | Root writes to a terminal that the unprivileged user may share; terminal escape sequences printed as root execute in the user's terminal context, not in root's | Print the diff, confirmation, and result | Plain `println!`/`eprintln!` to the terminal, error text included (`src/main.rs:771–773`, `:2547`, `:3275`, `:3452`), and a `print!` that writes no newline for the prompt (`:553`, a static literal); no TUI; escaping is D13 (`:366`) |
 | The user's environment (`PATH`, `HOME`, `TMPDIR`, `XDG_*`, `http_proxy`) | A root process that resolves a command or a path through the environment executes attacker-chosen code | Must be cleared to a fixed minimum | Three reads, none of them a decision: `TMPDIR` (`src/verify.rs:133`), `NO_COLOR` (`src/main.rs:862`) and `COLORTERM` (`:872`); `PATH`/`HOME` never read. **Cleared for the one child too**: `/usr/bin/dpkg --print-architecture` runs with the environment cleared (`src/main.rs:2741`), so `LD_PRELOAD`/`LD_AUDIT` reach nothing |
 | The user's own apt sources being *read* as root | Whatever root reads becomes what root writes back; a local user who can write a file under `/etc/apt` chooses its content | Re-read and compare against the plan | Read by name with `std::fs::read` (`src/sources.rs:663`) |
 | `/var/cache`/`~/.cache/apt-scout/mirrors.json`, `/usr/bin/gpgv`, the keyring | Cache and verifier inputs decide ranking and verification | Root must not read or write any of them | Cache unimplemented; `gpgv` runs as the invoking uid today (`src/probe.rs:99`) |
 
 ## 2. Attack surface of the write
 
-Every value below reaches the one process that writes as root, because discovery and the write are one code path (section 5). "Who controls it" is the threat model's answer to whether a control is required.
+Every value below reaches the one process that writes as root, because discovery and the write are one code path
+  (section 5).
+  "Who controls it" is the threat model's answer to whether a control is required.
 
 | # | Input | Entry point today | Who controls it | Reaches the write? |
 | --- | --- | --- | --- | --- |
@@ -58,45 +148,104 @@ Every value below reaches the one process that writes as root, because discovery
 
 Notes that change what a control must do:
 
-- A4 is not a "malicious mirror" only. `mirrors.ubuntu.com` is plain HTTP (docs/spec/pipeline.md step 3.2), and candidate URLs from that source are marked unverified today. Any host that wins the ranking becomes an apt URI: `apt` will then fetch `Packages` and `.deb` files from it and verify them against `Signed-By`, so package content stays authenticated, but *which* server the machine trusts the availability of is chosen by ranking.
-- A5/A6 do not authorize installation. Even a forged `Date` cannot install a package: `apt` still checks archive signatures. What A6 buys an attacker is the position of the *selected* mirror, which is then written to `/etc/apt`. That is the whole weight of D6f P1 #1 — see 3.9.
-- A2 has three display-only consumers: `NO_COLOR` arrives with D42, `COLORTERM` is read at `src/main.rs:872`, and the locale read is still to arrive. `LC_ALL` and `LANG` choose the language a run prints in, and nothing else: the value must be resolved once at startup, before any apt file is opened, must be normalized and matched against the tags the binary carries, and must reach no path, decision, comparison, ordering, plan, written byte or exit code, and no module under `src/apply.rs` may read it. `NO_COLOR` follows the same rule with a shorter reach: its presence, whatever its value, turns colour off and chooses nothing else, so it reaches no decision, no path and no byte either (docs/spec/output.md, Appendix A item 14). docs/spec/localization.md states the locale rule and `ROADMAP.md` D30c carries the container pair that proves a root write is identical under `LANG=C` and under a shipped locale. The table's "entry point today" column names `src/verify.rs:133` for `TMPDIR` and `src/main.rs:861–862` for `NO_COLOR`; it will name the locale only when that read exists.
-- A11 matters most where a directory is created on first use. The old docs/spec/errors.md rule created missing own directories with `create_dir_all`, which succeeds on a directory another user already created; the rule now covers the cache directory only, and the backup root fails closed instead (7.6).
+- A4 is not a "malicious mirror" only.
+  `mirrors.ubuntu.com` is plain HTTP (docs/spec/pipeline.md step 3.2), and candidate URLs from that source are marked
+  unverified today.
+  Any host that wins the ranking becomes an apt URI: `apt` will then fetch `Packages` and `.deb` files from it and
+  verify them against `Signed-By`, so package content stays authenticated, but *which* server the machine trusts the
+  availability of is chosen by ranking.
+- A5/A6 do not authorize installation.
+  Even a forged `Date` cannot install a package: `apt` still checks archive signatures.
+  What A6 buys an attacker is the position of the *selected* mirror, which is then written to `/etc/apt`.
+  That is the whole weight of D6f P1 #1 — see 3.9.
+- A2 has three display-only consumers: `NO_COLOR` arrives with D42, `COLORTERM` is read at `src/main.rs:872`, and the
+  locale read is still to arrive.
+  `LC_ALL` and `LANG` choose the language a run prints in, and nothing else: the value must be resolved once at
+  startup, before any apt file is opened, must be normalized and matched against the tags the binary carries, and must
+  reach no path, decision, comparison, ordering, plan, written byte or exit code, and no module under `src/apply.rs`
+  may read it.
+  `NO_COLOR` follows the same rule with a shorter reach: its presence, whatever its value, turns colour off and
+  chooses nothing else, so it reaches no decision, no path and no byte either (docs/spec/output.md, Appendix A item
+  14). docs/spec/localization.md states the locale rule and `ROADMAP.md` D30c carries the container pair that proves a
+  root write is identical under `LANG=C` and under a shipped locale.
+  The table's "entry point today" column names `src/verify.rs:133` for `TMPDIR` and `src/main.rs:861–862` for
+  `NO_COLOR`; it will name the locale only when that read exists.
+- A11 matters most where a directory is created on first use.
+  The old docs/spec/errors.md rule created missing own directories with `create_dir_all`, which succeeds on a
+  directory another user already created; the rule now covers the cache directory only, and the backup root fails
+  closed instead (7.6).
 
 ## 3. Trust boundaries and controls
 
-Each boundary lists what exists with `file:line`, then what is missing and what the code does instead. "Missing" means: if D9 were written today on top of this code, that input would reach a write unprotected.
+Each boundary lists what exists with `file:line`, then what is missing and what the code does instead.
+  "Missing" means: if D9 were written today on top of this code, that input would reach a write unprotected.
 
 ### B1 — Arguments and environment → program
 
 Existing:
-- Country is uppercased and shape-checked before any lookup (`src/main.rs:109–116`); unknown codes are rejected against the Launchpad country table before any network call (`src/main.rs:604–614`, wired at `src/main.rs:619`).
+- Country is uppercased and shape-checked before any lookup (`src/main.rs:109–116`); unknown codes are rejected
+  against the Launchpad country table before any network call (`src/main.rs:604–614`, wired at `src/main.rs:619`).
 - Architecture and country are validated in preflight before geolocation or HTTP (`src/main.rs:618–633`).
 - Unknown options are hard errors (`src/main.rs:135`).
-- `gpgv` runs with `env_clear()` plus `LC_ALL=C` (`src/verify.rs:235–237`), and so does `dpkg --print-architecture` (`src/main.rs:2740`), so A2 cannot reach either child.
+- `gpgv` runs with `env_clear()` plus `LC_ALL=C` (`src/verify.rs:235–237`), and so does `dpkg --print-architecture`
+  (`src/main.rs:2740`), so A2 cannot reach either child.
 
 Missing:
 - No `geteuid` check and no exit-3 path, so nothing today distinguishes a privileged run.
-- Nothing validates `TMPDIR`: `private_temp_dir` joins it to a random name and creates that directory 0700, but the parent is never checked for owner, mode, or sticky bit, and a `TMPDIR` on a world-writable mount is accepted. docs/spec/non-functional.md claims "a private 0700 temporary directory"; the directory is private, the parent is untrusted. Already recorded as a D6f P2.
-- Nothing clears the environment for the *program*, only for the two children it starts. A root run must build its own minimal environment rather than inherit one, with three exceptions that change no decision: the display-only `NO_COLOR` read, the `COLORTERM` read that picks the accent fallback, both made once at startup before any apt file is opened (docs/spec/output.md, Appendix A item 14), and the display-only locale read of `LC_ALL`/`LANG` that docs/spec/localization.md requires, resolved once before any apt file is opened and never reached from a module `src/apply.rs` uses (the bullet below, and Appendix A item 13). The shipped artifact is static musl, where the loader is not consulted at all, and nothing gates the
+- Nothing validates `TMPDIR`: `private_temp_dir` joins it to a random name and creates that directory 0700, but the
+  parent is never checked for owner, mode, or sticky bit, and a `TMPDIR` on a world-writable mount is accepted.
+  docs/spec/non-functional.md claims "a private 0700 temporary directory"; the directory is private, the parent is
+  untrusted.
+  Already recorded as a D6f P2.
+- Nothing clears the environment for the *program*, only for the two children it starts.
+  A root run must build its own minimal environment rather than inherit one, with three exceptions that change no
+  decision: the display-only `NO_COLOR` read, the `COLORTERM` read that picks the accent fallback, both made once at
+  startup before any apt file is opened (docs/spec/output.md, Appendix A item 14), and the display-only locale read of
+  `LC_ALL`/`LANG` that docs/spec/localization.md requires, resolved once before any apt file is opened and never
+  reached from a module `src/apply.rs` uses (the bullet below, and Appendix A item 13).
+  The shipped artifact is static musl, where the loader is not consulted at all, and nothing gates the
   stdin half of the requirement: a builder that cleared the environment and inherited stdin would pass.
 
-- The locale read that D30a adds is one of the three display-only consumers of A2 and must stay display-only: resolved once before the pipeline, never reached from a module `src/apply.rs` uses, and never a path, a decision, a comparison or a sort key. `NO_COLOR` and `COLORTERM` are the others, and both are smaller: one turns colour off, the other picks between two fixed accent strings, and neither reaches anything else (docs/spec/output.md). docs/spec/localization.md states the locale rule; section 2's A2 note and D31a's four-way root-write pair are where it is checked — D30c's pair is a determinism check and cannot discriminate until a translated catalog ships.
+- The locale read that D30a adds is one of the three display-only consumers of A2 and must stay display-only: resolved
+  once before the pipeline, never reached from a module `src/apply.rs` uses, and never a path, a decision, a
+  comparison or a sort key.
+  `NO_COLOR` and `COLORTERM` are the others, and both are smaller: one turns colour off, the other picks between two
+  fixed accent strings, and neither reaches anything else (docs/spec/output.md). docs/spec/localization.md states the
+  locale rule; section 2's A2 note and D31a's four-way root-write pair are where it is checked — D30c's pair is a
+  determinism check and cannot discriminate until a translated catalog ships.
 
-Required before D9: the write requires uid 0, a non-root run writes nothing and exits 3 with the `sudo` line, the write reads no environment variable, and passes a constructed environment to any child. Outside the write the shipped binary reads exactly three things from the environment, and none reaches a decision the write makes: `TMPDIR`, through `std::env::temp_dir()` in the verifier (fact 5), which selects only where its private 0700 directory lives and leaves a signature `Unavailable` rather than `Verified` when the value names no usable directory, `NO_COLOR`, which selects only whether the report carries escape sequences, and `COLORTERM`, which selects only which of two fixed accents is printed. The locale read above is the fourth and does not exist yet; it must reach nothing either.
+Required before D9: the write requires uid 0, a non-root run writes nothing and exits 3 with the `sudo` line, the
+  write reads no environment variable, and passes a constructed environment to any child.
+  Outside the write the shipped binary reads exactly three things from the environment, and none reaches a decision
+  the write makes: `TMPDIR`, through `std::env::temp_dir()` in the verifier (fact 5), which selects only where its
+  private 0700 directory lives and leaves a signature `Unavailable` rather than `Verified` when the value names no
+  usable directory, `NO_COLOR`, which selects only whether the report carries escape sequences, and `COLORTERM`, which
+  selects only which of two fixed accents is printed.
+  The locale read above is the fourth and does not exist yet; it must reach nothing either.
 
 ### B2 — apt source contents → inventory
 
 Existing:
 - The root directory is refused unless `symlink_metadata` reports a directory (`src/sources.rs:554–577`).
-- `/etc/apt/sources.list` is accepted only when `symlink_metadata` says regular file (`src/sources.rs:580–593`); the same for `sources.list.d` (`src/sources.rs:595–597`, refusal at `src/sources.rs:653`).
+- `/etc/apt/sources.list` is accepted only when `symlink_metadata` says regular file (`src/sources.rs:580–593`); the
+  same for `sources.list.d` (`src/sources.rs:595–597`, refusal at `src/sources.rs:653`).
 - Only `.list` and `.sources` are read; other names are reported and skipped (`src/sources.rs:615–628`).
 - Directory entries are filtered on `entry.file_type()` (`src/sources.rs:629–644`), which does not follow symlinks.
 - Non-UTF-8 files are reported and skipped, never guessed (`src/sources.rs:669–674`).
 
 Missing:
-- No ownership or mode check. A file owned by uid 1000 with mode 0666 under `/etc/apt/sources.list.d/` is inventoried and, in a later milestone, would be rewritten by root. The code reads whatever is there.
-- No TOCTOU resistance: `symlink_metadata`/`file_type` checks at `src/sources.rs:580` and `src/sources.rs:629` are separate syscalls from the `std::fs::read(&path)` at `src/sources.rs:663`, which re-opens by name and therefore follows a symlink substituted in between. A local attacker who can replace the entry wins a root read of any root-readable file, whose content then lands in the plan and in `/etc/apt` (world-readable). Std-only fix without a new dependency: open with `OpenOptions`, then compare `File::metadata()?` `dev`/`ino` (`std::os::unix::fs::MetadataExt`) against the `symlink_metadata` result, and use the open handle for the read. `libc::O_NOFOLLOW` is not available without a new dependency.
+- No ownership or mode check.
+  A file owned by uid 1000 with mode 0666 under `/etc/apt/sources.list.d/` is inventoried and, in a later milestone,
+  would be rewritten by root.
+  The code reads whatever is there.
+- No TOCTOU resistance: `symlink_metadata`/`file_type` checks at `src/sources.rs:580` and `src/sources.rs:629` are
+  separate syscalls from the `std::fs::read(&path)` at `src/sources.rs:663`, which re-opens by name and therefore
+  follows a symlink substituted in between.
+  A local attacker who can replace the entry wins a root read of any root-readable file, whose content then lands in
+  the plan and in `/etc/apt` (world-readable).
+  Std-only fix without a new dependency: open with `OpenOptions`, then compare `File::metadata()?` `dev`/`ino`
+  (`std::os::unix::fs::MetadataExt`) against the `symlink_metadata` result, and use the open handle for the read.
+  `libc::O_NOFOLLOW` is not available without a new dependency.
 
 Required before D9: the root run opens every target with the identity check above, and aborts on any change.
 
@@ -104,46 +253,107 @@ Required before D9: the root run opens every target with the identity check abov
 
 Existing:
 - One 10 s budget per call, not per hop (`src/http.rs:12`, `src/http.rs:98`, `src/http.rs:152–160`).
-- Redirects followed by hand, every hop re-validated (`src/http.rs:99`, `src/http.rs:150`), at most 3 (`src/http.rs:17`), `https`→`http` downgrade refused (`src/http.rs:189–195`), protocol-relative and relative `Location` refused (`src/http.rs:128–142`).
+- Redirects followed by hand, every hop re-validated (`src/http.rs:99`, `src/http.rs:150`), at most 3
+  (`src/http.rs:17`), `https`→`http` downgrade refused (`src/http.rs:189–195`), protocol-relative and relative
+  `Location` refused (`src/http.rs:128–142`).
 - Proxies explicitly disabled so the environment cannot reroute traffic (`src/http.rs:101`).
-- Private, loopback, and link-local addresses filtered at resolution, on the exact addresses connected to (`src/http.rs:68–92`, `src/mirrors.rs:246`).
-- Size caps: 2 MiB pages, 256 KiB small files (`src/http.rs:14–16`), 512 KiB for `InRelease` (`src/probe.rs:13`, `src/verify.rs:22`), 4 KiB for the informational `-security` head (`src/probe.rs:15`), 1 MiB sample (`src/probe.rs:16`).
-- `Verified` requires exit success, `GOODSIG`, `VALIDSIG`, and no `BADSIG`/`ERRSIG`/`NO_PUBKEY` (`src/verify.rs:329–336`).
+- Private, loopback, and link-local addresses filtered at resolution, on the exact addresses connected to
+  (`src/http.rs:68–92`, `src/mirrors.rs:246`).
+- Size caps: 2 MiB pages, 256 KiB small files (`src/http.rs:14–16`), 512 KiB for `InRelease` (`src/probe.rs:13`,
+  `src/verify.rs:22`), 4 KiB for the informational `-security` head (`src/probe.rs:15`), 1 MiB sample
+  (`src/probe.rs:16`).
+- `Verified` requires exit success, `GOODSIG`, `VALIDSIG`, and no `BADSIG`/`ERRSIG`/`NO_PUBKEY`
+  (`src/verify.rs:329–336`).
 
 Missing:
 - A6: closed by D6f — the write path takes `verified_updates`, display keeps the tolerant parse (3.9).
 - No verified-plan type: `VerifiedDate` exists (3.10), the plan-level gate is D9's (G2).
-- The throughput sample is attacker-controlled: only the xz magic and a 64 KiB minimum are checked (`src/probe.rs:18`, `src/probe.rs:177–178`). A mirror that streams 1 MiB of zeros at line rate wins the speed tie-break and can win the group. Accepted risk with a stated reason: throughput cannot be verified from the outside, docs/spec/pipeline.md step 9 already treats it as relative, and the loser of that lie is a slow mirror, not an unauthenticated package.
-- The `-security` head is unverified by design (`src/probe.rs:111`, docs/spec/non-functional.md). Nothing may consume it for a write; today it feeds only display.
+- The throughput sample is attacker-controlled: only the xz magic and a 64 KiB minimum are checked (`src/probe.rs:18`,
+  `src/probe.rs:177–178`).
+  A mirror that streams 1 MiB of zeros at line rate wins the speed tie-break and can win the group.
+  Accepted risk with a stated reason: throughput cannot be verified from the outside, docs/spec/pipeline.md step 9
+  already treats it as relative, and the loser of that lie is a slow mirror, not an unauthenticated package.
+- The `-security` head is unverified by design (`src/probe.rs:111`, docs/spec/non-functional.md).
+  Nothing may consume it for a write; today it feeds only display.
 
 ### B4 — Selected mirror URL → rewrite plan
 
 Existing:
 - `rewrite_source` re-validates the selected URI before planning (`src/sources.rs:981`).
-- `validate_url` enforces `http`/`https` only, no backslash, no `@`, no whitespace or control characters, ≤2048 bytes, valid port, bracketed IPv6 parsed, local names rejected, numeric private hosts rejected (`src/mirrors.rs:282–358`, `src/mirrors.rs:343–355`).
+- `validate_url` enforces `http`/`https` only, no backslash, no `@`, no whitespace or control characters, ≤2048 bytes,
+  valid port, bracketed IPv6 parsed, local names rejected, numeric private hosts rejected (`src/mirrors.rs:282–358`,
+  `src/mirrors.rs:343–355`).
 
 Missing:
-- Nothing ties the selected URI back to the candidate set that was actually probed. A byte-identical plan can be produced from a URI that appeared in no mirror list, because `rewrite_source` validates shape only.
-- Nothing requires the selected URI's `-updates` `InRelease` to have been `Verified` in the same run. `fresh::Probed` has no field for it (finding 8).
-- Nothing restricts the URI host to a *public resolvable* host at plan time. Resolution happens in the prober (`src/http.rs:70–92`), so a candidate's DNS answer can differ between probe and write. This is bounded: the write phase does not connect to the host, it only writes the string.
+- Nothing ties the selected URI back to the candidate set that was actually probed.
+  A byte-identical plan can be produced from a URI that appeared in no mirror list, because `rewrite_source` validates
+  shape only.
+- Nothing requires the selected URI's `-updates` `InRelease` to have been `Verified` in the same run.
+  `fresh::Probed` has no field for it (finding 8).
+- Nothing restricts the URI host to a *public resolvable* host at plan time.
+  Resolution happens in the prober (`src/http.rs:70–92`), so a candidate's DNS answer can differ between probe and
+  write.
+  This is bounded: the write phase does not connect to the host, it only writes the string.
 
-Required before D9: the plan carries the URI, the digest of the candidate it came from, and a verification proof minted by the verification pass in the same process; the root run accepts nothing else.
+Required before D9: the plan carries the URI, the digest of the candidate it came from, and a verification proof
+  minted by the verification pass in the same process; the root run accepts nothing else.
 
 ### B5 — Backup directory and manifest → root read-back and restore
 
 Existing:
-- **The writer backs up before it changes anything.** `backup` (`src/apply.rs:586`) verifies the backup root after creating it (`verify_backup_root`, `src/apply.rs:635`: a symlink, a non-directory, another uid or a mode other than 0700 is a hard abort with nothing written), creates the `<id>` directory 0700 with an exclusive create, so `EEXIST` aborts rather than reusing an earlier run's backup, and writes the manifest last, mode 0600 and exclusive (`write_manifest`, `src/apply.rs:748`). Every file the plan replaces or removes is copied first, with `create_new`, the original's mode and owner (`copy_original`, `src/apply.rs:683`), and recorded as a `replace` carrying the digest of that copy — a file it is about to remove is one of them; a file the plan creates has nothing to copy and is recorded as a `create`. A failure anywhere aborts before the first change.
-- **The manifest has a format and a parser.** `manifest::render` (`src/manifest.rs:126`) writes and `manifest::parse` (`src/manifest.rs:150`) reads one canonical text: a header, the id, a record count, one record per changed file, and a matching `end` line, capped at 65 536 bytes and 32 records (`src/manifest.rs:21`). `parse` fails closed on anything a run would not have written — order, counts, sizes, and any ownership other than root's — so a manifest is either the text this program produces or it is refused.
-- **The manifest cannot name a path, only a target.** Each record carries a `plan::Target` from the closed enumeration plus its digest, mode and owner (`src/apply.rs:722`), and the path is built from that target and the backup directory; no string in the file becomes a path.
-- **The reader that consumes it is the one `--restore` reaches.** `restore::build` (`src/restore.rs:71`) re-derives the newest backup into the plan the CLI confirms, `restore::run` (`src/restore.rs:123`) writes exactly that plan, and `build_as` (`src/restore.rs:80`) is the one place a restore plan comes from: it re-derives every write from the manifest and refuses the first disagreement with the copy or with the disk, and `run` hands that plan to the writer with no baseline, because what authorizes a restore is its backup. Nothing re-derives a plan between the answer at the prompt and the write. The flag is the CLI's (`src/main.rs:2574–2578`): a non-root run prints exactly `sudo apt-scout --restore` and returns 3 before `restore::build` is called, so no byte of the backup is opened; a root run takes the clock once, builds the plan for the confirmation, asks once unless `--yes`, and hands that plan and the same clock to `restore::run`. A no at the prompt writes nothing and exits 0; the write path's own no stays exit 1, because there the write is the point of the run. The flags that would run the mirror pipeline are refused in the parser, so a restore can never be asked to rank or rewrite.
+- **The writer backs up before it changes anything.** `backup` (`src/apply.rs:586`) verifies the backup root after
+  creating it (`verify_backup_root`, `src/apply.rs:635`: a symlink, a non-directory, another uid or a mode other than
+  0700 is a hard abort with nothing written), creates the `<id>` directory 0700 with an exclusive create, so `EEXIST`
+  aborts rather than reusing an earlier run's backup, and writes the manifest last, mode 0600 and exclusive
+  (`write_manifest`, `src/apply.rs:748`).
+  Every file the plan replaces or removes is copied first, with `create_new`, the original's mode and owner
+  (`copy_original`, `src/apply.rs:683`), and recorded as a `replace` carrying the digest of that copy — a file it is
+  about to remove is one of them; a file the plan creates has nothing to copy and is recorded as a `create`.
+  A failure anywhere aborts before the first change.
+- **The manifest has a format and a parser.** `manifest::render` (`src/manifest.rs:126`) writes and `manifest::parse`
+  (`src/manifest.rs:150`) reads one canonical text: a header, the id, a record count, one record per changed file, and
+  a matching `end` line, capped at 65 536 bytes and 32 records (`src/manifest.rs:21`).
+  `parse` fails closed on anything a run would not have written — order, counts, sizes, and any ownership other than
+  root's — so a manifest is either the text this program produces or it is refused.
+- **The manifest cannot name a path, only a target.** Each record carries a `plan::Target` from the closed enumeration
+  plus its digest, mode and owner (`src/apply.rs:722`), and the path is built from that target and the backup
+  directory; no string in the file becomes a path.
+- **The reader that consumes it is the one `--restore` reaches.** `restore::build` (`src/restore.rs:71`) re-derives
+  the newest backup into the plan the CLI confirms, `restore::run` (`src/restore.rs:123`) writes exactly that plan,
+  and `build_as` (`src/restore.rs:80`) is the one place a restore plan comes from: it re-derives every write from the
+  manifest and refuses the first disagreement with the copy or with the disk, and `run` hands that plan to the writer
+  with no baseline, because what authorizes a restore is its backup.
+  Nothing re-derives a plan between the answer at the prompt and the write.
+  The flag is the CLI's (`src/main.rs:2574–2578`): a non-root run prints exactly `sudo apt-scout --restore` and
+  returns 3 before `restore::build` is called, so no byte of the backup is opened; a root run takes the clock once,
+  builds the plan for the confirmation, asks once unless `--yes`, and hands that plan and the same clock to
+  `restore::run`.
+  A no at the prompt writes nothing and exits 0; the write path's own no stays exit 1, because there the write is the
+  point of the run.
+  The flags that would run the mirror pipeline are refused in the parser, so a restore can never be asked to rank or
+  rewrite.
 
 What the flag's arrival added, and what checks it:
-- The uid behaviour is in the CLI above and in W29; the confirmation and the block are `restore_confirm_lines` and `restore_lines` (`src/main.rs:2644`, `src/main.rs:2672`), pure functions asserted by `tests::a_restore_block_names_the_backup_the_files_and_the_copies`, which fails if the block grows a digest in its default form or loses the backup id, the two effects or the copies path.
-- The container evidence is W27–W33 in `scripts/docker-test.sh`: W27 restores after a real harness write and compares the whole `/etc/apt` tree and a pinned digest with the pre-write state, W28 shows a second restore refused by the record-versus-disk rule, W29 runs the shipped binary as uid 1000 and asserts the one line, exit 3 and no backup root, W30 tampers with a copy the manifest names, W31 replaces the target behind the backup's back with a symlink and pins the canary, and W32/W33 answer the confirmation `y` and `n` on standard input, so the prompt, both answers and the block a yes prints are run and not merely parsed. S4 stays the unit-test matrix (`restore::tests::build_refuses_a_hostile_target_name`), because a container cannot put a hostile path into a manifest the writer's own parser refuses.
+- The uid behaviour is in the CLI above and in W29; the confirmation and the block are `restore_confirm_lines` and
+  `restore_lines` (`src/main.rs:2644`, `src/main.rs:2672`), pure functions asserted by
+  `tests::a_restore_block_names_the_backup_the_files_and_the_copies`, which fails if the block grows a digest in its
+  default form or loses the backup id, the two effects or the copies path.
+- The container evidence is W27–W33 in `scripts/docker-test.sh`: W27 restores after a real harness write and compares
+  the whole `/etc/apt` tree and a pinned digest with the pre-write state, W28 shows a second restore refused by the
+  record-versus-disk rule, W29 runs the shipped binary as uid 1000 and asserts the one line, exit 3 and no backup
+  root, W30 tampers with a copy the manifest names, W31 replaces the target behind the backup's back with a symlink
+  and pins the canary, and W32/W33 answer the confirmation `y` and `n` on standard input, so the prompt, both answers
+  and the block a yes prints are run and not merely parsed.
+  S4 stays the unit-test matrix (`restore::tests::build_refuses_a_hostile_target_name`), because a container cannot
+  put a hostile path into a manifest the writer's own parser refuses.
 
 ### B6 — No boundary crossing (removed)
 
-The plan handed from one process to a root process, which this entry used to describe, was removed on 2026-11-12 with the CLI ruling: no plan, file, or stdin message crosses a process boundary, so there is no producer of untrusted plan bytes to defend against. The checks that remain are listed in section 5. See 7.2.
+The plan handed from one process to a root process, which this entry used to describe, was removed on 2026-11-12
+  with the CLI ruling: no plan, file, or stdin message crosses a process boundary, so there is no producer of
+  untrusted plan bytes to defend against.
+  The checks that remain are listed in section 5.
+  See 7.2.
 
 ### B7 — Terminal input (TUI, D13+)
 
@@ -151,212 +361,854 @@ Existing: no TUI, no `ratatui` dependency (`Cargo.toml`), so the surface does no
 
 What the design imposes now so D13 does not have to revisit it:
 - A keystroke is authorization for exactly one thing: the confirm step. It never carries data.
-- Custom mirror URLs typed in the TUI (docs/spec/apply.md, Custom URLs) are input A4: they are validated and probed before the plan is built and reach it only through B4's re-validation.
-- Nothing that root prints may contain unescaped mirror-controlled bytes. A mirror's URL, `Origin`, `Label`, or error text can contain `ESC`; printing it as root into a shared terminal is a control-sequence injection into the user's terminal. The root run must render untrusted strings with control characters replaced. Nothing does this today. A mirror string reaches the terminal raw on four paths: the report (`src/main.rs:771–773`), the closing line of a write, which interpolates the selected URI (`:2547`), a rejected entry echoed in a note (`rejected_note` at `:3245`, printed at `:3275`), and error or warning text that carries a URL (`:2265`, `:3452`). The mitigation belongs to D13, and the exposure until then covers a read-only run and a run that wrote.
+- Custom mirror URLs typed in the TUI (docs/spec/apply.md, Custom URLs) are input A4: they are validated and probed
+  before the plan is built and reach it only through B4's re-validation.
+- Nothing that root prints may contain unescaped mirror-controlled bytes.
+  A mirror's URL, `Origin`, `Label`, or error text can contain `ESC`; printing it as root into a shared terminal is a
+  control-sequence injection into the user's terminal.
+  The root run must render untrusted strings with control characters replaced.
+  Nothing does this today.
+  A mirror string reaches the terminal raw on four paths: the report (`src/main.rs:771–773`), the closing line of a
+  write, which interpolates the selected URI (`:2547`), a rejected entry echoed in a note (`rejected_note` at `:3245`,
+  printed at `:3275`), and error or warning text that carries a URL (`:2265`, `:3452`).
+  The mitigation belongs to D13, and the exposure until then covers a read-only run and a run that wrote.
 
 ### B8 — A hostile local user writing where the program reads
 
 Existing:
-- The verification temp name is 8 random bytes plus the pid, created `create_new` and mode 0600, in a directory created 0700 (`src/verify.rs:128–147`, `src/verify.rs:213–226`), so a pre-created file or directory at that path causes a clean `Unavailable`.
+- The verification temp name is 8 random bytes plus the pid, created `create_new` and mode 0600, in a directory
+  created 0700 (`src/verify.rs:128–147`, `src/verify.rs:213–226`), so a pre-created file or directory at that path
+  causes a clean `Unavailable`.
 
 Missing:
 - The temp parent is `env::temp_dir()` (`src/verify.rs:133`) with no owner/mode/sticky check.
-- The two paths a run creates on first use are verified instead of inherited (B5): the backup root is checked after creation (`verify_backup_root`, `src/apply.rs:635`), and `system-security.sources` is created with an exclusive `create_new` that aborts on `EEXIST` (`src/apply.rs:899`).
+- The two paths a run creates on first use are verified instead of inherited (B5): the backup root is checked after
+  creation (`verify_backup_root`, `src/apply.rs:635`), and `system-security.sources` is created with an exclusive
+  `create_new` that aborts on `EEXIST` (`src/apply.rs:899`).
 
 ### 3.9 D6f P1 #1 — a write may use only a `Date` from inside the signed region
 
-What the code does: `fresh::release_date` accepts a body only when nothing but whitespace-only lines precedes a line that is exactly `-----BEGIN PGP SIGNED MESSAGE-----`, skips the armour headers to the first blank line, and reads `Date:` before `-----BEGIN PGP SIGNATURE-----` (`src/fresh.rs:114–140`). `fresh::release_date_tolerant` keeps the whole-body scan for display and ranking (`src/fresh.rs:142–154`), and the probe carries both values (`src/fresh.rs:166–184`). Why the rule exists: `gpgv` ignores everything before the armour, so a mirror can prepend `Date: <chosen>` to a genuinely signed body and the signature still verifies; the status stays `verified`, and only the parser separates a signed date from a displayed one.
+What the code does: `fresh::release_date` accepts a body only when nothing but whitespace-only lines precedes a line
+  that is exactly `-----BEGIN PGP SIGNED MESSAGE-----`, skips the armour headers to the first blank line, and reads
+  `Date:` before `-----BEGIN PGP SIGNATURE-----` (`src/fresh.rs:114–140`).
+  `fresh::release_date_tolerant` keeps the whole-body scan for display and ranking (`src/fresh.rs:142–154`), and the
+  probe carries both values (`src/fresh.rs:166–184`).
+  Why the rule exists: `gpgv` ignores everything before the armour, so a mirror can prepend `Date: <chosen>` to a
+  genuinely signed body and the signature still verifies; the status stays `verified`, and only the parser separates a
+  signed date from a displayed one.
 
-Ruling: **for a write, the date must come from inside the cleartext-signed region, and the region must be located by the parser, not by the verifier.**
+Ruling: **for a write, the date must come from inside the cleartext-signed region, and the region must be located by
+  the parser, not by the verifier.**
 
 Required behavior, both sides:
-- Only whitespace-only lines may precede `-----BEGIN PGP SIGNED MESSAGE-----`, and the armour line must start its own line. A body with any other prefix is **not** `Invalid`: `gpgv` verifies it and the status stays `verified`, because the prefix is outside what the signature covers, not something that breaks it. What such a body cannot supply is a trusted `Date`, so a write may not use it, while read-only ranking keeps displaying and ranking that date under the docs/spec/non-functional.md sentence ("ranking may display and use an `InRelease` `Date` even when signature verification is `invalid` or `unavailable`").
-- The `Date:` header is taken from the cleartext between the armour headers (after the `Hash:` line) and `-----BEGIN PGP SIGNATURE-----`. A `Date:` occurring after the signature block is not the release date.
-- A write requires: parse succeeded inside the signed region *and* `SignatureStatus::Verified`. Both facts travel together (section 5), so no later code can combine one without the other.
-- Regression fixture: `tests/fixtures/signed/noble-updates-InRelease.prefixed` — the existing fixture with a forged `Date:` prepended — must produce a date equal to the genuine one for a write, or an outright refusal; it must never produce the forged date. The hand proof in D6f (`gpgv` exits 0 with `GOODSIG`/`VALIDSIG` on the prefixed copy) is the reason this test is mandatory.
+- Only whitespace-only lines may precede `-----BEGIN PGP SIGNED MESSAGE-----`, and the armour line must start its own
+  line.
+  A body with any other prefix is **not** `Invalid`: `gpgv` verifies it and the status stays `verified`, because the
+  prefix is outside what the signature covers, not something that breaks it.
+  What such a body cannot supply is a trusted `Date`, so a write may not use it, while read-only ranking keeps
+  displaying and ranking that date under the docs/spec/non-functional.md sentence ("ranking may display and use an
+  `InRelease` `Date` even when signature verification is `invalid` or `unavailable`").
+- The `Date:` header is taken from the cleartext between the armour headers (after the `Hash:` line) and
+  `-----BEGIN PGP SIGNATURE-----`.
+  A `Date:` occurring after the signature block is not the release date.
+- A write requires: parse succeeded inside the signed region *and* `SignatureStatus::Verified`.
+  Both facts travel together (section 5), so no later code can combine one without the other.
+- Regression fixture: `tests/fixtures/signed/noble-updates-InRelease.prefixed` — the existing fixture with a forged
+  `Date:` prepended — must produce a date equal to the genuine one for a write, or an outright refusal; it must never
+  produce the forged date.
+  The hand proof in D6f (`gpgv` exits 0 with `GOODSIG`/`VALIDSIG` on the prefixed copy) is the reason this test is
+  mandatory.
 
-What this meant for a write, and why it blocked D9 rather than merely degrading read-only output: without it, every other control in this document inherited a forgeable input. D6f implemented it (PR #29); 7.4 records the decision.
+What this meant for a write, and why it blocked D9 rather than merely degrading read-only output: without it, every
+  other control in this document inherited a forgeable input.
+  D6f implemented it (PR #29); 7.4 records the decision.
 
 ### 3.10 D6f P1 #2 — the write baseline is a verified value
 
-What the code does: `Probed` carries the verifier's value in a `verified_updates: Option<VerifiedDate>` field (`src/fresh.rs:175`) and `Reference` carries one in the same field (`src/probe.rs:75`), so the date and the signature status travel as one value instead of in parts a caller can recombine; the baseline is the canonical reference when that value is `Some`, otherwise the newest candidate that carries one, and absent when nothing verified, so the write fails closed (`src/main.rs:3083`). The proof is unforgeable now: `SignatureStatus::Verified` carries a `VerifiedProof` whose single field is private to `src/verify.rs` (`src/verify.rs:35`), `region_date` builds a `VerifiedDate` from the bytes `gpgv` accepted and nowhere else (`src/verify.rs:115`), the one stand-in the tests and the write harness use calls it and is compiled out of every shipped build (`src/verify.rs:124`), and `the_write_proof_is_minted_only_in_the_verifier` (`src/verify.rs:627`) scans `src/` for a second mint site. The verified-plan half is `Plan`, which holds the proof beside the URI and the bytes it was issued for (`src/plan.rs:142`), and the restore half is the same type over `Authority::Restore`, which a caller cannot mint from a `BackupId` (section 5).
+What the code does: `Probed` carries the verifier's value in a `verified_updates: Option<VerifiedDate>` field
+  (`src/fresh.rs:175`) and `Reference` carries one in the same field (`src/probe.rs:75`), so the date and the
+  signature status travel as one value instead of in parts a caller can recombine; the baseline is the canonical
+  reference when that value is `Some`, otherwise the newest candidate that carries one, and absent when nothing
+  verified, so the write fails closed (`src/main.rs:3083`).
+  The proof is unforgeable now: `SignatureStatus::Verified` carries a `VerifiedProof` whose single field is private to
+  `src/verify.rs` (`src/verify.rs:35`), `region_date` builds a `VerifiedDate` from the bytes `gpgv` accepted and
+  nowhere else (`src/verify.rs:115`), the one stand-in the tests and the write harness use calls it and is compiled
+  out of every shipped build (`src/verify.rs:124`), and `the_write_proof_is_minted_only_in_the_verifier`
+  (`src/verify.rs:627`) scans `src/` for a second mint site.
+  The verified-plan half is `Plan`, which holds the proof beside the URI and the bytes it was issued for
+  (`src/plan.rs:142`), and the restore half is the same type over `Authority::Restore`, which a caller cannot mint
+  from a `BackupId` (section 5).
 
-Ruling: **"verified" must be a value, not a string and not a bool, and the write gate must be able to accept only that value.**
+Ruling: **"verified" must be a value, not a string and not a bool, and the write gate must be able to accept only
+  that value.**
 
 Required behavior:
-- One constructor produces the proof: the verification pass itself, in the same run, before the write. `SignatureStatus::Verified` becomes unconstructible outside `verify` (private module constructor; `is_verified()` stays for display).
-- The proof carries the parsed date and the fact that the date came from the signed region (3.9), so the two P1s close into a single value that cannot be assembled from parts.
-- `fresh::Probed` carries the proof's status, and the baseline is `Verified(date)` or absent. `fallback_baseline` contributes a date only from candidates whose `-updates` `InRelease` was verified in this run. A forged future date is then impossible rather than merely implausible: a genuine Ubuntu signature cannot cover an attacker's `Date`.
-- If no candidate verifies, the write fails closed with an explanation naming the cause (missing `gpgv`, missing keyring, every mirror `invalid`), and read-only output is unchanged.
+- One constructor produces the proof: the verification pass itself, in the same run, before the write.
+  `SignatureStatus::Verified` becomes unconstructible outside `verify` (private module constructor; `is_verified()`
+  stays for display).
+- The proof carries the parsed date and the fact that the date came from the signed region (3.9), so the two P1s close
+  into a single value that cannot be assembled from parts.
+- `fresh::Probed` carries the proof's status, and the baseline is `Verified(date)` or absent.
+  `fallback_baseline` contributes a date only from candidates whose `-updates` `InRelease` was verified in this run.
+  A forged future date is then impossible rather than merely implausible: a genuine Ubuntu signature cannot cover an
+  attacker's `Date`.
+- If no candidate verifies, the write fails closed with an explanation naming the cause (missing `gpgv`, missing
+  keyring, every mirror `invalid`), and read-only output is unchanged.
 
-What this meant for a write, and why it blocked D9: the accepted rule in docs/spec/non-functional.md ("the selected mirror's `-updates` `InRelease` and the canonical reference used as freshness baseline must both be `Verified`") had no representation, so it could not be enforced by construction. D6f implemented the baseline half (PR #29) and 7.5 records the decision; the plan-level half is `Plan`, which carries the proof beside the bytes it was issued for (`src/plan.rs:142`), and D25 closed the half that stayed forgeable until PR #43, which is what the paragraph above now states in the present tense.
+What this meant for a write, and why it blocked D9: the accepted rule in docs/spec/non-functional.md ("the selected
+  mirror's `-updates` `InRelease` and the canonical reference used as freshness baseline must both be `Verified`") had
+  no representation, so it could not be enforced by construction.
+  D6f implemented the baseline half (PR #29) and 7.5 records the decision; the plan-level half is `Plan`, which
+  carries the proof beside the bytes it was issued for (`src/plan.rs:142`), and D25 closed the half that stayed
+  forgeable until PR #43, which is what the paragraph above now states in the present tense.
 
 ## 4. Self-reexec: the explicit decision
 
 ### 4.1 The constraint that decides it
 
-A process cannot obtain privilege for itself, so "self-reexec" is shorthand for one of three mechanisms, and they are not equivalent:
+A process cannot obtain privilege for itself, so "self-reexec" is shorthand for one of three mechanisms, and they
+  are not equivalent:
 
-1. exec itself under `sudo` — the program invokes `sudo`. Forbidden by `AGENTS.md:108` (`Privilege-security gates`: "Never add or assume `sudo` self-reexec is safe") and by `SPEC.md` Privilege boundary bullet 4, which states that the program never re-execs itself privileged and never invokes `sudo`. The ban stands in the ruled design: a program that execs `sudo` converts every path it controls into a root path, and inherits `sudo`'s environment policy as its only defense.
-2. install a setuid-root bit — the binary becomes a local privilege-escalation candidate by definition. Any local user can run the write phase. The only thing standing between them and root file writes is the program's own validation of an input that the same local user supplies.
-3. ask the user to run the second phase as root — the mechanism the user's own `sudo` provides, with no privilege manufactured by the program. This is the ruling (7.1).
+1. exec itself under `sudo` — the program invokes `sudo`.
+   Forbidden by `AGENTS.md:108` (`Privilege-security gates`: "Never add or assume `sudo` self-reexec is safe") and by
+   `SPEC.md` Privilege boundary bullet 4, which states that the program never re-execs itself privileged and never
+   invokes `sudo`.
+   The ban stands in the ruled design: a program that execs `sudo` converts every path it controls into a root path,
+   and inherits `sudo`'s environment policy as its only defense.
+2. install a setuid-root bit — the binary becomes a local privilege-escalation candidate by definition.
+   Any local user can run the write phase.
+   The only thing standing between them and root file writes is the program's own validation of an input that the same
+   local user supplies.
+3. ask the user to run the second phase as root — the mechanism the user's own `sudo` provides, with no privilege
+   manufactured by the program.
+   This is the ruling (7.1).
 
-Mechanism 3 is the ruling (7.1); mechanisms 1 and 2 are the rejected forms analysed in 4.3 and 4.4. The question D6e answered is what the second, root-only invocation is allowed to contain, and the answer is section 5: a plan, and nothing else. That answer governed a two-process design that the user later removed (7.2). The one-shot modes — `sudo apt-scout`, `sudo apt-scout --tui`, `sudo apt-scout --restore` — are also mechanism 3, because the user's own `sudo` supplies the privilege, but they parse untrusted input in the root process, and docs/spec/cli.md and Privilege boundary state that cost plainly instead of presenting the one-shot run as isolated.
+Mechanism 3 is the ruling (7.1); mechanisms 1 and 2 are the rejected forms analysed in 4.3 and 4.4.
+  The question D6e answered is what the second, root-only invocation is allowed to contain, and the answer is section
+  5: a plan, and nothing else.
+  That answer governed a two-process design that the user later removed (7.2).
+  The one-shot modes — `sudo apt-scout`, `sudo apt-scout --tui`, `sudo apt-scout --restore` — are also mechanism 3,
+  because the user's own `sudo` supplies the privilege, but they parse untrusted input in the root process, and
+  docs/spec/cli.md and Privilege boundary state that cost plainly instead of presenting the one-shot run as isolated.
 
 ### 4.2 The ruling — no self-reexec: refuse and print the exact command
 
-The program never execs anything privileged. A non-root run writes nothing, prints the `sudo` line and exits 3. The write is one code path in the same process (section 5): it builds a plan, validates it against the closed target enumeration and the on-disk digests, verifies the selected mirror's `InRelease`, and only then writes. In a root run the networked discovery therefore happens in the root process as well; `SPEC.md` Privilege boundary states that cost and names a two-process split as future work, not as a supported flag.
+The program never execs anything privileged.
+  A non-root run writes nothing, prints the `sudo` line and exits 3.
+  The write is one code path in the same process (section 5): it builds a plan, validates it against the closed target
+  enumeration and the on-disk digests, verifies the selected mirror's `InRelease`, and only then writes.
+  In a root run the networked discovery therefore happens in the root process as well; `SPEC.md` Privilege boundary
+  states that cost and names a two-process split as future work, not as a supported flag.
 
-- **Buys:** no setuid bit, no internal `sudo`, no second executable to package; privilege comes only from the user typing `sudo`; the write is bound to the bytes the run validated against the disk; no plan format, transport or producer metadata exists to secure, because nothing crosses a process boundary.
-- **Costs:** the root process parses untrusted network responses before it writes. The defence is the order of operations — verify the `InRelease`, validate the plan against the disk, then write — not isolation. A split that keeps the network phase out of root is future work (4.4, 4.6).
-- **How it fails:** visibly. Wrong uid → exit 3 with the `sudo` line, no file opened for writing. Failed validation → exit 1 with the failing field or path, nothing written. No partial state is reachable, because the writer validates the whole plan before opening any target.
-- **What an attacker gains:** nothing through the write path that a local user who may run `sudo apt-scout` does not already have. What the validation bounds is *which* bytes root writes: only the enumerated targets, only the bytes the run validated, and only over a disk state whose digests still agree (5).
-- **Testable in disposable containers:** fully. `docker run` as root exercises the write; the refusal case runs as uid 1000; a failing validation is injected with a test hook. No setuid and no nested privilege boundary to simulate.
+- **Buys:** no setuid bit, no internal `sudo`, no second executable to package; privilege comes only from the user
+  typing `sudo`; the write is bound to the bytes the run validated against the disk; no plan format, transport or
+  producer metadata exists to secure, because nothing crosses a process boundary.
+- **Costs:** the root process parses untrusted network responses before it writes.
+  The defence is the order of operations — verify the `InRelease`, validate the plan against the disk, then write —
+  not isolation.
+  A split that keeps the network phase out of root is future work (4.4, 4.6).
+- **How it fails:** visibly.
+  Wrong uid → exit 3 with the `sudo` line, no file opened for writing.
+  Failed validation → exit 1 with the failing field or path, nothing written.
+  No partial state is reachable, because the writer validates the whole plan before opening any target.
+- **What an attacker gains:** nothing through the write path that a local user who may run `sudo apt-scout` does not
+  already have.
+  What the validation bounds is *which* bytes root writes: only the enumerated targets, only the bytes the run
+  validated, and only over a disk state whose digests still agree (5).
+- **Testable in disposable containers:** fully.
+  `docker run` as root exercises the write; the refusal case runs as uid 1000; a failing validation is injected with a
+  test hook.
+  No setuid and no nested privilege boundary to simulate.
 
 ### 4.3 Rejected — self-reexec through a fixed absolute path, minimal environment, pre-write confirmation token
 
-The program re-execs `/proc/self/exe` (absolute, not `PATH`-derived) with a cleared environment, passing the plan over an inherited fd and a token that the second phase requires before writing.
+The program re-execs `/proc/self/exe` (absolute, not `PATH`-derived) with a cleared environment, passing the plan
+  over an inherited fd and a token that the second phase requires before writing.
 
-- **Buys:** one command for the user. A minimal environment makes A2 explicit rather than inherited. A token makes a stale or replayed invocation fail.
-- **Costs:** the privilege still has to come from somewhere. Without `sudo` inside the program and without a setuid bit, the re-exec runs at the same uid as the parent, so nothing is gained; with the setuid bit, the audit surface is a setuid root binary that reads a plan from an unprivileged writer. That combination is the classic local-root pattern, and the token does not change it: a token the unprivileged caller generates is not a MAC, and if the root phase generates it, the caller never sees it. So Option B is either Option A with extra machinery or a setuid binary.
-- **How it fails:** opaquely, which is the worse problem. A re-exec under an unexpected uid, a `/proc/self/exe` that reports `(deleted)` because the package was upgraded mid-run, an environment that `sudo` rewrote — each produces a failure in a process the user did not start and cannot inspect from the command line.
-- **What an attacker gains:** in the setuid form, everything: a local user runs the write phase, and the plan they supply is validated only by code they can read and probe. In the non-setuid form, nothing beyond Option A, at the cost of a second code path.
-- **Testable:** partly. The non-setuid paths are testable; the setuid path needs a container with a setuid install step, and the interesting failures (deleted exe, environment rewrite) are the ones that are hardest to reproduce deterministically.
+- **Buys:** one command for the user.
+  A minimal environment makes A2 explicit rather than inherited.
+  A token makes a stale or replayed invocation fail.
+- **Costs:** the privilege still has to come from somewhere.
+  Without `sudo` inside the program and without a setuid bit, the re-exec runs at the same uid as the parent, so
+  nothing is gained; with the setuid bit, the audit surface is a setuid root binary that reads a plan from an
+  unprivileged writer.
+  That combination is the classic local-root pattern, and the token does not change it: a token the unprivileged
+  caller generates is not a MAC, and if the root phase generates it, the caller never sees it.
+  So Option B is either Option A with extra machinery or a setuid binary.
+- **How it fails:** opaquely, which is the worse problem.
+  A re-exec under an unexpected uid, a `/proc/self/exe` that reports `(deleted)` because the package was upgraded
+  mid-run, an environment that `sudo` rewrote — each produces a failure in a process the user did not start and cannot
+  inspect from the command line.
+- **What an attacker gains:** in the setuid form, everything: a local user runs the write phase, and the plan they
+  supply is validated only by code they can read and probe.
+  In the non-setuid form, nothing beyond Option A, at the cost of a second code path.
+- **Testable:** partly.
+  The non-setuid paths are testable; the setuid path needs a container with a setuid install step, and the interesting
+  failures (deleted exe, environment rewrite) are the ones that are hardest to reproduce deterministically.
 
 ### 4.4 Deferred — privileged helper process spawned once with a validated plan
 
-The root-run process spawns one child (or ships one second binary) that owns every privileged operation and links nothing but `std`.
+The root-run process spawns one child (or ships one second binary) that owns every privileged operation and links
+  nothing but `std`.
 
 Two forms, and only one is compatible with the ruling:
-- **C-spawned-by-root:** the user runs the write mode as root; it forks a child that reads the plan from a pipe and performs the writes. If the second binary is separate, it contains no `ureq`, no `gpgv` spawn, no TUI, no DNS — the privileged image is a few hundred lines and its interface is a byte schema. Out for v1: this is not an option held in reserve, and reintroducing it is a new product decision by the user (4.6, G3).
-- **C-setuid-helper:** the unprivileged parent spawns a setuid helper. Same rejection as Option B: it manufactures privilege from an unprivileged caller.
+- **C-spawned-by-root:** the user runs the write mode as root; it forks a child that reads the plan from a pipe and
+  performs the writes.
+  If the second binary is separate, it contains no `ureq`, no `gpgv` spawn, no TUI, no DNS — the privileged image is a
+  few hundred lines and its interface is a byte schema.
+  Out for v1: this is not an option held in reserve, and reintroducing it is a new product decision by the user (4.6,
+  G3).
+- **C-setuid-helper:** the unprivileged parent spawns a setuid helper.
+  Same rejection as Option B: it manufactures privilege from an unprivileged caller.
 
-- **Buys:** structural isolation that a reviewer can see in the dependency graph rather than having to trust a discipline. The interface between the two halves is enforced by the OS, and the privileged binary's "does not make network requests" claim becomes checkable (`cargo tree` on a two-crate workspace) instead of checkable-by-grep.
-- **Costs:** a second binary in the package layout (`scripts/build-deb.sh`, whose staging is the one builder the release workflow calls) and in the release tarball, a workspace split or a feature-gated second `[[bin]]`, and two artifacts to keep in version lockstep (the plan carries a format version for that reason). It also doubles the amount of packaging and release surface tested before D9.
-- **How it fails:** like Option A, plus one new failure: a version skew between the two binaries. Mitigated by requiring an exact plan-format version match and refusing otherwise.
+- **Buys:** structural isolation that a reviewer can see in the dependency graph rather than having to trust a
+  discipline.
+  The interface between the two halves is enforced by the OS, and the privileged binary's "does not make network
+  requests" claim becomes checkable (`cargo tree` on a two-crate workspace) instead of checkable-by-grep.
+- **Costs:** a second binary in the package layout (`scripts/build-deb.sh`, whose staging is the one builder the
+  release workflow calls) and in the release tarball, a workspace split or a feature-gated second `[[bin]]`, and two
+  artifacts to keep in version lockstep (the plan carries a format version for that reason).
+  It also doubles the amount of packaging and release surface tested before D9.
+- **How it fails:** like Option A, plus one new failure: a version skew between the two binaries.
+  Mitigated by requiring an exact plan-format version match and refusing otherwise.
 - **What an attacker gains:** nothing beyond Option A. The helper is reachable only from root.
-- **Testable:** fully, in the same containers; the container test must additionally assert that the privileged binary contains no network-capable dependency, which is a stronger and cheaper claim to verify than a grep review.
+- **Testable:** fully, in the same containers; the container test must additionally assert that the privileged binary
+  contains no network-capable dependency, which is a stronger and cheaper claim to verify than a grep review.
 
 ### 4.5 Ruling and reason
 
-**Option A. DECIDED 2026-11-12 by the user (via the parent orchestrator). The writer is one binary and one code path, and a split into a separate privileged artifact is out of scope for v1 (4.6, G3).** Specifically: no self-reexec anywhere in the codebase; a non-root run writes nothing, exits 3 and prints the `sudo` line; the write validates the plan it built against the closed target enumeration and the on-disk digests, verifies the mirror's `InRelease`, and only then writes, and the write itself makes no network request, runs no external process, invokes no shell, and resolves no command through `PATH`. Amended 2026-11-12 by the user (via the parent orchestrator) with the final CLI ruling: the two-step plan split flags are removed from the product (7.2) because the feature is one action, and the plan is internal (section 5). The option choice itself — no self-reexec, one binary — is unchanged.
+**Option A.
+  DECIDED 2026-11-12 by the user (via the parent orchestrator).
+  The writer is one binary and one code path, and a split into a separate privileged artifact is out of scope for v1
+  (4.6, G3).** Specifically: no self-reexec anywhere in the codebase; a non-root run writes nothing, exits 3 and
+  prints the `sudo` line; the write validates the plan it built against the closed target enumeration and the on-disk
+  digests, verifies the mirror's `InRelease`, and only then writes, and the write itself makes no network request,
+  runs no external process, invokes no shell, and resolves no command through `PATH`.
+  Amended 2026-11-12 by the user (via the parent orchestrator) with the final CLI ruling: the two-step plan split
+  flags are removed from the product (7.2) because the feature is one action, and the plan is internal (section 5).
+  The option choice itself — no self-reexec, one binary — is unchanged.
 
 Reasoning, in order of weight:
-1. It is the only option that provides privilege without manufacturing it. Options B and C do not give the program anything the user's own `sudo` does not, and they add code that pretends to.
-2. The security property that matters is not "a second process" but "validated bytes over a disk state that still matches". A two-process split would buy isolation of *code*, not of *authority*, and it costs a plan format, a transport and a producer rule — three mechanisms that exist only because a plan crosses a boundary.
-3. Fewer concepts: one binary, one code path, one validation, one test matrix. A split's wire format, decoder and producer metadata exist to solve a problem the one-process design does not have.
-4. Testability: the refusal, the validation and the write are all reachable from a container command line, with no setuid install step and no nested privilege transition to reason about.
+1. It is the only option that provides privilege without manufacturing it.
+   Options B and C do not give the program anything the user's own `sudo` does not, and they add code that pretends
+   to.
+2. The security property that matters is not "a second process" but "validated bytes over a disk state that still
+   matches".
+   A two-process split would buy isolation of *code*, not of *authority*, and it costs a plan format, a transport and
+   a producer rule — three mechanisms that exist only because a plan crosses a boundary.
+3. Fewer concepts: one binary, one code path, one validation, one test matrix.
+   A split's wire format, decoder and producer metadata exist to solve a problem the one-process design does not have.
+4. Testability: the refusal, the validation and the write are all reachable from a container command line, with no
+   setuid install step and no nested privilege transition to reason about.
 
 ### 4.6 One binary, and the triggers that remain
 
-- **One binary — decided, not a threshold.** The program is one binary: the writer is one code path in the same executable, and a separate privileged artifact is out of scope for v1. Nothing in this record reopens that — not a size measurement, not the shape of `src/apply.rs`, not a code review finding (G3). A future split of the write path into a second artifact or a second process would be a new product decision taken by the user, with the threat model 4.4 describes; it is not something a threshold triggers and not a decision an agent may take, summarize or argue from a line count.
-- **The user-facing cost was settled on 2026-11-12 by the user.** The workflow is one command, `sudo apt-scout`; the networked discovery runs in that root process, and `SPEC.md` Privilege boundary states it plainly instead of presenting a split as equivalent. A two-process split stays future work (4.4); the record keeps the analysis, not a flag.
-- If a future distribution requirement forces a setuid or polkit integration (a GUI, or a non-terminal apply), the analysis in 4.3 and 4.4 applies unchanged: that path needs its own threat model and its own D6e-equivalent decision. It is out of scope for v1, which is a terminal tool.
-- If a future requirement brings a split back (4.4), the transport question returns with it. There is no transport today: 7.2 records why.
+- **One binary — decided, not a threshold.** The program is one binary: the writer is one code path in the same
+  executable, and a separate privileged artifact is out of scope for v1.
+  Nothing in this record reopens that — not a size measurement, not the shape of `src/apply.rs`, not a code review
+  finding (G3).
+  A future split of the write path into a second artifact or a second process would be a new product decision taken by
+  the user, with the threat model 4.4 describes; it is not something a threshold triggers and not a decision an agent
+  may take, summarize or argue from a line count.
+- **The user-facing cost was settled on 2026-11-12 by the user.** The workflow is one command, `sudo apt-scout`; the
+  networked discovery runs in that root process, and `SPEC.md` Privilege boundary states it plainly instead of
+  presenting a split as equivalent.
+  A two-process split stays future work (4.4); the record keeps the analysis, not a flag.
+- If a future distribution requirement forces a setuid or polkit integration (a GUI, or a non-terminal apply), the
+  analysis in 4.3 and 4.4 applies unchanged: that path needs its own threat model and its own D6e-equivalent decision.
+  It is out of scope for v1, which is a terminal tool.
+- If a future requirement brings a split back (4.4), the transport question returns with it.
+  There is no transport today: 7.2 records why.
 
 ## 5. Write validation (in-process)
 
-The program is one process and one code path. Discovery, verification, ranking, rewrite planning and the confirmation produce a plan in memory; the plan is validated against the closed target enumeration and the current on-disk state; only then does the first byte change. No plan leaves the process, so there is no wire format to decode, no producer metadata to check and no transport to secure: 7.2, 7.3 and 7.9 are removed with that boundary.
+The program is one process and one code path.
+  Discovery, verification, ranking, rewrite planning and the confirmation produce a plan in memory; the plan is
+  validated against the closed target enumeration and the current on-disk state; only then does the first byte change.
+  No plan leaves the process, so there is no wire format to decode, no producer metadata to check and no transport to
+  secure: 7.2, 7.3 and 7.9 are removed with that boundary.
 
 What the write validates before its first byte, and why each check exists:
 
-- **Targets come from a closed enumeration.** `Target` is `SourcesList` or `SourcesListD(FileName)` (`src/plan.rs:58`), and `FileName` is validated by `SourceName::parse` against `^[A-Za-z0-9._-]{1,64}$` plus `.list`/`.sources` (`src/plan.rs:70`), so no path string can name anything outside `/etc/apt` and no prefix comparison has to be trusted; `Target::parse` accepts those two spellings and nothing else (`src/plan.rs:93`). S3, S11.
-- **Each target is re-checked at open time.** `capture` re-reads every target through `read_state` (`src/apply.rs:467`, `src/apply.rs:1060`) and `check_one` refuses it (`src/apply.rs:538`): a regular file after `symlink_metadata`, never a symlink; mode, owner and the digest of the bytes the plan was computed from are re-read on the opened handle and compared. Any difference aborts before the first write, and `remove_one` re-runs the same check immediately before its `unlink` (B2, B8, S5, S6).
-- **Every byte is digest-bound.** `Plan` carries each write's bytes with the digest that describes them (`src/plan.rs:134`), and `validate` recomputes the SHA-256 of the new content and refuses unless it matches (`src/plan.rs:195`); no byte reaches a target on a digest that disagrees. S15.
-- **Freshness is a value, not a boolean.** `check_freshness` takes the write's `VerifiedDate` (`src/apply.rs:390`), which only `verify::region_date` mints, from the bytes `gpgv` accepted (`src/verify.rs:115`), and which reaches the writer through `Probed.verified_updates` (`src/fresh.rs:175`), for the selected mirror's `-updates` `InRelease` and for the write baseline (3.9, 3.10). If verification is unavailable, the write fails closed, and a restore plan — which carries no mirror at all — is not held against a baseline. S15.
-- **Creation is planned, never incidental.** `create_one` is reached only from the plan's create record (`src/apply.rs:899`, `src/apply.rs:852`): `create_new` is accepted only for `SourcesListD("system-security.sources")` on Pop!_OS, with mode 0600, and `EEXIST` aborts with nothing written (7.8, S17).
-- **The order is fixed:** validate every file, back up every file, then change them in three phases — every creation first, every replacement next, every removal last — each atomically (temp file in the same directory, fsync, rename). The call order is `run` (`src/apply.rs:356`) into `backup` (`src/apply.rs:586`) and then `write_targets` (`src/apply.rs:846`), which lands each target through `create_one` (`src/apply.rs:899`), `create_temp` (`src/apply.rs:989`) with `replace_one` (`src/apply.rs:965`), and `sync_dir` (`src/apply.rs:1130`). The **removal phase** is the last one, and it is the only phase that destroys a path: `remove_one` (`src/apply.rs:884`) re-runs `check_one` (`src/apply.rs:538`) immediately before its `unlink` (`src/apply.rs:886`), because `unlink` by path cannot compare dev and ino for itself, so a target substituted after the pre-write sweep is refused rather than removed and every replaceable byte has landed before anything is destroyed. A backup failure aborts before the first write, and no target is left half-written. **A removal is authorized by a backup and never by a mirror:** `validate` refuses any write whose effect is a removal unless the plan's authority is `Authority::Restore` (`src/plan.rs:227`), because a removal is the one effect a restore can prove from the manifest it re-derived the plan from — the `create` record it is undoing — and a mirror plan never carries one. S8, S17.
-- **The write performs no network request of its own, spawns no process, invokes no shell, resolves no command through `PATH`, and reads no environment variable.** The write path's whole import block is `src/apply.rs:10–20` — std file, io, unix fs and path, plus `crate::digest`, `crate::fresh`, `crate::manifest`, `crate::plan` and `crate::verify`: no `crate::http`, no `ureq`, no `std::process::Command`. `rg -n 'crate::http|ureq|process::Command|env::' src/apply.rs src/plan.rs src/manifest.rs src/digest.rs` prints exactly one line, and that line's number is greater than the number `rg -n 'mod tests' src/apply.rs` prints — so the one match is inside the test module (`src/apply.rs:1194`, below `src/apply.rs:1166`) and no line of the write path above it matches, which is what makes the sentence true and stays true however long the file grows. S14 is the test for it and has no case in the `scripts/docker-test.sh` matrix yet; what the matrix does hold is that every write case starts through `wrun` (`scripts/docker-test.sh:119`), a container with `--network none`, one read-only binary mount and no other mount — a property of the container, not a proof of the absence. Verification runs earlier in the same run through the fixed `/usr/bin/gpgv` with a cleared environment (D6c, docs/spec/non-functional.md).
+- **Targets come from a closed enumeration.** `Target` is `SourcesList` or `SourcesListD(FileName)`
+  (`src/plan.rs:58`), and `FileName` is validated by `SourceName::parse` against `^[A-Za-z0-9._-]{1,64}$` plus
+  `.list`/`.sources` (`src/plan.rs:70`), so no path string can name anything outside `/etc/apt` and no prefix
+  comparison has to be trusted; `Target::parse` accepts those two spellings and nothing else (`src/plan.rs:93`).
+  S3, S11.
+- **Each target is re-checked at open time.** `capture` re-reads every target through `read_state`
+  (`src/apply.rs:467`, `src/apply.rs:1060`) and `check_one` refuses it (`src/apply.rs:538`): a regular file after
+  `symlink_metadata`, never a symlink; mode, owner and the digest of the bytes the plan was computed from are re-read
+  on the opened handle and compared.
+  Any difference aborts before the first write, and `remove_one` re-runs the same check immediately before its
+  `unlink` (B2, B8, S5, S6).
+- **Every byte is digest-bound.** `Plan` carries each write's bytes with the digest that describes them
+  (`src/plan.rs:134`), and `validate` recomputes the SHA-256 of the new content and refuses unless it matches
+  (`src/plan.rs:195`); no byte reaches a target on a digest that disagrees.
+  S15.
+- **Freshness is a value, not a boolean.** `check_freshness` takes the write's `VerifiedDate` (`src/apply.rs:390`),
+  which only `verify::region_date` mints, from the bytes `gpgv` accepted (`src/verify.rs:115`), and which reaches the
+  writer through `Probed.verified_updates` (`src/fresh.rs:175`), for the selected mirror's `-updates` `InRelease` and
+  for the write baseline (3.9, 3.10).
+  If verification is unavailable, the write fails closed, and a restore plan — which carries no mirror at all — is not
+  held against a baseline.
+  S15.
+- **Creation is planned, never incidental.** `create_one` is reached only from the plan's create record
+  (`src/apply.rs:899`, `src/apply.rs:852`): `create_new` is accepted only for
+  `SourcesListD("system-security.sources")` on Pop!_OS, with mode 0600, and `EEXIST` aborts with nothing written (7.8,
+  S17).
+- **The order is fixed:** validate every file, back up every file, then change them in three phases — every creation
+  first, every replacement next, every removal last — each atomically (temp file in the same directory, fsync,
+  rename).
+  The call order is `run` (`src/apply.rs:356`) into `backup` (`src/apply.rs:586`) and then `write_targets`
+  (`src/apply.rs:846`), which lands each target through `create_one` (`src/apply.rs:899`), `create_temp`
+  (`src/apply.rs:989`) with `replace_one` (`src/apply.rs:965`), and `sync_dir` (`src/apply.rs:1130`).
+  The **removal phase** is the last one, and it is the only phase that destroys a path: `remove_one`
+  (`src/apply.rs:884`) re-runs `check_one` (`src/apply.rs:538`) immediately before its `unlink` (`src/apply.rs:886`),
+  because `unlink` by path cannot compare dev and ino for itself, so a target substituted after the pre-write sweep is
+  refused rather than removed and every replaceable byte has landed before anything is destroyed.
+  A backup failure aborts before the first write, and no target is left half-written.
+  **A removal is authorized by a backup and never by a mirror:** `validate` refuses any write whose effect is a
+  removal unless the plan's authority is `Authority::Restore` (`src/plan.rs:227`), because a removal is the one effect
+  a restore can prove from the manifest it re-derived the plan from — the `create` record it is undoing — and a mirror
+  plan never carries one.
+  S8, S17.
+- **The write performs no network request of its own, spawns no process, invokes no shell, resolves no command through
+  `PATH`, and reads no environment variable.** The write path's whole import block is `src/apply.rs:10–20` — std file,
+  io, unix fs and path, plus `crate::digest`, `crate::fresh`, `crate::manifest`, `crate::plan` and `crate::verify`: no
+  `crate::http`, no `ureq`, no `std::process::Command`.
+  `rg -n 'crate::http|ureq|process::Command|env::' src/apply.rs src/plan.rs src/manifest.rs src/digest.rs` prints
+  exactly one line, and that line's number is greater than the number `rg -n 'mod tests' src/apply.rs` prints — so the
+  one match is inside the test module (`src/apply.rs:1194`, below `src/apply.rs:1166`) and no line of the write path
+  above it matches, which is what makes the sentence true and stays true however long the file grows.
+  S14 is the test for it and has no case in the `scripts/docker-test.sh` matrix yet; what the matrix does hold is that
+  every write case starts through `wrun` (`scripts/docker-test.sh:119`), a container with `--network none`, one
+  read-only binary mount and no other mount — a property of the container, not a proof of the absence.
+  Verification runs earlier in the same run through the fixed `/usr/bin/gpgv` with a cleared environment (D6c,
+  docs/spec/non-functional.md).
 
-**`--restore` reaches the restore reader, and the flags that would run the mirror pipeline are refused before it.** The derive is `restore::build` (`src/restore.rs:71`), which calls `build_as` (`src/restore.rs:80`) — the only place a restore plan comes from — and the write is `restore::run` (`src/restore.rs:123`), which is handed that plan and writes it, so no step between the prompt and the write re-derives one. It requires root, refuses a backup root that is missing, a symlink, not a directory, not uid 0 or not mode 0700 (`src/restore.rs:154`, `src/restore.rs:168`), takes the greatest id under that root and refuses an id-shaped name whose entry is not a plain directory (`src/restore.rs:201`), and then opens `/var/backups/apt-scout/<id>/MANIFEST` at a path it builds itself. The manifest is refused before a byte of it is parsed unless the `lstat` and the opened handle both carry a regular file owned by uid 0 and gid 0 in mode 0600 that is not a symlink (`src/restore.rs:241`, `src/restore.rs:278`), the handle is the same inode the `lstat` named (`src/restore.rs:321`), the read is capped at the manifest format's own limit, and the id the manifest names is the directory it sits in. Only then is the target set re-derived from the manifest, one record at a time (`src/restore.rs:357`): a `replace` record needs its copy at `<id>/<relative path>` with a matching digest, mode and owner and a regular non-symlink target on disk whose mode and owner are the record's, and a `create` record needs the file on disk to match the digest, mode and owner the run created it with and becomes a removal. The first disagreement refuses the whole restore, so the manifest is the source of truth for what is restored and a stale or partial one cannot restore a subset of the backup (G1, 7.7, B5, S4, S10). **The authority of that plan is its backup, not a verified baseline.** `Plan::for_restore` takes a `ValidatedBackup` — a token whose field is private to `src/restore.rs` and which only `build_as` mints (`src/plan.rs:180`, `src/restore.rs:34`) — and carries it as `Authority::Restore` (`src/plan.rs:54`), so no caller can mint a restore authority from a bare `BackupId` and skip the manifest, the copies and the disk. `check_freshness` returns on that arm alone (`src/apply.rs:396`), because a restore has no mirror to hold against a baseline and nothing to compare it with.
+**`--restore` reaches the restore reader, and the flags that would run the mirror pipeline are refused before it.**
+  The derive is `restore::build` (`src/restore.rs:71`), which calls `build_as` (`src/restore.rs:80`) — the only place
+  a restore plan comes from — and the write is `restore::run` (`src/restore.rs:123`), which is handed that plan and
+  writes it, so no step between the prompt and the write re-derives one.
+  It requires root, refuses a backup root that is missing, a symlink, not a directory, not uid 0 or not mode 0700
+  (`src/restore.rs:154`, `src/restore.rs:168`), takes the greatest id under that root and refuses an id-shaped name
+  whose entry is not a plain directory (`src/restore.rs:201`), and then opens `/var/backups/apt-scout/<id>/MANIFEST`
+  at a path it builds itself.
+  The manifest is refused before a byte of it is parsed unless the `lstat` and the opened handle both carry a regular
+  file owned by uid 0 and gid 0 in mode 0600 that is not a symlink (`src/restore.rs:241`, `src/restore.rs:278`), the
+  handle is the same inode the `lstat` named (`src/restore.rs:321`), the read is capped at the manifest format's own
+  limit, and the id the manifest names is the directory it sits in.
+  Only then is the target set re-derived from the manifest, one record at a time (`src/restore.rs:357`): a `replace`
+  record needs its copy at `<id>/<relative path>` with a matching digest, mode and owner and a regular non-symlink
+  target on disk whose mode and owner are the record's, and a `create` record needs the file on disk to match the
+  digest, mode and owner the run created it with and becomes a removal.
+  The first disagreement refuses the whole restore, so the manifest is the source of truth for what is restored and a
+  stale or partial one cannot restore a subset of the backup (G1, 7.7, B5, S4, S10).
+  **The authority of that plan is its backup, not a verified baseline.** `Plan::for_restore` takes a `ValidatedBackup`
+  — a token whose field is private to `src/restore.rs` and which only `build_as` mints (`src/plan.rs:180`,
+  `src/restore.rs:34`) — and carries it as `Authority::Restore` (`src/plan.rs:54`), so no caller can mint a restore
+  authority from a bare `BackupId` and skip the manifest, the copies and the disk.
+  `check_freshness` returns on that arm alone (`src/apply.rs:396`), because a restore has no mirror to hold against a
+  baseline and nothing to compare it with.
 
-Why the validation stays even though the plan is internal: it is the only thing that makes "the bytes I confirmed are the bytes written" true against a hostile local user (a last-moment substitution, a symlinked target) and against a forged or stale mirror date. Re-reading `/etc/apt` and acting without comparing to the plan would reopen all three; comparing closes them with one mechanism, and it keeps the property checkable without trusting the discovery phase.
+Why the validation stays even though the plan is internal: it is the only thing that makes "the bytes I confirmed
+  are the bytes written" true against a hostile local user (a last-moment substitution, a symlinked target) and
+  against a forged or stale mirror date.
+  Re-reading `/etc/apt` and acting without comparing to the plan would reopen all three; comparing closes them with
+  one mechanism, and it keeps the property checkable without trusting the discovery phase.
 
 ## 6. Security acceptance tests for the write path
 
-What the merged container matrix covers, and what it does not. `scripts/docker-test.sh` binds these S-IDs: S16 to W1/W2/W3, the non-root half of S1 to W5, S5 to W6/W7/W8, S6 to W9, S7 to W10, S8 to W11, S9 to W12/W13/W14, S11 to W15, S15 to W16/W17/W18/W19, and S17 to W20/W21; W22 is the positive path; W4 is the harness self-test. Neither carries an S-ID. S3 runs as the `src/plan.rs` unit tests rather than a container case, and S2 is removed (7.2). S10 is W27 (byte-exact rollback after a real write, the created file removed) and W28 (a second restore refused by the record-versus-disk rule); the non-root half of a restore is W29, the two tamper cases are W30 (a copy whose digest the manifest does not carry) and W31 (a target replaced behind the backup's back), and the interactive half is W32 (a newer valid backup is landed after the prompt is printed but before `y` is answered, and the written bytes are the printed plan's, not the newer backup's) and W33 (answered `n`, which writes nothing and exits 0). S4 and S11's manifest half stay unit tests in `src/restore.rs`, because a container cannot hand the parser a manifest its own format refuses; their runtime refusals are the same `restore::build` the container cases reach. S12, S13 and S14 have no case at all. Wiring the writer into the CLI arrived with D11a (PR #43): `src/main.rs:2517` is the write mode and `src/main.rs:2535` is the call, with the non-root half of the same decision returning 3 one arm earlier (`src/main.rs:2510–2515`). The root half of S1 has no case under its own ID; the ordering it asserts, validation before the first write, is what W9 (S6) shows by pausing the run between the two. The milestone audit that checks this list against the matrix is D12's.
+What the merged container matrix covers, and what it does not.
+  `scripts/docker-test.sh` binds these S-IDs: S16 to W1/W2/W3, the non-root half of S1 to W5, S5 to W6/W7/W8, S6 to
+  W9, S7 to W10, S8 to W11, S9 to W12/W13/W14, S11 to W15, S15 to W16/W17/W18/W19, and S17 to W20/W21; W22 is the
+  positive path; W4 is the harness self-test.
+  Neither carries an S-ID.
+  S3 runs as the `src/plan.rs` unit tests rather than a container case, and S2 is removed (7.2).
+  S10 is W27 (byte-exact rollback after a real write, the created file removed) and W28 (a second restore refused by
+  the record-versus-disk rule); the non-root half of a restore is W29, the two tamper cases are W30 (a copy whose
+  digest the manifest does not carry) and W31 (a target replaced behind the backup's back), and the interactive half
+  is W32 (a newer valid backup is landed after the prompt is printed but before `y` is answered, and the written bytes
+  are the printed plan's, not the newer backup's) and W33 (answered `n`, which writes nothing and exits 0).
+  S4 and S11's manifest half stay unit tests in `src/restore.rs`, because a container cannot hand the parser a
+  manifest its own format refuses; their runtime refusals are the same `restore::build` the container cases reach.
+  S12, S13 and S14 have no case at all.
+  Wiring the writer into the CLI arrived with D11a (PR #43): `src/main.rs:2517` is the write mode and
+  `src/main.rs:2535` is the call, with the non-root half of the same decision returning 3 one arm earlier
+  (`src/main.rs:2510–2515`).
+  The root half of S1 has no case under its own ID; the ordering it asserts, validation before the first write, is
+  what W9 (S6) shows by pausing the run between the two.
+  The milestone audit that checks this list against the matrix is D12's.
 
-Checklist for a human reviewer. Every case that exists runs in a disposable Ubuntu container whose own `/etc/apt` is the isolated fixture, with `--network none` where the case permits; S3 is the exception and runs as a unit test, and no case may touch a host path. "Fails when" describes the assertion, so a reviewer can check the test is real.
+Checklist for a human reviewer.
+  Every case that exists runs in a disposable Ubuntu container whose own `/etc/apt` is the isolated fixture, with
+  `--network none` where the case permits; S3 is the exception and runs as a unit test, and no case may touch a host
+  path.
+  "Fails when" describes the assertion, so a reviewer can check the test is real.
 
-**Every evidence command here asserts its own output, and every `path:line` citation names a definition.** A command in this record prints the thing it claims — a count, an exact line, a relation between two outputs — so that a reader never has to hold its output up against a sentence; where the figure is what drifts when a file above it grows, the command asserts a relation instead, which is why section 5's no-network bullet no longer quotes a line number but requires one match *and* requires that match to sit below the module `rg -n 'mod tests' src/apply.rs` names. A citation is held to the same rule from the other side: it names the `fn`, the `const` or the match arm the sentence is about, never a range that merely contains it, and never the line whose behaviour the citation is being used to prove — a sentence that cites itself as its own witness proves nothing. A later PR re-checks both with the loop that prints every citation in this record beside the line it lands on, both ends of a range included — `rg -o '[A-Za-z0-9_./-]+\.(rs|sh|md|yml|toml):[0-9]+([–-][0-9]+)?' docs/threat-model.md | sort -u | while IFS=: read -r f r; do printf '%s\n' "$r" | sed 's/[–-]/\n/g' | while read -r n; do printf '%s:%s\t%s\n' "$f" "$n" "$(sed -n "${n}p" "$f" 2>&1)"; done; done` — and fixes the pair where they disagree; the loop makes the drift visible in one screen, and the judgement of whether a line is the named definition stays with the reviewer. The pattern names every file class this record cites — `src/*.rs`, `scripts/docker-test.sh`, `AGENTS.md` and `docs/AGENTS.md` — and `sed 's/[–-]/\n/g'` splits a range so both of its ends are printed rather than the first alone. `printf '%s\n'` rather than `printf '%s'` is what lets a citation of one line print at all: `read` returns non-zero at an end of stream that carries no newline and its loop body never runs, which is how a loop that looks right prints only the first end of every range and nothing else. A landing on a line that is empty, or past the file's end, prints an empty second column, and a citation whose file is gone prints `sed`'s error there, so both are visible rather than silent.
+**Every evidence command here asserts its own output, and every `path:line` citation names a definition.** A command
+  in this record prints the thing it claims — a count, an exact line, a relation between two outputs — so that a
+  reader never has to hold its output up against a sentence; where the figure is what drifts when a file above it
+  grows, the command asserts a relation instead, which is why section 5's no-network bullet no longer quotes a line
+  number but requires one match *and* requires that match to sit below the module `rg -n 'mod tests' src/apply.rs`
+  names.
+  A citation is held to the same rule from the other side: it names the `fn`, the `const` or the match arm the
+  sentence is about, never a range that merely contains it, and never the line whose behaviour the citation is being
+  used to prove — a sentence that cites itself as its own witness proves nothing.
+  A later PR re-checks both with the loop that prints every citation in this record beside the line it lands on, both
+  ends of a range included —
+  `rg -o '[A-Za-z0-9_./-]+\.(rs|sh|md|yml|toml):[0-9]+([–-][0-9]+)?' docs/threat-model.md | sort -u | while IFS=: read -r f r; do printf '%s\n' "$r" | sed 's/[–-]/\n/g' | while read -r n; do printf '%s:%s\t%s\n' "$f" "$n" "$(sed -n "${n}p" "$f" 2>&1)"; done; done`
+  — and fixes the pair where they disagree; the loop makes the drift visible in one screen, and the judgement of
+  whether a line is the named definition stays with the reviewer.
+  The pattern names every file class this record cites — `src/*.rs`, `scripts/docker-test.sh`, `AGENTS.md` and
+  `docs/AGENTS.md` — and `sed 's/[–-]/\n/g'` splits a range so both of its ends are printed rather than the first
+  alone.
+  `printf '%s\n'` rather than `printf '%s'` is what lets a citation of one line print at all: `read` returns non-zero
+  at an end of stream that carries no newline and its loop body never runs, which is how a loop that looks right
+  prints only the first end of every range and nothing else.
+  A landing on a line that is empty, or past the file's end, prints an empty second column, and a citation whose file
+  is gone prints `sed`'s error there, so both are visible rather than silent.
 
-`docs/AGENTS.md` Local Contracts permits a `path:line` citation to age (`docs/AGENTS.md:19`). This record does not take that permission, which makes the rule above a stricter local practice rather than a reading of the contract: a privilege-boundary record whose evidence may drift silently from the function it names is not a claim about the code, so every citation in this file is held to "names a definition" and an aged one here is a defect in this file. Narrowing the contract sentence itself is an `AGENTS.md` change, which belongs to a human `chore:` PR and not to this record.
+`docs/AGENTS.md` Local Contracts permits a `path:line` citation to age (`docs/AGENTS.md:19`).
+  This record does not take that permission, which makes the rule above a stricter local practice rather than a
+  reading of the contract: a privilege-boundary record whose evidence may drift silently from the function it names is
+  not a claim about the code, so every citation in this file is held to "names a definition" and an aged one here is a
+  defect in this file.
+  Narrowing the contract sentence itself is an `AGENTS.md` change, which belongs to a human `chore:` PR and not to
+  this record.
 
-- **S1 — a non-root run never writes, and a root run validates before it writes.** As uid 1000: exit 3, no file opened for writing, and the message names `sudo apt-scout` with the flags of the run. As root, with a target changed between validation and the open (test hook): exit 1, nothing written, and every `/etc/apt` target digest is identical before and after. *Fails when* the non-root run writes anything or exits 0/1, omits the `sudo` line, or a root run writes before passing the validation.
-- **S2 — removed 2026-11-12.** It asserted that the root phase refuses empty, truncated or bad-magic plan input over stdin. No plan crosses a process boundary any more, so there is no decoder to test (7.2); the in-process checks are covered by S1, S3, S6 and S11.
-- **S3 — Target enumeration and plan-field hostility.** The plan is built inside the program, so the test drives the validation layer directly instead of a decoding fixture: a target name outside `^[A-Za-z0-9._-]{1,64}$` or not `.list`/`.sources`, `..` and absolute names, a `create_new` target other than `system-security.sources`, `create_new == false` on a file that does not exist, a target that is not a regular file after resolution, and a content digest that does not match the bytes to be written. Every one is refused before any open, with nothing written. *Fails when* one is accepted or produces a path outside `/etc/apt` or outside `/var/backups/apt-scout/<id>/`.
-- **S4 — Path traversal in the manifest (`--restore`, D10 scope).** A manifest naming `/etc/shadow`, `../sources.list`, `sources.list.d/../../etc/passwd`, a tuple of `/etc/apt/sources.list` as a symlink, or an absolute path: refused, nothing read, nothing written. *Fails when* the path resolution is done by string prefix alone — prove it by including `/etc/apt/../etc/shadow` and `/etc/aptx/sources.list`.
-- **S5 — Symlink target.** `sources.list` and each `.list`/`.sources` are replaced by symlinks to a canary outside `/etc/apt`; and `sources.list.d` itself is a symlink to an attacker directory. Each case: refused with the reason, canary unchanged. *Fails when* the write follows the link.
-- **S6 — TOCTOU substitution.** With the plan validated, replace a target between validation and write (test hook: a variant that pauses after validation). Expected: write aborts on the dev/ino or digest mismatch, target unchanged. *Fails when* the write proceeds on the substituted inode.
-- **S7 — `:ro` → `:rw` mount.** Run the write against `/etc/apt` mounted read-only: exit 1 with the OS error verbatim, no temp file left behind, backup directory either absent or untouched, and a second run does not treat the leftover as a backup. The read-only root is the container's own rootfs and not a bind mount: W10 runs it through `wro`, which adds `--read-only --tmpfs /tmp` to `wrun` (`scripts/docker-test.sh:123`), against a fixture image frozen by `wfixture` because no setup can run against that rootfs (`scripts/docker-test.sh:127`), with `--tmpfs /var/backups` so the backup phase completes into the tmpfs and the write phase meets `EROFS` at its first temp file (`scripts/docker-test.sh:451–455`). *Fails when* the error is swallowed or a temp file survives.
-- **S8 — Backup failure aborts before any write.** Make the backup directory or the timestamp directory unwritable (mode 0500) and make the first backup write fail; assert the order by digesting every target before and after: all identical, and the program's output names which file failed. *Fails when* one target changed.
-- **S9 — Pre-created backup directory.** `/var/backups/apt-scout` owned by uid 1000 or mode 0777 or a symlink: hard abort with the reason, nothing written inside it. *Fails when* `create_dir_all` semantics let it through (the old self-heal rule allowed this; docs/spec/errors.md now requires the abort).
-- **S10 — Rollback.** Apply succeeds, then `--restore` from the newest backup: every file byte-identical to the pre-apply fixture (`cmp`, mode, uid/gid), including removal of `system-security.sources` on Pop!_OS. *Fails when* any byte, mode, or owner differs, or the created file survives.
-- **S11 — Rejection of paths outside `/etc/apt`.** A target name that would resolve outside the two roots, plus a `--restore` manifest pointing at `/usr/bin/gpgv`: exit 1, message names the offending path, no open for write. *Fails when* the write opens any path outside the closed enum's two roots.
-- **S12 — Hostile `PATH`/`HOME`/`TMPDIR`.** Run the write with `PATH=/tmp/evil`, `HOME=/tmp/evil`, `TMPDIR=/tmp/evil-world-writable`, each containing a fake `gpgv`, a fake `sudo`, and a `.gnupg` directory; assert no `/tmp/evil/*` binary is executed (verified by the fake binaries creating a marker) and that verification results come from the plan, not from a re-run. *Fails when* any marker appears or any `TMPDIR`-derived path is used by the root run.
-- **S13 — Environment not inherited.** Start the write with a `sudo -E`-style environment (`APT_CONFIG`, `LD_PRELOAD`, `TMPDIR`): all ignored, and the write performs the same file operations it would with a clean environment. *Fails when* any of them changes which targets are written or which bytes are used.
-- **S14 — the write makes no network request and spawns no external process.** With `--network none` once the validation layer is reached, and a `strace`-free check: complete a write and assert it opens no socket and spawns nothing. Then re-run with `/usr/bin/gpgv` removed after verification has already happened (test hook) and assert the write still succeeds. *Fails when* removing `gpgv` changes the write's outcome — which would prove the write re-verifies — or the write opens a socket or a child process.
-- **S15 — The D6f P1 regressions still gate the write, not only the display.** `noble-updates-InRelease.prefixed` (forged `Date:` before the armour): a read-only run ranks it under the current tolerance, and a write run refuses to select it. Plus a write whose recomputed disk digest disagrees with the bytes it validated is refused before the first write. *Fails when* either path accepts it. A forged proof is not a test case: the value cannot be constructed without the verification pass (3.10), and `the_write_proof_is_minted_only_in_the_verifier` (`src/verify.rs:627`) is the unit test that keeps it that way.
-- **S16 — Disposable-container rule.** The harness gained the control in D9c, and it is stricter than the rule asked: there is no `/etc/apt` override in any build. A write case uses the disposable container's own `/etc/apt`, and the harness that reaches it is compiled out of every other build — `#[cfg(apt_scout_write_harness)]` gates the module (`src/main.rs:8–9`) and its dispatch before argument parsing (`src/main.rs:3484–3486`), so a default or release build contains no harness code at all and `__write-harness` is an unknown option there. The runtime half is the guard: `require_container` refuses to plan anything unless `/.dockerenv` or `/run/.containerenv` exists (`src/harness.rs:306`), and every write case starts through `wrun`, a container with `--network none`, one read-only binary mount and no other mount (`scripts/docker-test.sh:119`; W10 and W11 add tmpfs-only mounts, at `:123` and `:455`) — never a bind mount of the host's `/etc/apt`. Because the container root is the fixture and the binary carries no path, a write case cannot be pointed at a host path at all. *Fails when* a write case can be pointed at a host path, or a release binary accepts anything but the default `/etc/apt`.
-- **S17 — Pre-existing Pop!_OS security file.** On a Pop!_OS fixture, `/etc/apt/sources.list.d/system-security.sources` already exists (both as a regular file and as a symlink): `EEXIST` aborts the whole apply, every target digest is identical afterwards, the pre-existing file is byte-identical with its mode and owner unchanged, and no half-written backup directory is left behind. *Fails when* the file is overwritten, followed as a symlink, or any other target changed.
+- **S1 — a non-root run never writes, and a root run validates before it writes.** As uid 1000: exit 3, no file opened
+  for writing, and the message names `sudo apt-scout` with the flags of the run.
+  As root, with a target changed between validation and the open (test hook): exit 1, nothing written, and every
+  `/etc/apt` target digest is identical before and after.
+  *Fails when* the non-root run writes anything or exits 0/1, omits the `sudo` line, or a root run writes before
+  passing the validation.
+- **S2 — removed 2026-11-12.** It asserted that the root phase refuses empty, truncated or bad-magic plan input over
+  stdin.
+  No plan crosses a process boundary any more, so there is no decoder to test (7.2); the in-process checks are covered
+  by S1, S3, S6 and S11.
+- **S3 — Target enumeration and plan-field hostility.** The plan is built inside the program, so the test drives the
+  validation layer directly instead of a decoding fixture: a target name outside `^[A-Za-z0-9._-]{1,64}$` or not
+  `.list`/`.sources`, `..` and absolute names, a `create_new` target other than `system-security.sources`,
+  `create_new == false` on a file that does not exist, a target that is not a regular file after resolution, and a
+  content digest that does not match the bytes to be written.
+  Every one is refused before any open, with nothing written.
+  *Fails when* one is accepted or produces a path outside `/etc/apt` or outside `/var/backups/apt-scout/<id>/`.
+- **S4 — Path traversal in the manifest (`--restore`, D10 scope).** A manifest naming `/etc/shadow`,
+  `../sources.list`, `sources.list.d/../../etc/passwd`, a tuple of `/etc/apt/sources.list` as a symlink, or an
+  absolute path: refused, nothing read, nothing written.
+  *Fails when* the path resolution is done by string prefix alone — prove it by including `/etc/apt/../etc/shadow` and
+  `/etc/aptx/sources.list`.
+- **S5 — Symlink target.** `sources.list` and each `.list`/`.sources` are replaced by symlinks to a canary outside
+  `/etc/apt`; and `sources.list.d` itself is a symlink to an attacker directory.
+  Each case: refused with the reason, canary unchanged.
+  *Fails when* the write follows the link.
+- **S6 — TOCTOU substitution.** With the plan validated, replace a target between validation and write (test hook: a
+  variant that pauses after validation).
+  Expected: write aborts on the dev/ino or digest mismatch, target unchanged.
+  *Fails when* the write proceeds on the substituted inode.
+- **S7 — `:ro` → `:rw` mount.** Run the write against `/etc/apt` mounted read-only: exit 1 with the OS error verbatim,
+  no temp file left behind, backup directory either absent or untouched, and a second run does not treat the leftover
+  as a backup.
+  The read-only root is the container's own rootfs and not a bind mount: W10 runs it through `wro`, which adds
+  `--read-only --tmpfs /tmp` to `wrun` (`scripts/docker-test.sh:123`), against a fixture image frozen by `wfixture`
+  because no setup can run against that rootfs (`scripts/docker-test.sh:127`), with `--tmpfs /var/backups` so the
+  backup phase completes into the tmpfs and the write phase meets `EROFS` at its first temp file
+  (`scripts/docker-test.sh:451–455`).
+  *Fails when* the error is swallowed or a temp file survives.
+- **S8 — Backup failure aborts before any write.** Make the backup directory or the timestamp directory unwritable
+  (mode 0500) and make the first backup write fail; assert the order by digesting every target before and after: all
+  identical, and the program's output names which file failed.
+  *Fails when* one target changed.
+- **S9 — Pre-created backup directory.** `/var/backups/apt-scout` owned by uid 1000 or mode 0777 or a symlink: hard
+  abort with the reason, nothing written inside it.
+  *Fails when* `create_dir_all` semantics let it through (the old self-heal rule allowed this; docs/spec/errors.md now
+  requires the abort).
+- **S10 — Rollback.** Apply succeeds, then `--restore` from the newest backup: every file byte-identical to the
+  pre-apply fixture (`cmp`, mode, uid/gid), including removal of `system-security.sources` on Pop!_OS.
+  *Fails when* any byte, mode, or owner differs, or the created file survives.
+- **S11 — Rejection of paths outside `/etc/apt`.** A target name that would resolve outside the two roots, plus a
+  `--restore` manifest pointing at `/usr/bin/gpgv`: exit 1, message names the offending path, no open for write.
+  *Fails when* the write opens any path outside the closed enum's two roots.
+- **S12 — Hostile `PATH`/`HOME`/`TMPDIR`.** Run the write with `PATH=/tmp/evil`, `HOME=/tmp/evil`,
+  `TMPDIR=/tmp/evil-world-writable`, each containing a fake `gpgv`, a fake `sudo`, and a `.gnupg` directory; assert no
+  `/tmp/evil/*` binary is executed (verified by the fake binaries creating a marker) and that verification results
+  come from the plan, not from a re-run.
+  *Fails when* any marker appears or any `TMPDIR`-derived path is used by the root run.
+- **S13 — Environment not inherited.** Start the write with a `sudo -E`-style environment (`APT_CONFIG`, `LD_PRELOAD`,
+  `TMPDIR`): all ignored, and the write performs the same file operations it would with a clean environment.
+  *Fails when* any of them changes which targets are written or which bytes are used.
+- **S14 — the write makes no network request and spawns no external process.** With `--network none` once the
+  validation layer is reached, and a `strace`-free check: complete a write and assert it opens no socket and spawns
+  nothing.
+  Then re-run with `/usr/bin/gpgv` removed after verification has already happened (test hook) and assert the write
+  still succeeds.
+  *Fails when* removing `gpgv` changes the write's outcome — which would prove the write re-verifies — or the write
+  opens a socket or a child process.
+- **S15 — The D6f P1 regressions still gate the write, not only the display.** `noble-updates-InRelease.prefixed`
+  (forged `Date:` before the armour): a read-only run ranks it under the current tolerance, and a write run refuses to
+  select it.
+  Plus a write whose recomputed disk digest disagrees with the bytes it validated is refused before the first write.
+  *Fails when* either path accepts it.
+  A forged proof is not a test case: the value cannot be constructed without the verification pass (3.10), and
+  `the_write_proof_is_minted_only_in_the_verifier` (`src/verify.rs:627`) is the unit test that keeps it that way.
+- **S16 — Disposable-container rule.** The harness gained the control in D9c, and it is stricter than the rule asked:
+  there is no `/etc/apt` override in any build.
+  A write case uses the disposable container's own `/etc/apt`, and the harness that reaches it is compiled out of
+  every other build — `#[cfg(apt_scout_write_harness)]` gates the module (`src/main.rs:8–9`) and its dispatch before
+  argument parsing (`src/main.rs:3484–3486`), so a default or release build contains no harness code at all and
+  `__write-harness` is an unknown option there.
+  The runtime half is the guard: `require_container` refuses to plan anything unless `/.dockerenv` or
+  `/run/.containerenv` exists (`src/harness.rs:306`), and every write case starts through `wrun`, a container with
+  `--network none`, one read-only binary mount and no other mount (`scripts/docker-test.sh:119`; W10 and W11 add
+  tmpfs-only mounts, at `:123` and `:455`) — never a bind mount of the host's `/etc/apt`.
+  Because the container root is the fixture and the binary carries no path, a write case cannot be pointed at a host
+  path at all.
+  *Fails when* a write case can be pointed at a host path, or a release binary accepts anything but the default
+  `/etc/apt`.
+- **S17 — Pre-existing Pop!_OS security file.** On a Pop!_OS fixture,
+  `/etc/apt/sources.list.d/system-security.sources` already exists (both as a regular file and as a symlink): `EEXIST`
+  aborts the whole apply, every target digest is identical afterwards, the pre-existing file is byte-identical with
+  its mode and owner unchanged, and no half-written backup directory is left behind.
+  *Fails when* the file is overwritten, followed as a symlink, or any other target changed.
 
 ## 7. Decision record
 
-Ruled 2026-11-12 by the user, relayed by the parent orchestrator. These are rulings, not proposals: the body above and `SPEC.md` are read as decided. What remains is not implementation only: the deltas Appendix A marks `PENDING` are not in `SPEC.md` yet. Each entry names the section that carries the ruling into behaviour and the tests that check it.
+Ruled 2026-11-12 by the user, relayed by the parent orchestrator.
+  These are rulings, not proposals: the body above and `SPEC.md` are read as decided.
+  What remains is not implementation only: the deltas Appendix A marks `PENDING` are not in `SPEC.md` yet.
+  Each entry names the section that carries the ruling into behaviour and the tests that check it.
 
-- **7.1 Self-reexec — Option A.** No self-reexec, no setuid bit, no internal `sudo`. Privilege comes only from the user running `sudo apt-scout`. A non-root run writes nothing, exits 3, and prints the `sudo` line. DECIDED 2026-11-12 by the user (via the parent orchestrator). Carried by 4.2 and 4.5; `SPEC.md` Privilege boundary, Apply, CLI; S1.
-- **7.2 No plan transport.** The plan never leaves the process: no plan file, no stdin message, no flag. The user ruled on 2026-11-12 that the split flags are removed from the CLI outright — not hidden, not aliased — because the feature is one action and the split made it two. Writing is one code path (section 5). Carried by 5; docs/spec/cli.md and Apply; S2 is removed with the decoder it tested.
-- **7.3 Plan author — removed.** The uid-0 apply-plan refusal and the non-root restore-plan refusal existed only to police a plan crossing a process boundary. With 7.2 there is no such plan, so both refusals and the `producer_uid` field are deleted rather than kept as dead rules. Carried by 5 and 7.2; docs/spec/cli.md.
-- **7.4 D6f P1 #1.** For a write, `Date` is parsed only inside the cleartext-signed region; any non-whitespace before `-----BEGIN PGP SIGNED MESSAGE-----` is rejected. Read-only ranking keeps its current tolerance. DECIDED 2026-11-12 by the user (via the parent orchestrator). Implemented by D6f, merged as PR #29 (`8bbfa72`); this document does not change code. Carried by 3.9; docs/spec/pipeline.md step 8; S15.
-- **7.5 D6f P1 #2.** One proof value — signed-region date plus verification result, private constructor — is carried through `fresh::Probed` and the baseline; `fallback_baseline` accepts only verified candidate dates; the write fails closed when nothing verifies. DECIDED 2026-11-12 by the user (via the parent orchestrator). Implemented by D6f, merged as PR #29 (`8bbfa72`); this document does not change code. Carried by 3.10 and 5; docs/spec/non-functional.md (Appendix A item 4); S15.
-- **7.6 Backup root.** Keep `/var/backups/apt-scout`. A pre-existing path that is not root-owned, is not mode 0700, or is a symlink is a hard abort with nothing written; the `create_dir_all` self-heal no longer covers it. DECIDED 2026-11-12 by the user (via the parent orchestrator). Carried by B5 and 5; docs/spec/errors.md; S9.
-- **7.7 `--restore`.** Restore is one root run: `sudo apt-scout --restore` reads the root-only manifest, re-derives the targets and their digests, confirms, and writes; a non-root run prints `sudo apt-scout --restore` and exits 3. DECIDED 2026-11-12 by the user (via the parent orchestrator). Carried by 5 and G1; docs/spec/apply.md and CLI; S4, S10.
-- **7.8 Pop!_OS new file.** `/etc/apt/sources.list.d/system-security.sources` is created with exclusive create and mode 0600; `EEXIST` aborts the whole apply, so a file the run did not plan is never overwritten. `create_new` is accepted only for that one target on Pop!_OS, and `create_new == false` on a nonexistent file aborts before the first open, so a plan cannot create any other file in `/etc/apt`. DECIDED 2026-11-12 by the user (via the parent orchestrator). Carried by B8 and 5; docs/spec/apply.md (file creation bullet), Errors and self-healing; S17, S3.
-- **7.9 Plan encoding — removed.** With no plan crossing a boundary there is no wire format and no decoder; the length-prefixed container described in the earlier ruling is gone with 7.2. Carried by 7.2.
+- **7.1 Self-reexec — Option A.** No self-reexec, no setuid bit, no internal `sudo`.
+  Privilege comes only from the user running `sudo apt-scout`.
+  A non-root run writes nothing, exits 3, and prints the `sudo` line.
+  DECIDED 2026-11-12 by the user (via the parent orchestrator).
+  Carried by 4.2 and 4.5; `SPEC.md` Privilege boundary, Apply, CLI; S1.
+- **7.2 No plan transport.** The plan never leaves the process: no plan file, no stdin message, no flag.
+  The user ruled on 2026-11-12 that the split flags are removed from the CLI outright — not hidden, not aliased —
+  because the feature is one action and the split made it two.
+  Writing is one code path (section 5).
+  Carried by 5; docs/spec/cli.md and Apply; S2 is removed with the decoder it tested.
+- **7.3 Plan author — removed.** The uid-0 apply-plan refusal and the non-root restore-plan refusal existed only to
+  police a plan crossing a process boundary.
+  With 7.2 there is no such plan, so both refusals and the `producer_uid` field are deleted rather than kept as dead
+  rules.
+  Carried by 5 and 7.2; docs/spec/cli.md.
+- **7.4 D6f P1 #1.** For a write, `Date` is parsed only inside the cleartext-signed region; any non-whitespace before
+  `-----BEGIN PGP SIGNED MESSAGE-----` is rejected.
+  Read-only ranking keeps its current tolerance.
+  DECIDED 2026-11-12 by the user (via the parent orchestrator).
+  Implemented by D6f, merged as PR #29 (`8bbfa72`); this document does not change code.
+  Carried by 3.9; docs/spec/pipeline.md step 8; S15.
+- **7.5 D6f P1 #2.** One proof value — signed-region date plus verification result, private constructor — is carried
+  through `fresh::Probed` and the baseline; `fallback_baseline` accepts only verified candidate dates; the write fails
+  closed when nothing verifies.
+  DECIDED 2026-11-12 by the user (via the parent orchestrator).
+  Implemented by D6f, merged as PR #29 (`8bbfa72`); this document does not change code.
+  Carried by 3.10 and 5; docs/spec/non-functional.md (Appendix A item 4); S15.
+- **7.6 Backup root.** Keep `/var/backups/apt-scout`.
+  A pre-existing path that is not root-owned, is not mode 0700, or is a symlink is a hard abort with nothing written;
+  the `create_dir_all` self-heal no longer covers it.
+  DECIDED 2026-11-12 by the user (via the parent orchestrator).
+  Carried by B5 and 5; docs/spec/errors.md; S9.
+- **7.7 `--restore`.** Restore is one root run: `sudo apt-scout --restore` reads the root-only manifest, re-derives
+  the targets and their digests, confirms, and writes; a non-root run prints `sudo apt-scout --restore` and exits 3.
+  DECIDED 2026-11-12 by the user (via the parent orchestrator).
+  Carried by 5 and G1; docs/spec/apply.md and CLI; S4, S10.
+- **7.8 Pop!_OS new file.** `/etc/apt/sources.list.d/system-security.sources` is created with exclusive create and
+  mode 0600; `EEXIST` aborts the whole apply, so a file the run did not plan is never overwritten.
+  `create_new` is accepted only for that one target on Pop!_OS, and `create_new == false` on a nonexistent file aborts
+  before the first open, so a plan cannot create any other file in `/etc/apt`.
+  DECIDED 2026-11-12 by the user (via the parent orchestrator).
+  Carried by B8 and 5; docs/spec/apply.md (file creation bullet), Errors and self-healing; S17, S3.
+- **7.9 Plan encoding — removed.** With no plan crossing a boundary there is no wire format and no decoder; the
+  length-prefixed container described in the earlier ruling is gone with 7.2.
+  Carried by 7.2.
 
-Appendix A records what each ruling changed in `SPEC.md`, and the owner of every delta that is not yet applied. Twelve rulings being decided is not D6e being closed: D6e stays open until the independent security review of this record returns PASS.
+Appendix A records what each ruling changed in `SPEC.md`, and the owner of every delta that is not yet applied.
+  Twelve rulings being decided is not D6e being closed: D6e stays open until the independent security review of this
+  record returns PASS.
 
 ---
 
 ## 8. The three gaps the first review left open, and their rulings
 
-The first independent security review left three gaps open. All three are ruled by the user (2026-11-12, relayed by the parent orchestrator). Each entry states the decision, why it is fail-closed, the abuse path it closes, and the tests that check it. No gap is left open, so this section no longer blocks D9; the independent security review's PASS verdict is what remains for D6e.
+The first independent security review left three gaps open.
+  All three are ruled by the user (2026-11-12, relayed by the parent orchestrator).
+  Each entry states the decision, why it is fail-closed, the abuse path it closes, and the tests that check it.
+  No gap is left open, so this section no longer blocks D9; the independent security review's PASS verdict is what
+  remains for D6e.
 
-**G1 — the restore source, and who may read it.** Source: audit P1-3 and P1-4. Ruled: the restore run reads `/var/backups/apt-scout/<id>/MANIFEST` by a path it builds itself, aborts before parsing a byte unless that path is a regular file owned by root with mode 0600 and not a symlink, and only then re-derives the target set and every per-target digest from the manifest, refusing the restore when a record's digest, mode or owner disagrees with the backup copy it names (section 5). The backup directory is 0700 root-owned and the manifest 0600, so only a run that holds root can read them, and both the read and the write of a restore are root. The manifest is the source of truth for what is written, never a list the run already chose, so a stale or partial manifest cannot apply a subset of the backup. Carried by 5 and 7.7; docs/spec/apply.md and CLI; S4, S10.
+**G1 — the restore source, and who may read it.** Source: audit P1-3 and P1-4.
+  Ruled: the restore run reads `/var/backups/apt-scout/<id>/MANIFEST` by a path it builds itself, aborts before
+  parsing a byte unless that path is a regular file owned by root with mode 0600 and not a symlink, and only then
+  re-derives the target set and every per-target digest from the manifest, refusing the restore when a record's
+  digest, mode or owner disagrees with the backup copy it names (section 5).
+  The backup directory is 0700 root-owned and the manifest 0600, so only a run that holds root can read them, and both
+  the read and the write of a restore are root.
+  The manifest is the source of truth for what is written, never a list the run already chose, so a stale or partial
+  manifest cannot apply a subset of the backup.
+  Carried by 5 and 7.7; docs/spec/apply.md and CLI; S4, S10.
 
-**G2 — removed 2026-11-12.** Plan integrity "content, not producer" (audit P1-6) existed because a plan crossed a process boundary and an unprivileged producer could hand root shape-valid bytes. No plan crosses a boundary now, so there is no producer to distrust: the digests that remain bind the bytes to the disk state the run validated, not one process to another. Removed with 7.2 and 7.3. Tests: none of its own; S6 and S15 carry what is left.
+**G2 — removed 2026-11-12.** Plan integrity "content, not producer" (audit P1-6) existed because a plan crossed a
+  process boundary and an unprivileged producer could hand root shape-valid bytes.
+  No plan crosses a boundary now, so there is no producer to distrust: the digests that remain bind the bytes to the
+  disk state the run validated, not one process to another.
+  Removed with 7.2 and 7.3.
+  Tests: none of its own; S6 and S15 carry what is left.
 
-**G3 — one binary, out of scope for v1.** Source: review P2-4. Ruled, in the user's own framing: the program is not complicated, so it **is one binary**. The second-artifact trigger and its line-count threshold are removed outright — not left reopenable by a human, not restated as a signal a reviewer may raise. 4.6 now states that a split of the root run into a second artifact is out of scope for v1, and that any future split would be a new product decision taken by the user with the threat model 4.4 requires, never something a size measurement or a review finding can trigger. `SPEC.md` Privilege boundary and threat model carries the same statement for behavior. Abuse path closed: an agent reading the size of the write path as authorization to ship a second root artifact that no audit covers. No test of its own; 4.4's C-spawned-by-root entry stays rejected.
+**G3 — one binary, out of scope for v1.** Source: review P2-4.
+  Ruled, in the user's own framing: the program is not complicated, so it **is one binary**.
+  The second-artifact trigger and its line-count threshold are removed outright — not left reopenable by a human, not
+  restated as a signal a reviewer may raise. 4.6 now states that a split of the root run into a second artifact is out
+  of scope for v1, and that any future split would be a new product decision taken by the user with the threat model
+  4.4 requires, never something a size measurement or a review finding can trigger.
+  `SPEC.md` Privilege boundary and threat model carries the same statement for behavior.
+  Abuse path closed: an agent reading the size of the write path as authorization to ship a second root artifact that
+  no audit covers.
+  No test of its own; 4.4's C-spawned-by-root entry stays rejected.
 
 ---
 
 ## Appendix A — SPEC delta ledger
 
-State of every delta the rulings in sections 7 and 8 require. APPLIED names the file that now carries the requirement (`SPEC.md` or a chapter under `docs/spec/`); PENDING names the owner. No item is left unowned.
+State of every delta the rulings in sections 7 and 8 require.
+  APPLIED names the file that now carries the requirement (`SPEC.md` or a chapter under `docs/spec/`); PENDING names
+  the owner.
+  No item is left unowned.
 
-1. **APPLIED — `SPEC.md` "Privilege boundary and threat model", bullet 5.** Replaced "Do not use privileged self-reexec of the current executable until D6e approves a concrete trust mechanism." with "The program never re-execs itself privileged, never invokes `sudo`, and is never installed setuid. Privilege is obtained only by the user running the program as root. A root run is the same binary with the same code; the only thing that changes is that it may write. Security review reduces risk but is not a guarantee of absolute immunity." The CLI ruling of 2026-11-12 (7.2) then removed the second sentence this item first recorded — a separate root mode that reads a validated plan and makes no network request — because one process performs both halves: the no-network, no-child-process, no-`PATH` and no-environment-variable property now belongs to the write itself (bullet 4 and section 5), and bullet 3 states the accepted cost plainly instead.
-2. **APPLIED — `docs/spec/apply.md`, bullet 1.** Replaced "Do not implement self-reexec through `sudo` or another privileged helper until the privilege-boundary design passes D6e security audit." with the one-code-path bullet that stands there now: "The plan is never a file, never a message on stdin, and never a flag: the user does not type a step of it, and it does not cross a process boundary. It names files through a fixed enumeration and carries the selected mirror, the verification result that authorizes writing it, the exact bytes, mode, and owner of every file it was computed from, and the exact bytes to write. It carries no freshness baseline of its own: the caller establishes one from the canonical reference when that reference has a verified `-updates` `Date` read inside the signed region, otherwise from the newest candidate in this run that carries one, after the clock-skew sanity guard of step 8, and the writer holds the selected mirror's proof against it before the first byte, refusing outright when no verified baseline was supplied, because a writer that may not fetch cannot establish one." The CLI ruling of 2026-11-12 (7.2) replaced the cross-process half this item first recorded ("the root phase's only input", "closed schema"), so the ledger quotes the in-process bullet. D9a (PR #31) removed the sentence that carried the freshness baseline in the plan, and the `docs/record-d9b` PR (#38) rewrote the bullet again; this item quotes the bullet as it stands after both, which is the `SPEC.md` text the ledger is accounting for.
-3. **APPLIED — `docs/spec/pipeline.md`, step 8.** A `Date:` is trusted only inside the cleartext-signed region: only whitespace-only lines may precede `-----BEGIN PGP SIGNED MESSAGE-----`, which must start its own line, the armour headers are skipped to the first blank line, and the search stops at `-----BEGIN PGP SIGNATURE-----`. A prefixed body still has a good signature, so its status stays `verified` and the `Date` read outside the region is never a write baseline and never authorizes a write; read-only ranking keeps using it. The sentence this ledger first recorded ("bytes before ... must be ASCII whitespace only") was tightened when D6f merged as PR #29; the merged sentence is the one `SPEC.md` carries today, and this item names it so the ledger does not describe text that no longer exists.
-4. **APPLIED (D6f, PR #29) — `docs/spec/non-functional.md`, "Freshness trust boundary".** States that only a `Date` parsed inside the cleartext-signed region is ever trusted; that ranking may use a `Date` whose status is `invalid` or `unavailable` while only a `Verified` `Date` parsed inside the region is usable by a write; that the write baseline is the canonical reference when its own `verified_updates` field is `Some`, otherwise the newest candidate whose own `verified_updates` field is `Some`, and that a write fails closed when neither exists; and that trusted freshness dates are a value only a `Verified` status can construct (`VerifiedDate`). The write-gate types that must still be built by D9 — an unforgeable status and the verified-plan type — exist now, and this item quotes the field it names rather than a method: `Probed` and `Reference` carry `verified_updates: Option<VerifiedDate>` (`src/fresh.rs:175`, `src/probe.rs:75`), the unforgeable status is `SignatureStatus::Verified(VerifiedProof)` with a private field that only `region_date` can fill (`src/verify.rs:35`, `src/verify.rs:115`), which is D25's work in PR #43, and the verified plan is `Plan`, carrying that proof beside the URI and bytes it was issued for (`src/plan.rs:142`). The plan-schema half and G2 were removed with the cross-process plan (7.2).
-5. **APPLIED — `docs/spec/tui.md` "TUI", `docs/spec/apply.md` "Apply", `docs/spec/cli.md` "CLI", `docs/spec/pipeline.md` step 10, `SPEC.md` "Privilege boundary and threat model", `docs/spec/non-functional.md` exit codes, `docs/spec/errors.md` "Errors and self-healing".** Superseded in place by the CLI ruling of 2026-11-12 (7.2), which removed the plan-split flags this item first added (not hidden, not aliased) and made one command behave by privilege. This item is the ledger entry for that delta: the flag table, the command/uid/writes table and the behaviour bullets in "CLI"; the zero-effort flow steps 2–3 and the applying-from-the-TUI bullet in "TUI"; the one-code-path bullet in "Apply"; step 10 in "Pipeline"; bullet 3's accepted cost in "Privilege boundary and threat model"; the exit-code list in "Non-functional"; and the write-test list in "Errors and self-healing". What survives from this item: a restore reads the newest backup, root is required for that read as well as for the write, and the TUI confirmation shows the files, the old and new URI, the alternatives and the backup path before anything changes. Draft: "Add the plan flags to the table and state that a non-root apply exits 3 and prints the exact command, and that the privileged mode is reached only through a second, explicit invocation." The drafted flags and the second explicit invocation are the two-step plan split the CLI ruling removes.
-6. **APPLIED — `docs/spec/errors.md`, the self-heal bullet.** The bullet was narrowed to the one directory the writer owns, and it now opens: `/var/backups/apt-scout` is created by the writer and verified after creation to be a directory, owned by root, mode 0700, and not a symlink; a pre-existing path that fails any of these is a hard abort with nothing written. It also records that there is no cache to heal, because v1 keeps none (`docs/spec/errors.md:36`)."
-7. **APPLIED — `docs/spec/errors.md`, the Docker bullet.** The drafted section name "Testing" is wrong: the anchor sentence ("Docker integration tests for source discovery/apply/restore must use disposable Ubuntu containers and isolated `/etc/apt` fixtures.") lives in Errors and self-healing and is present verbatim there, so the text was appended to it. The bullet now reads: "Write tests cover: a non-root run writing nothing and exiting 3, a root write aborting before its first byte on a failed validation, symlinked targets and a symlinked `sources.list.d`, substitution between validation and write, a target whose recomputed digest does not match the bytes to be written, a restore whose manifest is stale, partial, or names a path outside `/etc/apt`, a read-only `/etc/apt` mount, backup failure aborting before any write, byte-exact restore of content/mode/owner, hostile `PATH`/`HOME`/`TMPDIR`, a pre-existing `system-security.sources` aborting the apply, and a write that still succeeds when `/usr/bin/gpgv` is removed after verification has already happened (test hook), proving the write does not re-verify." Three cases this item first recorded are gone with the plan split (7.2): plan-schema hostility and oversize fields, which tested a decoder that no longer exists, and the root-uid refusal case, which tested a no-write root mode the CLI does not have. The same pass added to `docs/spec/testing.md`, in the `scripts/docker-test.sh` bullet, that the write cases address `/etc/apt` through a path compiled into test builds only, because S16 must not require a runtime environment variable that the write is forbidden to read.
-8. **APPLIED — `GLOSSARY.md`.** D9 closed it: `GLOSSARY.md` now carries **Manifest**, **Plan**, **Privileged phase** and **Write proof**. Vocabulary only, as anticipated: **Plan** — the validated description of a pending apt change, carrying the bytes to write and the proof they came from verified data; the run builds and validates it in-process and it never leaves the process. **Privileged phase** — the part of a run that holds root; it validates against the on-disk state and performs the file operations, and nothing crosses into it. **Write proof** — the value that ties an `InRelease` date to a successful signature verification.
-9. **APPLIED — `docs/spec/apply.md`, new file-creation bullet; `docs/spec/errors.md`, the self-heal prohibition.** Added to Apply: "`/etc/apt/sources.list.d/system-security.sources` is created with `create_new` and mode 0600, and `EEXIST` aborts the whole apply with nothing written. A planned write that creates a file is accepted only when the platform is Pop!_OS and the target is exactly `sources.list.d/system-security.sources`; a plan that creates any other file, or replaces a file that does not exist, aborts before the first open." The Errors and self-healing prohibition ("never create files in `/etc/apt` that did not exist") was reworded so that it is about self-healing only and names that one planned creation, and the Apply bullet carrying ruling 8's intent now states the constraint in the place a coder reads. Carried by 7.8; gated by S17 and S3.
+1. **APPLIED — `SPEC.md` "Privilege boundary and threat model", bullet 5.** Replaced "Do not use privileged
+   self-reexec of the current executable until D6e approves a concrete trust mechanism." with "The program never
+   re-execs itself privileged, never invokes `sudo`, and is never installed setuid.
+   Privilege is obtained only by the user running the program as root.
+   A root run is the same binary with the same code; the only thing that changes is that it may write.
+   Security review reduces risk but is not a guarantee of absolute immunity." The CLI ruling of 2026-11-12 (7.2) then
+   removed the second sentence this item first recorded — a separate root mode that reads a validated plan and makes
+   no network request — because one process performs both halves: the no-network, no-child-process, no-`PATH` and
+   no-environment-variable property now belongs to the write itself (bullet 4 and section 5), and bullet 3 states the
+   accepted cost plainly instead.
+2. **APPLIED — `docs/spec/apply.md`, bullet 1.** Replaced "Do not implement self-reexec through `sudo` or another
+   privileged helper until the privilege-boundary design passes D6e security audit." with the one-code-path bullet
+   that stands there now: "The plan is never a file, never a message on stdin, and never a flag: the user does not
+   type a step of it, and it does not cross a process boundary.
+   It names files through a fixed enumeration and carries the selected mirror, the verification result that authorizes
+   writing it, the exact bytes, mode, and owner of every file it was computed from, and the exact bytes to write.
+   It carries no freshness baseline of its own: the caller establishes one from the canonical reference when that
+   reference has a verified `-updates` `Date` read inside the signed region, otherwise from the newest candidate in
+   this run that carries one, after the clock-skew sanity guard of step 8, and the writer holds the selected mirror's
+   proof against it before the first byte, refusing outright when no verified baseline was supplied, because a writer
+   that may not fetch cannot establish one." The CLI ruling of 2026-11-12 (7.2) replaced the cross-process half this
+   item first recorded ("the root phase's only input", "closed schema"), so the ledger quotes the in-process bullet.
+   D9a (PR #31) removed the sentence that carried the freshness baseline in the plan, and the `docs/record-d9b` PR
+   (#38) rewrote the bullet again; this item quotes the bullet as it stands after both, which is the `SPEC.md` text
+   the ledger is accounting for.
+3. **APPLIED — `docs/spec/pipeline.md`, step 8.** A `Date:` is trusted only inside the cleartext-signed region: only
+   whitespace-only lines may precede `-----BEGIN PGP SIGNED MESSAGE-----`, which must start its own line, the armour
+   headers are skipped to the first blank line, and the search stops at `-----BEGIN PGP SIGNATURE-----`.
+   A prefixed body still has a good signature, so its status stays `verified` and the `Date` read outside the region
+   is never a write baseline and never authorizes a write; read-only ranking keeps using it.
+   The sentence this ledger first recorded ("bytes before ... must be ASCII whitespace only") was tightened when D6f
+   merged as PR #29; the merged sentence is the one `SPEC.md` carries today, and this item names it so the ledger does
+   not describe text that no longer exists.
+4. **APPLIED (D6f, PR #29) — `docs/spec/non-functional.md`, "Freshness trust boundary".** States that only a `Date`
+   parsed inside the cleartext-signed region is ever trusted; that ranking may use a `Date` whose status is `invalid`
+   or `unavailable` while only a `Verified` `Date` parsed inside the region is usable by a write; that the write
+   baseline is the canonical reference when its own `verified_updates` field is `Some`, otherwise the newest candidate
+   whose own `verified_updates` field is `Some`, and that a write fails closed when neither exists; and that trusted
+   freshness dates are a value only a `Verified` status can construct (`VerifiedDate`).
+   The write-gate types that must still be built by D9 — an unforgeable status and the verified-plan type — exist now,
+   and this item quotes the field it names rather than a method: `Probed` and `Reference` carry
+   `verified_updates: Option<VerifiedDate>` (`src/fresh.rs:175`, `src/probe.rs:75`), the unforgeable status is
+   `SignatureStatus::Verified(VerifiedProof)` with a private field that only `region_date` can fill
+   (`src/verify.rs:35`, `src/verify.rs:115`), which is D25's work in PR #43, and the verified plan is `Plan`, carrying
+   that proof beside the URI and bytes it was issued for (`src/plan.rs:142`).
+   The plan-schema half and G2 were removed with the cross-process plan (7.2).
+5. **APPLIED — `docs/spec/tui.md` "TUI", `docs/spec/apply.md` "Apply", `docs/spec/cli.md` "CLI",
+   `docs/spec/pipeline.md` step 10, `SPEC.md` "Privilege boundary and threat model", `docs/spec/non-functional.md`
+   exit codes, `docs/spec/errors.md` "Errors and self-healing".** Superseded in place by the CLI ruling of 2026-11-12
+   (7.2), which removed the plan-split flags this item first added (not hidden, not aliased) and made one command
+   behave by privilege.
+   This item is the ledger entry for that delta: the flag table, the command/uid/writes table and the behaviour
+   bullets in "CLI"; the zero-effort flow steps 2–3 and the applying-from-the-TUI bullet in "TUI"; the one-code-path
+   bullet in "Apply"; step 10 in "Pipeline"; bullet 3's accepted cost in "Privilege boundary and threat model"; the
+   exit-code list in "Non-functional"; and the write-test list in "Errors and self-healing".
+   What survives from this item: a restore reads the newest backup, root is required for that read as well as for the
+   write, and the TUI confirmation shows the files, the old and new URI, the alternatives and the backup path before
+   anything changes.
+   Draft: "Add the plan flags to the table and state that a non-root apply exits 3 and prints the exact command, and
+   that the privileged mode is reached only through a second, explicit invocation." The drafted flags and the second
+   explicit invocation are the two-step plan split the CLI ruling removes.
+6. **APPLIED — `docs/spec/errors.md`, the self-heal bullet.** The bullet was narrowed to the one directory the writer
+   owns, and it now opens: `/var/backups/apt-scout` is created by the writer and verified after creation to be a
+   directory, owned by root, mode 0700, and not a symlink; a pre-existing path that fails any of these is a hard abort
+   with nothing written.
+   It also records that there is no cache to heal, because v1 keeps none (`docs/spec/errors.md:36`)."
+7. **APPLIED — `docs/spec/errors.md`, the Docker bullet.** The drafted section name "Testing" is wrong: the anchor
+   sentence ("Docker integration tests for source discovery/apply/restore must use disposable Ubuntu containers and
+   isolated `/etc/apt` fixtures.") lives in Errors and self-healing and is present verbatim there, so the text was
+   appended to it.
+   The bullet now reads: "Write tests cover: a non-root run writing nothing and exiting 3, a root write aborting
+   before its first byte on a failed validation, symlinked targets and a symlinked `sources.list.d`, substitution
+   between validation and write, a target whose recomputed digest does not match the bytes to be written, a restore
+   whose manifest is stale, partial, or names a path outside `/etc/apt`, a read-only `/etc/apt` mount, backup failure
+   aborting before any write, byte-exact restore of content/mode/owner, hostile `PATH`/`HOME`/`TMPDIR`, a pre-existing
+   `system-security.sources` aborting the apply, and a write that still succeeds when `/usr/bin/gpgv` is removed after
+   verification has already happened (test hook), proving the write does not re-verify." Three cases this item first
+   recorded are gone with the plan split (7.2): plan-schema hostility and oversize fields, which tested a decoder that
+   no longer exists, and the root-uid refusal case, which tested a no-write root mode the CLI does not have.
+   The same pass added to `docs/spec/testing.md`, in the `scripts/docker-test.sh` bullet, that the write cases address
+   `/etc/apt` through a path compiled into test builds only, because S16 must not require a runtime environment
+   variable that the write is forbidden to read.
+8. **APPLIED — `GLOSSARY.md`.** D9 closed it: `GLOSSARY.md` now carries **Manifest**, **Plan**, **Privileged phase**
+   and **Write proof**.
+   Vocabulary only, as anticipated: **Plan** — the validated description of a pending apt change, carrying the bytes
+   to write and the proof they came from verified data; the run builds and validates it in-process and it never leaves
+   the process.
+   **Privileged phase** — the part of a run that holds root; it validates against the on-disk state and performs the
+   file operations, and nothing crosses into it.
+   **Write proof** — the value that ties an `InRelease` date to a successful signature verification.
+9. **APPLIED — `docs/spec/apply.md`, new file-creation bullet; `docs/spec/errors.md`, the self-heal prohibition.**
+   Added to Apply: "`/etc/apt/sources.list.d/system-security.sources` is created with `create_new` and mode 0600, and
+   `EEXIST` aborts the whole apply with nothing written.
+   A planned write that creates a file is accepted only when the platform is Pop!_OS and the target is exactly
+   `sources.list.d/system-security.sources`; a plan that creates any other file, or replaces a file that does not
+   exist, aborts before the first open." The Errors and self-healing prohibition ("never create files in `/etc/apt`
+   that did not exist") was reworded so that it is about self-healing only and names that one planned creation, and
+   the Apply bullet carrying ruling 8's intent now states the constraint in the place a coder reads.
+   Carried by 7.8; gated by S17 and S3.
 
-10. **APPLIED — `docs/spec/apply.md`, bullet 1 and the `--restore` bullet; `docs/spec/errors.md`, the Docker test list.** G1: a restore builds the manifest path itself from the backup id; the restore run re-reads the manifest, checks it is a root-owned regular file of mode 0600 and not a symlink, and only then validates the targets it names, refusing the restore when a record's digest, mode or owner disagrees with the backup copy it names. The plan-shaped half of this item — a manifest digest arriving inside a cross-process plan, and the restore-side producer refusal — is removed by the CLI ruling of 2026-11-12 (7.2); the manifest re-derivation and the disagreement refusal survive in-process (section 5). The Docker list gains a restore whose manifest is stale, partial, or names a path outside `/etc/apt`.
-11. **APPLIED — `docs/spec/apply.md`, bullet 1; `SPEC.md`, new "Privilege boundary and threat model" bullet.** G2: every target's new content carries a digest the root run recomputes, and a plan whose digests do not match is refused; the privilege-boundary bullet states that the guarantee is content binding, not producer identity, because a process running as the invoking uid can invoke the root run itself. S15's second half is restated in section 6 to match.
-12. **APPLIED — `SPEC.md` "Privilege boundary and threat model", new bullet.** G3: the root run is one binary, a mode of the same executable; a separate privileged artifact is out of scope for v1, and splitting it would be a new product decision rather than a threshold.
-13. **APPLIED — `docs/spec/localization.md`, bullet 1; `docs/spec/testing.md`, the localization bullet.** Written from the human's localization decision, not from a ruling in sections 7 or 8, and recorded here because it adds a consumer to A2. It states that the locale is resolved once from `LC_ALL`, else `LANG`, before any apt file is opened; that it selects display text and never a path, a decision, a comparison, an ordering, the plan, the bytes written or an exit code; that `LC_ALL`, `LANG`, `NO_COLOR` (item 14's second display-only read), `COLORTERM` (the same item's third) and the verifier's `TMPDIR` are the only environment variables a run reads; and that the container proof is a read-only pair and a root write pair, each identical in exit code and `/etc/apt` bytes — and, for the write pair, manifest bytes — with its discriminating power starting only at the first translated catalog, since two runs that print the same text are two copies of one run. Section 0 fact 5 and section 2's A2 note carry the same consumer as planned, and the row's "entry point today" column does not name it, because the read does not exist yet. Section 3 B1's "a root run must build its own minimal environment" carries both display reads as its stated exceptions (`NO_COLOR` being item 14's), so B1 states one rule rather than two contradicting bullets. No ruling and no S1–S17 assertion moves with it: whether S13's environment list should also name `LANG` is a human ruling and is asked for in the PR rather than written here.
-14. **APPLIED — `docs/spec/output.md`, the whole section; `docs/spec/cli.md`, the `--no-color` row, the short-form sentence and the write-confirmation bullet; `docs/spec/localization.md`, bullet 1.** The section states the report as one block on stdout whose `Rejected` section prints only when something was rejected and whose empty sections print nothing, the colour decision and the list of what is styled, the plain output as the contract a harness matches, the stderr-only progress line and its one summary line, and the environment reads that may change printed text; the `CLI` bullet now lists the alternatives only when there are any and says the confirmation repeats no skip. A second display-only environment read, and a third. `COLORTERM` selects which of two fixed accents is printed (`src/main.rs:872`), reaches nothing else, and no module reached from `src/apply.rs` reads it. `NO_COLOR` turns colour off when it is present, whatever its value, and reaches nothing else: it is never an input to a decision, a comparison, an ordering, a path, the plan, the bytes written or an exit code, and no module reached from `src/apply.rs` reads it. Written from the human's request for the presentation changes of 2026-11-13, not from a ruling in sections 7 or 8, and recorded here because it adds a consumer to A2: docs/spec/output.md states the colour decision and the parseability of the plain output, docs/spec/cli.md gives the flag its row and docs/spec/localization.md requotes the set of display reads (item 13 above). Section 0 fact 5 and section 2's A2 note carry the same consumer, and the A2 row's "entry point today" column names the reads at `src/main.rs:862` and `src/main.rs:872`. No ruling and no S1–S17 assertion moves with it: S13's environment list still names `APT_CONFIG`, `LD_PRELOAD` and `TMPDIR`, and adding `NO_COLOR` to it would change the S-acceptance set, which is a human ruling and is not written here.
-15. **APPLIED — `docs/spec/cli.md`, the `--restore` bullet; `docs/spec/apply.md`, bullet 1 and the `--restore` bullet; and `GLOSSARY.md` "Plan".** D10's delta, written before the code rather than derived from it. CLI: a restore needs root for the read as well as for the write, so a non-root run prints only `sudo apt-scout --restore` and exits 3 before it opens the backup; its confirmation names the backup it reads, the files it writes and the backup it creates instead of an old and new URI; and `--list` with `--restore` is a usage error (exit 2) refused before the backup is opened. Apply bullet 1: a `--restore` plan is authorized by the backup it was re-derived from instead of by a verified mirror, so it carries no selected mirror and no baseline, and the baseline rule is a mirror's rule. Apply's `--restore` bullet: the newest backup is the greatest id under the root and the only backup a run considers, a root holding no id or an id that is not a plain directory fails with nothing written, and a restore is itself a write that backs up under its own id. `GLOSSARY.md` "Plan" now says what authorizes a plan, not only what bytes it carries. `docs/threat-model.md` has no ruling to move with any of this: section 5, B5 and B8 carry the description and this item is where the deltas are accounted for.
-16. **APPLIED — `docs/spec/apply.md`, the last sentence of the `--restore` bullet.** Corrected in D10b's PR, and a correction is a delta: the sentence said a file a restore removed has no copy to describe, so a restore from that backup is refused for that reason. The first half is false about the code and the second half names a refusal that never fires, so both were claims about shipped behaviour that the code cannot support. The writer copies every file it is about to replace or remove — one it is about to remove included — and records it as `replace` with the copy's digest (`src/apply.rs:683`, `src/apply.rs:722`; `apply::tests::a_restore_replaces_before_it_removes` asserts the copy holds the created bytes). What actually refuses the second restore is the record-versus-disk rule: the record says `replace` and the target is no longer on disk, which is a disagreement `restore::build` refuses in full (`src/restore.rs:332`). The conclusion the sentence drew — refused, not guessed — is unchanged and was always right; only the mechanism is corrected, and the sentence now says the copy exists and names the refusal that does the work.
-17. **APPLIED — no `SPEC.md` text moves; this item records a correction to the record's own description, as item 16 does.** Section 5's restore paragraph and B5 named `restore::build` as the reader after D10b's PR had made `restore::run` (`src/restore.rs:123`) the production entry point, which reaches the plan through `build_as` (`src/restore.rs:80`); both now name that path, and their other `path:line` citations were refreshed to the functions they describe. `docs/spec/apply.md` names no Rust path, so no requirement, ruling or S-ID moves with it.
+10. **APPLIED — `docs/spec/apply.md`, bullet 1 and the `--restore` bullet; `docs/spec/errors.md`, the Docker test
+    list.** G1: a restore builds the manifest path itself from the backup id; the restore run re-reads the manifest,
+    checks it is a root-owned regular file of mode 0600 and not a symlink, and only then validates the targets it
+    names, refusing the restore when a record's digest, mode or owner disagrees with the backup copy it names.
+    The plan-shaped half of this item — a manifest digest arriving inside a cross-process plan, and the restore-side
+    producer refusal — is removed by the CLI ruling of 2026-11-12 (7.2); the manifest re-derivation and the
+    disagreement refusal survive in-process (section 5).
+    The Docker list gains a restore whose manifest is stale, partial, or names a path outside `/etc/apt`.
+11. **APPLIED — `docs/spec/apply.md`, bullet 1; `SPEC.md`, new "Privilege boundary and threat model" bullet.** G2:
+    every target's new content carries a digest the root run recomputes, and a plan whose digests do not match is
+    refused; the privilege-boundary bullet states that the guarantee is content binding, not producer identity,
+    because a process running as the invoking uid can invoke the root run itself.
+    S15's second half is restated in section 6 to match.
+12. **APPLIED — `SPEC.md` "Privilege boundary and threat model", new bullet.** G3: the root run is one binary, a mode
+    of the same executable; a separate privileged artifact is out of scope for v1, and splitting it would be a new
+    product decision rather than a threshold.
+13. **APPLIED — `docs/spec/localization.md`, bullet 1; `docs/spec/testing.md`, the localization bullet.** Written from
+    the human's localization decision, not from a ruling in sections 7 or 8, and recorded here because it adds a
+    consumer to A2.
+    It states that the locale is resolved once from `LC_ALL`, else `LANG`, before any apt file is opened; that it
+    selects display text and never a path, a decision, a comparison, an ordering, the plan, the bytes written or an
+    exit code; that `LC_ALL`, `LANG`, `NO_COLOR` (item 14's second display-only read), `COLORTERM` (the same item's
+    third) and the verifier's `TMPDIR` are the only environment variables a run reads; and that the container proof is
+    a read-only pair and a root write pair, each identical in exit code and `/etc/apt` bytes — and, for the write
+    pair, manifest bytes — with its discriminating power starting only at the first translated catalog, since two runs
+    that print the same text are two copies of one run.
+    Section 0 fact 5 and section 2's A2 note carry the same consumer as planned, and the row's "entry point today"
+    column does not name it, because the read does not exist yet.
+    Section 3 B1's "a root run must build its own minimal environment" carries both display reads as its stated
+    exceptions (`NO_COLOR` being item 14's), so B1 states one rule rather than two contradicting bullets.
+    No ruling and no S1–S17 assertion moves with it: whether S13's environment list should also name `LANG` is a human
+    ruling and is asked for in the PR rather than written here.
+14. **APPLIED — `docs/spec/output.md`, the whole section; `docs/spec/cli.md`, the `--no-color` row, the short-form
+    sentence and the write-confirmation bullet; `docs/spec/localization.md`, bullet 1.** The section states the report
+    as one block on stdout whose `Rejected` section prints only when something was rejected and whose empty sections
+    print nothing, the colour decision and the list of what is styled, the plain output as the contract a harness
+    matches, the stderr-only progress line and its one summary line, and the environment reads that may change printed
+    text; the `CLI` bullet now lists the alternatives only when there are any and says the confirmation repeats no
+    skip.
+    A second display-only environment read, and a third.
+    `COLORTERM` selects which of two fixed accents is printed (`src/main.rs:872`), reaches nothing else, and no module
+    reached from `src/apply.rs` reads it.
+    `NO_COLOR` turns colour off when it is present, whatever its value, and reaches nothing else: it is never an input
+    to a decision, a comparison, an ordering, a path, the plan, the bytes written or an exit code, and no module
+    reached from `src/apply.rs` reads it.
+    Written from the human's request for the presentation changes of 2026-11-13, not from a ruling in sections 7 or 8,
+    and recorded here because it adds a consumer to A2: docs/spec/output.md states the colour decision and the
+    parseability of the plain output, docs/spec/cli.md gives the flag its row and docs/spec/localization.md requotes
+    the set of display reads (item 13 above).
+    Section 0 fact 5 and section 2's A2 note carry the same consumer, and the A2 row's "entry point today" column
+    names the reads at `src/main.rs:862` and `src/main.rs:872`.
+    No ruling and no S1–S17 assertion moves with it: S13's environment list still names `APT_CONFIG`, `LD_PRELOAD` and
+    `TMPDIR`, and adding `NO_COLOR` to it would change the S-acceptance set, which is a human ruling and is not
+    written here.
+15. **APPLIED — `docs/spec/cli.md`, the `--restore` bullet; `docs/spec/apply.md`, bullet 1 and the `--restore` bullet;
+    and `GLOSSARY.md` "Plan".** D10's delta, written before the code rather than derived from it.
+    CLI: a restore needs root for the read as well as for the write, so a non-root run prints only
+    `sudo apt-scout --restore` and exits 3 before it opens the backup; its confirmation names the backup it reads, the
+    files it writes and the backup it creates instead of an old and new URI; and `--list` with `--restore` is a usage
+    error (exit 2) refused before the backup is opened.
+    Apply bullet 1: a `--restore` plan is authorized by the backup it was re-derived from instead of by a verified
+    mirror, so it carries no selected mirror and no baseline, and the baseline rule is a mirror's rule.
+    Apply's `--restore` bullet: the newest backup is the greatest id under the root and the only backup a run
+    considers, a root holding no id or an id that is not a plain directory fails with nothing written, and a restore
+    is itself a write that backs up under its own id.
+    `GLOSSARY.md` "Plan" now says what authorizes a plan, not only what bytes it carries.
+    `docs/threat-model.md` has no ruling to move with any of this: section 5, B5 and B8 carry the description and this
+    item is where the deltas are accounted for.
+16. **APPLIED — `docs/spec/apply.md`, the last sentence of the `--restore` bullet.** Corrected in D10b's PR, and a
+    correction is a delta: the sentence said a file a restore removed has no copy to describe, so a restore from that
+    backup is refused for that reason.
+    The first half is false about the code and the second half names a refusal that never fires, so both were claims
+    about shipped behaviour that the code cannot support.
+    The writer copies every file it is about to replace or remove — one it is about to remove included — and records
+    it as `replace` with the copy's digest (`src/apply.rs:683`, `src/apply.rs:722`;
+    `apply::tests::a_restore_replaces_before_it_removes` asserts the copy holds the created bytes).
+    What actually refuses the second restore is the record-versus-disk rule: the record says `replace` and the target
+    is no longer on disk, which is a disagreement `restore::build` refuses in full (`src/restore.rs:332`).
+    The conclusion the sentence drew — refused, not guessed — is unchanged and was always right; only the mechanism is
+    corrected, and the sentence now says the copy exists and names the refusal that does the work.
+17. **APPLIED — no `SPEC.md` text moves; this item records a correction to the record's own description, as item 16
+    does.** Section 5's restore paragraph and B5 named `restore::build` as the reader after D10b's PR had made
+    `restore::run` (`src/restore.rs:123`) the production entry point, which reaches the plan through `build_as`
+    (`src/restore.rs:80`); both now name that path, and their other `path:line` citations were refreshed to the
+    functions they describe.
+    `docs/spec/apply.md` names no Rust path, so no requirement, ruling or S-ID moves with it.
 
-18. **APPLIED — `docs/spec/cli.md`, the short-form sentence and the `--restore` behaviour bullet; `docs/spec/testing.md`, the `scripts/docker-test.sh` bullet and the Docker-coverage sentence; `SPEC.md`, the requirement index.** D11b's delta, written as the flag ships. The short-form sentence consumed the reservation it stated: `-r` is `--restore`'s short form now that the flag exists, and `-R` stays reserved for `--refresh`. The behaviour bullet states that a restore is not combinable with a flag of the mirror pipeline (`--country`, `--any`, `--top`, `--https-only`, `--list`, `--no-geo`), each a usage error (exit 2) naming the offending flag, that `--yes` is the unattended form and the display flags stay display only, and that a finished restore prints its own `Restore` block rather than the mirror report's sections, with `--verbose` adding each file's digest, mode and owner. "Testing" names the container cases (W27–W33) and "Implementation status" stops saying `--restore` is unimplemented. **The one decision this item records:** the D11b task text said `--restore` would have no short form, while this ledger and the `SPEC.md` rule required `-r`; the supervising lead ruled on 2026-11-14 that the rule governs, so the flag has `-r` and every printed instruction keeps the long form. No ruling in sections 7 or 8 moves, and no S-ID assertion changes: S10 and the restore half of S1 gain their first container cases, S4 and S11's manifest half remain the unit-test matrix, and `README.md` and `man/apt-scout.1` are corrected in the same PR because both still said the flag was rejected.
+18. **APPLIED — `docs/spec/cli.md`, the short-form sentence and the `--restore` behaviour bullet;
+    `docs/spec/testing.md`, the `scripts/docker-test.sh` bullet and the Docker-coverage sentence; `SPEC.md`, the
+    requirement index.** D11b's delta, written as the flag ships.
+    The short-form sentence consumed the reservation it stated: `-r` is `--restore`'s short form now that the flag
+    exists, and `-R` stays reserved for `--refresh`.
+    The behaviour bullet states that a restore is not combinable with a flag of the mirror pipeline (`--country`,
+    `--any`, `--top`, `--https-only`, `--list`, `--no-geo`), each a usage error (exit 2) naming the offending flag,
+    that `--yes` is the unattended form and the display flags stay display only, and that a finished restore prints
+    its own `Restore` block rather than the mirror report's sections, with `--verbose` adding each file's digest, mode
+    and owner.
+    "Testing" names the container cases (W27–W33) and "Implementation status" stops saying `--restore` is
+    unimplemented.
+    **The one decision this item records:** the D11b task text said `--restore` would have no short form, while this
+    ledger and the `SPEC.md` rule required `-r`; the supervising lead ruled on 2026-11-14 that the rule governs, so
+    the flag has `-r` and every printed instruction keeps the long form.
+    No ruling in sections 7 or 8 moves, and no S-ID assertion changes: S10 and the restore half of S1 gain their first
+    container cases, S4 and S11's manifest half remain the unit-test matrix, and `README.md` and `man/apt-scout.1` are
+    corrected in the same PR because both still said the flag was rejected.
 
-19. **APPLIED — `docs/spec/apply.md`, bullet 1.** D49's delta, written with the validation that enforces it rather than before it, from PR #59's security read. Bullet 1 gains one sentence after the restore-authority sentence it already carried: "Only a `--restore` plan may remove a file: a removal is the one effect a restore can prove from the manifest it re-derived the plan from, so a plan that would remove anything while authorized by a mirror is refused before its first byte. A replacement is legitimate under either authority; a creation is legitimate only under a mirror plan, because a restore plan carries no platform and a creation without one is refused." **Review corrected this item's own first draft before merge, and only its second half:** the draft ended "… while a replacement and the one planned creation stay legitimate under either authority", which is false about the code and would have granted in the SPEC a permission `validate` refuses — `Plan::for_restore` sets `platform: None` (`src/plan.rs:188`), and `validate` refuses every `Effect::Create` whose plan carries no `Some(PopOs)` platform to justify it (`src/plan.rs:215–219`), which is what keeps a restore from creating anything — the enforcement, and not the doc comment above it in `src/plan.rs`, is the evidence — so a creation stays a mirror plan's alone. The removal half stood and is unchanged. Section 5's write-order bullet gains the matching control and its citation, because the bullet stated the order of the removal phase in the writer but not who may authorize it. No ruling in sections 7 or 8 moves and no S-test `Fails when` clause changes: the rule makes validation enforce the authorization bullet 1 already described, and no other bullet ever allowed a mirror to remove. The gap this closes is representability, not behaviour — no path produced such a plan on `develop` — so it is recorded as a delta because the sentence is new text in the SPEC, and the roadmap entry carries the mutation evidence that deleting the rule makes the new test fail.
-20. **APPLIED — `docs/spec/platform.md`, PLAT-3.** Written with the fix rather than before it: the subprocess `dpkg --print-architecture` starts MUST run with the environment cleared and stdin nulled, because a root run reaches it. It states the environment half of an obligation the record already carried for any child, adds the stdin half, and the parent's own environment is out of its reach, since the loader runs before the first line.
+19. **APPLIED — `docs/spec/apply.md`, bullet 1.** D49's delta, written with the validation that enforces it rather
+    than before it, from PR #59's security read.
+    Bullet 1 gains one sentence after the restore-authority sentence it already carried: "Only a `--restore` plan may
+    remove a file: a removal is the one effect a restore can prove from the manifest it re-derived the plan from, so a
+    plan that would remove anything while authorized by a mirror is refused before its first byte.
+    A replacement is legitimate under either authority; a creation is legitimate only under a mirror plan, because a
+    restore plan carries no platform and a creation without one is refused." **Review corrected this item's own first
+    draft before merge, and only its second half:** the draft ended "… while a replacement and the one planned
+    creation stay legitimate under either authority", which is false about the code and would have granted in the SPEC
+    a permission `validate` refuses — `Plan::for_restore` sets `platform: None` (`src/plan.rs:188`), and `validate`
+    refuses every `Effect::Create` whose plan carries no `Some(PopOs)` platform to justify it (`src/plan.rs:215–219`),
+    which is what keeps a restore from creating anything — the enforcement, and not the doc comment above it in
+    `src/plan.rs`, is the evidence — so a creation stays a mirror plan's alone.
+    The removal half stood and is unchanged.
+    Section 5's write-order bullet gains the matching control and its citation, because the bullet stated the order of
+    the removal phase in the writer but not who may authorize it.
+    No ruling in sections 7 or 8 moves and no S-test `Fails when` clause changes: the rule makes validation enforce
+    the authorization bullet 1 already described, and no other bullet ever allowed a mirror to remove.
+    The gap this closes is representability, not behaviour — no path produced such a plan on `develop` — so it is
+    recorded as a delta because the sentence is new text in the SPEC, and the roadmap entry carries the mutation
+    evidence that deleting the rule makes the new test fail.
+20. **APPLIED — `docs/spec/platform.md`, PLAT-3.** Written with the fix rather than before it: the subprocess
+    `dpkg --print-architecture` starts MUST run with the environment cleared and stdin nulled, because a root run
+    reaches it.
+    It states the environment half of an obligation the record already carried for any child, adds the stdin half, and
+    the parent's own environment is out of its reach, since the loader runs before the first line.
 
 
 ---
@@ -365,6 +1217,13 @@ State of every delta the rulings in sections 7 and 8 require. APPLIED names the 
 
 Recorded so nothing here is dropped silently; none of these is an open decision.
 
-- The throughput sample is attacker-controlled (`src/probe.rs:177–178`) and can decide the ranking. Accepted: it cannot authorize package installation, and docs/spec/pipeline.md step 9 already calls throughput relative. Owner: D9, with no SPEC delta.
-- Root printing an unescaped mirror URL or error string into a terminal (B7) is only a hazard once root prints anything. The mitigation belongs to D13, not D9.
-- `reader.join()` is unbounded after the timeout kill in the verifier (`src/verify.rs:294–313`), and the oversized-body case reports `Unavailable` rather than `Invalid`. Both stay in D6f's P2 list; neither changes what a write may trust.
+- The throughput sample is attacker-controlled (`src/probe.rs:177–178`) and can decide the ranking.
+  Accepted: it cannot authorize package installation, and docs/spec/pipeline.md step 9 already calls throughput
+  relative.
+  Owner: D9, with no SPEC delta.
+- Root printing an unescaped mirror URL or error string into a terminal (B7) is only a hazard once root prints
+  anything.
+  The mitigation belongs to D13, not D9.
+- `reader.join()` is unbounded after the timeout kill in the verifier (`src/verify.rs:294–313`), and the
+  oversized-body case reports `Unavailable` rather than `Invalid`.
+  Both stay in D6f's P2 list; neither changes what a write may trust.
