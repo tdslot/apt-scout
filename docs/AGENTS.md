@@ -52,4 +52,4 @@ Task order, task states, merged PRs, and verification evidence live in `ROADMAP.
   with a `MUST`/`SHOULD`/`MAY` obligation in the sentence that opens each one, `(planned)`, no history
   or rationale, and the layout rule this folder also applies.
 - `decisions/` holds one file per decision and an index of the ids recorded elsewhere; it has no `AGENTS.md` of its own and is covered by this file.
-- `history/` is the evidence archive: one file per milestone plus the change log, moved out of `ROADMAP.md` by D77. It is read-only history — a correction goes in a new entry, never into a past one — and it states no rules.
+- `history/` is the evidence archive: one file per milestone plus `backlog.md` and the change log, moved out of `ROADMAP.md` by D77 and D84. It is read-only history — a correction goes in a new entry, never into a past one — and it states no rules.
