@@ -1004,4 +1004,55 @@ else
   fail "W33 restore prompt -> exit $rc: $(echo "$got" | head -16)"
 fi
 
+
+# W34 (docs/spec/testing.md, the man-page bullet) The page renders in a disposable container.
+# These images put a stub at /usr/bin/man that prints a notice and exits 0, divert the real binary
+# to /usr/bin/man.REAL and ship no man-db. The case looks for the page text first and prepares the
+# image only when it is absent: install man-db, remove the stub, drop the local diversion, reinstall
+# man-db so the real binary lands in place. That order is the one that works: removing the diversion
+# while the stub is still there fails with "rename involves overwriting". Needs the network.
+for v in 20.04 22.04 24.04 26.04; do
+  got=$(docker run --rm --network bridge --platform "$platform" \
+    -v "$PWD/man/apt-scout.1":/usr/share/man/man1/apt-scout.1:ro ubuntu:$v \
+    sh -c 'man apt-scout >/tmp/page 2>&1; grep -q SYNOPSIS /tmp/page || { apt-get update -qq >/dev/null 2>&1; apt-get install -y -qq man-db >/dev/null 2>&1; rm -f /usr/bin/man; dpkg-divert --local --rename --remove /usr/bin/man >/dev/null 2>&1; apt-get install -y -qq --reinstall man-db >/dev/null 2>&1; man apt-scout >/tmp/page 2>&1; }; cat /tmp/page; echo rc=$?' 2>&1) || true
+  if printf '%s\n' "$got" | grep -qx 'rc=0' && [[ "$got" == *NAME* ]] && [[ "$got" == *SYNOPSIS* ]] \
+    && [[ "$got" == *'find a fresh, fast Ubuntu archive mirror'* ]]; then
+    pass "ubuntu:$v -> the man page renders with NAME and SYNOPSIS"
+  else
+    fail "ubuntu:$v -> man page render: $(printf '%s\n' "$got" | head -4)"
+  fi
+done
+
+# W35 (same bullet) The formatting half: `mandoc -Tlint`, the check docs/spec/testing.md names as its
+# example. D20 recorded exactly one warning on this page -- the .TH date is empty on purpose, because a
+# date copied here would drift from the release -- so the case accepts that one line and fails on any
+# other diagnostic. Needs the network for mandoc.
+got=$(docker run --rm --network bridge --platform "$platform" \
+  -v "$PWD/man/apt-scout.1":/usr/share/man/man1/apt-scout.1:ro ubuntu:24.04 \
+  sh -c 'apt-get update -qq >/dev/null 2>&1; apt-get install -y -qq mandoc >/dev/null 2>&1; mandoc -Tlint /usr/share/man/man1/apt-scout.1 2>&1; true' 2>&1) || true
+known='missing date, using'
+# grep exits 1 when it filters everything out, and set -e would end the run there.
+unexpected=$(printf '%s\n' "$got" | grep -v "$known" | grep -v '^$' || true)
+if [ -z "$unexpected" ] && printf '%s\n' "$got" | grep -q "$known"; then
+  pass "man page -> mandoc -Tlint prints only the known missing-date warning"
+else
+  fail "man page -> mandoc -Tlint: $(printf '%s\n' "$got" | head -4)"
+fi
+
+# W36 (same bullet) The flag half: every flag --help lists must carry an OPTIONS tag, or a parser flag ships undocumented.
+# The page also documents --tui and --refresh as planned and not accepted, which --help does not list;
+# those two are declared here so that a third page-only flag fails the case instead of slipping past.
+# The plain binary is a Linux build, so --help is read inside a container rather than on this host.
+help_flags=$(run none ubuntu:24.04 /apt-scout --help | grep -o -- '--[a-z-]\+' | sort -u)
+page_flags=$(sed -n '/^\.SH OPTIONS/,/^\.SH /p' man/apt-scout.1 | sed 's/\\-/-/g' | grep -o -- '--[a-z-]\+' | sort -u)
+missing=$(comm -23 <(printf '%s\n' "$help_flags") <(printf '%s\n' "$page_flags"))
+extra=$(comm -13 <(printf '%s\n' "$help_flags") <(printf '%s\n' "$page_flags"))
+planned=$'--refresh\n--tui'
+unplanned=$(comm -23 <(printf '%s\n' "$extra") <(printf '%s\n' "$planned"))
+if [ -z "$missing" ] && [ -z "$unplanned" ]; then
+  pass "man page -> every --help flag has an OPTIONS tag and no unplanned flag is documented"
+else
+  fail "man page -> missing from the page: $(echo $missing); documented but unplanned: $(echo $unplanned)"
+fi
+
 exit $status

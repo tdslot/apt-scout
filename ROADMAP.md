@@ -349,8 +349,8 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
   the `.deb` path, the tarball path and the two packages a tarball install needs.
   The previous state is recorded in [the m4 history](docs/history/m4.md#d58): nothing copied the page at all until
   this PR.
-- [ ] **D46 — READY, coder; found while delivering D20.** the man-page check docs/spec/testing.md requires, and no
-  container case runs it — [brief](docs/tasks/D46.md)
+- [x] **D46 — DONE.** The man page had no automated check; `scripts/docker-test.sh` now renders it in four Ubuntu
+  images, runs `mandoc -Tlint`, and compares its `OPTIONS` tags with `--help` — [evidence](docs/history/m4.md#d46)
 - [ ] **D21 — BLOCKED by D16, D33 and the last translation group D31j.** Re-run laptop visual inspection and Ubuntu
   Docker tests; Oracle final audit against original goal and all of `SPEC.md`, Localization and every shipped locale
   included.
