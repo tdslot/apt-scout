@@ -44,8 +44,12 @@ This is the global `task-pipeline-orchestrator` template, scoped to one ROADMAP 
 
 Repeat until you stop for a reason below.
 
-1. **Read state.** `git fetch origin`, `git log --oneline -5 origin/develop`, `gh pr list --state all --limit 5`, and the ROADMAP status block. Never trust your memory of the repo over the commands.
-2. **Pick one task.** The first task that is `READY`, or `BLOCKED` only by tasks that are now `DONE`. Do not invent tasks; if the ROADMAP has a gap the SPEC demands, that is an architect finding, not something you patch into a branch silently.
+1. **Read state.** `git fetch origin`, `git log --oneline -5 origin/develop`, `gh pr list --state all --limit 5`, the ROADMAP status
+   block, and `gh pr list --state open`: an open PR is the task, dependabot included, because the ledger cannot
+   list work that exists outside it. Never trust your memory of the repo over the commands.
+2. **Pick one task.** If step 1 found an open PR, that PR is the task: read `gh pr diff <n>`, get a review and a security
+   verdict on that head, fix what is red, and merge it at step 10 — do not start new work beside it. Otherwise the first task
+   that is `READY`, or `BLOCKED` only by tasks that are now `DONE`. Do not invent tasks; if the ROADMAP has a gap the SPEC demands, that is an architect finding, not something you patch into a branch silently.
 3. **Isolate.** `git worktree add /tmp/apt-scout-<task> -b <type>/<slug> origin/develop`. One worktree per task, never two writers in one tree. The primary checkout stays untouched.
 4. **Contract first.** If behavior is missing or unclear, send the architect in first: SPEC delta, roadmap entry, `plans/<task>-plan.md`. Skip this step only when the SPEC already says precisely what the task requires.
 4b. **Privileged design.** If the task touches `/etc/apt` writes, `sudo`, self-reexec, or credentials, a threat-model review must exist before the coder starts and its findings and closure must be recorded in `ROADMAP.md`. That review is `docs/threat-model.md` when the document already rules on the surface the task touches — cite the section and the ruling in `ROADMAP.md`, and let the security verdict check the task against it rather than asking `oracle` again. Send `oracle` a new threat model and design review only when the surface is new or a ruling has to move. No coder runs on a privileged task without one of the two records. If `oracle` is needed and cannot be resolved, stop and escalate to the human: the security subagent alone does not satisfy step 4b or 12b.
