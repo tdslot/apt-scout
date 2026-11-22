@@ -449,10 +449,11 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   Each now has `docs/tasks/<id>.md`, kept verbatim with its status, and the ledger keeps one line: the claim, the
   state and a link. `docs/AGENTS.md` states the rule — forward-looking, deleted when the task lands, because
   `history/` holds what was done. The same pass reflowed the ledger to the style contract: it was 56 126 bytes in
-  239 lines, three of them prose paragraphs over 1000 characters; it is 44 930 bytes in 550 lines, no line over 120
+  239 lines, three of them prose paragraphs over 1000 characters; it is 550 lines now, with no line over 120
   characters or over 120 bytes, and the text is word for word unchanged, checked the way D78 checked the record. The
-  byte count matters here because an em dash is three bytes: two lines sat at 116 characters and 122 bytes, which a
-  character measure calls short and a byte measure calls long.
+  byte half is not pedantry: an em dash is three bytes, so two lines sat at 116 characters and 122 bytes, which a
+  character measure calls short and a byte measure calls long. No byte total is stated, because this sentence sits
+  inside the file it would describe.
   [docs/AGENTS.md]
 - [x] D78. Apply the style contract in `docs/AGENTS.md` to `docs/threat-model.md`: one sentence per line and every
   prose line under 120 characters, with the rulings and the content untouched. It had 21 lines over 1000
