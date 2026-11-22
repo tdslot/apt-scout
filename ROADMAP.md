@@ -181,9 +181,11 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   reader, by comparing the words of five characters or more on the citing line with those of the cited line
   and the five either side of it. The entry states no count: the script prints it, and it has moved with every
   merge since it was written.
-  Four citations had already drifted when this branch opened, all shifted by `src/main.rs` gaining 54 lines in
-  D87: `fn main`, `write_baseline` twice and the harness dispatch. They are re-pointed here. That is the whole
-  cost of drift: a number that still resolves, still looks right, and now names a different line.
+  Four citations at three places had already drifted when this branch opened, moved by 38 lines: D87 inserted 54
+  lines into `src/main.rs`, but everything that moved sat after the insertion, so the shift is one number and
+  the net gain is not it. The three places are `fn main`, `write_baseline` cited twice, and the harness
+  dispatch, and they are re-pointed here. That is the whole cost of drift: a number that still resolves, still
+  looks right, and now names a different line.
   A stricter check was built and abandoned: for each citation attached to a backticked name, require that name
   within five lines of the cited line. It flagged 5 of 32 named citations, and 3 of the 5 were false, because an
   environment variable never appears in the code that reads it and a sentence listing two functions pairs the second
@@ -192,7 +194,7 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   [docs/AGENTS.md]
 - [ ] D88. Decide whether `scripts/citation-triage.py` runs in CI, and where: as a weekly advisory beside
   `scripts/check-sources.sh`, or as a required step that would fail a PR whose code moved a cited line. Required
-  is what would have caught D87 breaking three citations of its own record, but the flag set is a triage, so a
+  is what would have caught D87 moving the three places it moved, but the flag set is a triage, so a
   required step fails today on a list that is mostly correct, and the entry states no count of it. 
   [.github/workflows/source-contract.yml]
 - [x] D87. Audit the one process a root run spawns for its environment: `src/main.rs` ran `/usr/bin/dpkg --print-architecture`
