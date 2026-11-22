@@ -182,13 +182,12 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   words of five characters or more on the citing line with those of the five lines either side of it plus the cited line, and prints the
   citations whose line shares none of them. It prints 22 over 19 distinct targets today, and because the script
   is the definition, the number cannot drift from the rule.
-  Nine of the flagged ones were genuinely wrong, and all nine are corrected: the `wrun` mount, `wro`'s flags, the
-  fixture builder, the read-only-rootfs case, the verification pointer in A5, the report
-  print path, the closing line of a write, the rejected-entry note, the error line and the warning line. The last
-  five matter most: the terminal row and B7 named one of the paths by which a mirror string reaches a terminal, while
-  the closing line of a successful write, the rejected note, the error line and a warning carry it raw too, so the
-  record names each of those and leaves the escaping to D13, which is where it was. The prompt is a static literal
-  and the record says so rather than counting it among the carriers.
+  The flagged ones that were genuinely wrong are corrected: the `wrun` mount, `wro`'s flags, the fixture
+  builder, the read-only-rootfs case, the A5 pointer, the report print path, the closing line of a write, the
+  rejected-entry note, the error line and the warning line. No count is stated: the list is the count. The output
+  paths matter most — the terminal row and B7 named one of them while a mirror string reached the rest raw —
+  so the record now names each carrier and leaves the escaping to D13, which is where it was. The prompt is a
+  static literal and the record says so rather than counting it among the carriers.
   [docs/AGENTS.md]
 - [ ] D87. Audit the one process a root run spawns for its environment: `src/main.rs:2734` runs `/usr/bin/dpkg --print-architecture`
   with no `.env_clear()`, unlike the `gpgv` call (`src/verify.rs:234–246`), so a variable a user can set before
