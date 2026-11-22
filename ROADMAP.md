@@ -164,7 +164,11 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   acceptance block), 1.2–2.5 KB each on one line. Location is a human call; the rewrap follows it.
 - [ ] D78. Apply the style contract in `docs/AGENTS.md` to `docs/threat-model.md` (21 lines over 1000 characters). Rulings and content unchanged. [docs/AGENTS.md]
 - [ ] D79. Rule the localization question: `docs/spec/localization.md` requires `fluent-templates` 0.15.1 and a `locales/` tree that do not exist, while `AGENTS.md` states a one-dependency rule. Say whether localization is v1 and fix whichever document is wrong. [SPEC: docs/spec/localization.md]
-- [ ] D80. Rule the TUI and `--refresh` scope: both are specified and neither is implemented, and `--refresh` is an unknown option today. [SPEC: docs/spec/tui.md, docs/spec/cli.md]
+- [ ] D80. Rule the TUI and `--refresh` scope: both are specified and neither is implemented, and `--refresh` is an
+  unknown option today. The ruling reaches further than the flag: B7 defers terminal escaping to D13, which is the TUI
+  implementation, so a no-TUI ruling leaves the exposure named at `docs/threat-model.md:152` without an owner — a
+  root run printing a mirror URL or a rejected entry verbatim is `today`'s behaviour, not the TUI's.
+  [SPEC: docs/spec/tui.md, docs/spec/cli.md]
 - [ ] D81. Rule the mirror-list cache (D28): specified with a 24 h validity and never implemented. [SPEC: docs/spec/pipeline.md]
 - [x] D82. Re-point the stale `path:line` citations in `docs/threat-model.md` that predated the restructure:
   16 distinct stale citations, 22 occurrences at 13 places in the record, re-pointed and each verified by the symbol on the cited
