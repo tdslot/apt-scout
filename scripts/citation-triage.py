@@ -2,8 +2,8 @@
 """Triage the path:line citations in docs/threat-model.md against the code.
 
 For every citation into `src/` or `scripts/`, compare the words of five
-characters or more on the citing line with those of the five lines either side
-of the cited line. A citation whose line shares no such word with the code it
+characters or more on the citing line with those of the cited line and the five
+lines either side of it. A citation whose line shares no such word with the code it
 names needs a reader: the number may have drifted, or the sentence may be
 describing something else.
 

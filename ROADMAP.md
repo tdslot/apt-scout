@@ -179,16 +179,21 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
 - [ ] D86. Audit the rest of the `path:line` citations in `docs/threat-model.md` against the code, not just their
   bounds: 208 citations into `src/` and `scripts/` resolve, but a line number can drift and stay in range.
   `scripts/citation-triage.py` flags the ones that need a reader: for each citation it compares the
-  words of five characters or more on the citing line with those of the five lines either side of the cited one, and prints the
+  words of five characters or more on the citing line with those of the five lines either side of it plus the cited line, and prints the
   citations whose line shares none of them. It prints 22 over 19 distinct targets today, and because the script
   is the definition, the number cannot drift from the rule.
-  Eight of the flagged ones were genuinely wrong, and all eight are corrected: the `wrun` mount, `wro`'s flags, the
+  Nine of the flagged ones were genuinely wrong, and all nine are corrected: the `wrun` mount, `wro`'s flags, the
   fixture builder, the read-only-rootfs case, the verification pointer in A5, the report
-  print path, the closing line of a write, the rejected-entry note, and the error and warning lines. The last four
-  matter most: the terminal row and B7 named one of the paths by which a mirror string reaches a terminal, and three
-  more carry it raw — the closing line of a successful write, the rejected-entry note and the error text — so
-  the record now names all of them and leaves the escaping to D13, which is where it was.
+  print path, the closing line of a write, the rejected-entry note, the error line and the warning line. The last
+  five matter most: the terminal row and B7 named one of the paths by which a mirror string reaches a terminal, while
+  the closing line of a successful write, the rejected note, the error line and a warning carry it raw too, so the
+  record names each of those and leaves the escaping to D13, which is where it was. The prompt is a static literal
+  and the record says so rather than counting it among the carriers.
   [docs/AGENTS.md]
+- [ ] D87. Audit the one process a root run spawns for its environment: `src/main.rs:2734` runs `/usr/bin/dpkg --print-architecture`
+  with no `.env_clear()`, unlike the `gpgv` call (`src/verify.rs:234–246`), so a variable a user can set before
+  `sudo` reaches it, and `DPKG_ADMINDIR` is one such name. Whether root may inherit an environment at all
+  is a ruling `docs/threat-model.md` does not make, so the ruling comes before the code. [docs/threat-model.md]
 - [ ] D83. Move the rationale and the measurement evidence out of the requirement bodies in `docs/spec/`: `docs/AGENTS.md` sends `why` to an ADR and evidence to `ROADMAP.md`, and D76b deliberately left both in place because deleting a measured claim (the Launchpad page structure in `pipeline.md` step 3, the 2026-11-11 freshness measurement in step 8, the `pop-default-settings` verification in `platform.md`) would drop input the parsers are tested against. Acceptance: every `because`, `so that`, `Verified from`, `Measured` and dated observation inside a requirement is either cited as `ADR-####` or moved to a ledger entry, and no requirement is left without the fact it needs to be testable. No behavior change. [docs/AGENTS.md, SPEC: docs/spec/AGENTS.md]
 
 ## Change log
