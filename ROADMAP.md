@@ -177,7 +177,9 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   prompt path (`main.rs:553`) beside `println!`, and the S16 bullet says that W10 and W11 add
   tmpfs-only mounts (`:123`, `:455`). Every citation in the file now resolves inside its target.
 - [ ] D86. Audit the rest of the `path:line` citations in `docs/threat-model.md` against the code, not just their
-  bounds: 208 citations into `src/` and `scripts/` resolve, but a line number can drift and stay in range.
+  bounds: every citation into `src/` and `scripts/` resolves, but a line number can drift and stay in range. The
+  ledger does not restate the total: the script prints it. The total has moved three times while this branch was open, which is
+  the same defect the entry exists to remove.
   `scripts/citation-triage.py` flags the ones that need a reader: for each citation it compares the
   words of five characters or more on the citing line with those of the five lines either side of it plus the cited line, and prints the
   citations whose line shares none of them. It prints 22 over 19 distinct targets today, and because the script
