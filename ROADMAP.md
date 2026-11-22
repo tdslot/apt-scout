@@ -174,9 +174,10 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   tmpfs-only mounts (`:123`, `:455`). Every citation in the file now resolves inside its target.
 - [ ] D86. Audit the rest of the `path:line` citations in `docs/threat-model.md` against the code, not just their
   bounds: 208 citations into `src/` and `scripts/` resolve, but a line number can drift and stay in range.
-  A triage that compares the citing line's words of five letters or more with those of the five lines either
-  side of the cited one flags 22 citations over 19 distinct targets; the count moves with the window and the
-  token rule, so the rule above is the definition and a reader can reimplement it in ten lines.
+  `scripts/citation-triage.py` flags the ones that need a reader: for each citation it compares the
+  identifiers on the citing line with those of the five lines either side of the cited one, and prints the
+  citations whose line shares none of them. It prints 22 over 19 distinct targets today, and because the
+  script is the definition, the number cannot drift from the rule.
   Five of the flagged ones were genuinely wrong — the `wrun` mount, `wro`'s flags, the fixture builder, the
   read-only-rootfs case and the verification temp directory — and all five are corrected, so this is not a cosmetic
   backlog: each needs a reader, and a wrong fix is worse than a stale number. Two more found on this branch are
