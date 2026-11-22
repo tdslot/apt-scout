@@ -6,6 +6,8 @@ name: Source contract check
 # Scheduled workflows run only from the default branch (main): this file starts running
 # after the first release merges develop into main. Public-repo schedules are disabled
 # after 60 days without repository activity; re-enable from the Actions tab if that happens.
+# It also runs the citation triage against the threat-model record, because a citation that drifts is
+# the same class of silent failure.
 # Manual runs (workflow_dispatch) never count as the "previous" weekly run.
 on:
   schedule:
@@ -30,6 +32,23 @@ jobs:
           set +e
           bash .github/scripts/check-sources.sh | tee report.txt
           echo "status=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+      - name: Citation drift
+        id: drift
+        run: |
+          set +e
+          python3 scripts/citation-triage.py docs/threat-model.md | tee citations.txt
+          echo "status=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+      - name: Summarise citation drift
+        run: |
+          {
+            echo "### Citation triage"
+            echo ""
+            echo "Advisory, never a required check: a flagged citation needs a reader, and the list is a triage."
+            echo ""
+            echo '```'
+            cat citations.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Previous run result
         id: prev
         if: steps.check.outputs.status != '0'
