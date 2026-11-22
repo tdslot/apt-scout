@@ -84,7 +84,7 @@ echo "HARNESS $(sha256sum target/docker/apt-scout-harness | cut -d' ' -f1)"
 if [ "$mode" = build ]; then exit 0; fi
 # The cfg build leaves its own artifact in the build directory, so the plain copy is what every
 # read-only case below mounts: pointing `bin` at the build directory would silently run the harness
-# in all thirteen of them.
+# in all sixteen of them.
 bin=target/docker/apt-scout-plain
 
 # Pull every image first so `docker run` prints only the program's output (a fresh runner would
@@ -336,7 +336,9 @@ extra=$(comm -13 <(printf '%s\n' "$help_flags") <(printf '%s\n' "$page_flags"))
 planned=$'--refresh\n--tui'
 unplanned=$(comm -23 <(printf '%s\n' "$extra") <(printf '%s\n' "$planned"))
 fi
-if [ "$rc" = 0 ] && [ -n "$help_flags" ] && [ -z "$missing" ] && [ -z "$unplanned" ]; then
+if [ "$rc" != 0 ] || [ -z "$help_flags" ]; then
+  : # already failed above, one message per cause
+elif [ -z "$missing" ] && [ -z "$unplanned" ]; then
   pass "man page -> every --help flag has an OPTIONS tag and no unplanned flag is documented"
 else
   fail "man page -> missing from the page: $(echo $missing); documented but unplanned: $(echo $unplanned)"
