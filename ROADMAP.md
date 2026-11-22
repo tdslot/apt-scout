@@ -169,8 +169,9 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   failure this kind of edit has. What is over 120 now is 20 table rows, which the contract exempts, and one line
   whose content is a single `rg` command in a code span, which breaking would corrupt.
   Two references into the file moved with the reflow and were re-pointed: B7 is `:366`, and the
-  `sources.list.d` sentence D86 quotes is `:231`. The quotation in D86 moved to the code line, since
-  the record's own copy of that string now wraps across two lines and a reader cannot grep it there.
+  `sources.list.d` sentence D86 quotes is `:231`, and the record also had one reference to itself:
+  the terminal row said escaping is D13 (`:152`), which is `:366` now. The quotation in D86 was a quotation of the code,
+  never of the record, and it now says so.
   [docs/AGENTS.md]
 - [ ] D79. Rule the localization question: `docs/spec/localization.md` requires `fluent-templates` 0.15.1 and a `locales/` tree that do not exist, while `AGENTS.md` states a one-dependency rule. Say whether localization is v1 and fix whichever document is wrong. [SPEC: docs/spec/localization.md]
 - [ ] D80. Rule the TUI and `--refresh` scope: both are specified and neither is implemented, and `--refresh` is an
