@@ -180,12 +180,14 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   just their bounds: `scripts/citation-triage.py` compares the words of five characters or more on the citing line
   with those of the cited line and the five either side of it, and prints the citations that share none of them.
   Every one was read here against the line it names, and all of them are correct: the flags are word mismatches, not
-  drift. A sentence says "symlinks are not followed" where the code says "issue: Some("not a directory; symlinks are not followed")",
+  drift: the sentence at `docs/threat-model.md:92` says the refusal is "not a directory; symlinks are not
+  followed" and cites `src/sources.rs:653`, which holds that string in an `issue: Some(...)` field, so the words that
+  matter are not the words the triage compares.
   and a reader sees that in seconds.
   Two of the four citations D87 had moved were in that list before this branch fixed them, and two were not, so the
   triage catches some drift, not all of it, and a reader stays the instrument.
   A stricter check was built and abandoned: for each citation attached to a backticked name, require that name within
-  five lines of the cited line. It flagged 5 of 32 named citations and 3 of the 5 were false, because an environment
+  five lines of the cited line. It flagged 5 of 32 named citations and all five were false, because an environment
   variable never appears in the code that reads it and a sentence listing two functions pairs the second name with the
   first citation. A check whose flags are mostly wrong teaches the reader to ignore it, so it was deleted rather than
   tuned.
