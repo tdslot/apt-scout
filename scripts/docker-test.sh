@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 usage() {
   echo "Usage: scripts/docker-test.sh [--build-only | --write-only] [ubuntu-version ...]"
   echo
-  echo "  (no mode)           build both binaries, run the thirteen read-only cases, then the write cases"
+  echo "  (no mode)           build both binaries, run the sixteen read-only cases, then the write cases"
   echo "  --build-only        build both binaries, print their digests, run no case"
   echo "  --write-only        build both binaries, then run only the write cases"
   echo "  ubuntu-version ...  limit the Ubuntu loops to these versions (default: all four)"
@@ -84,7 +84,7 @@ echo "HARNESS $(sha256sum target/docker/apt-scout-harness | cut -d' ' -f1)"
 if [ "$mode" = build ]; then exit 0; fi
 # The cfg build leaves its own artifact in the build directory, so the plain copy is what every
 # read-only case below mounts: pointing `bin` at the build directory would silently run the harness
-# in all thirteen of them.
+# in all sixteen of them.
 bin=target/docker/apt-scout-plain
 
 # Pull every image first so `docker run` prints only the program's output (a fresh runner would
@@ -164,7 +164,7 @@ if [ -e /var/backups/apt-scout ]; then echo backups=yes; else echo backups=no; f
 cat /tmp/out"
 }
 
-# --write-only skips the thirteen read-only cases below, which read and never write: the write
+# --write-only skips the sixteen read-only cases below, which read and never write: the write
 # cases run in both modes, so a write case's result never depends on which mode started it.
 if [ "$mode" != write ]; then
 # 1. Offline: the release codename is detected on every supported Ubuntu, and geolocation fails
@@ -285,6 +285,65 @@ if [ "$rc" = 0 ] && printf '%s\n' "$got" | grep -qE "^ +[0-9]+ +https?://.*  yes
 else
   fail "live LT verified row -> exit $rc: $(echo "$got" | head -12)"
 fi
+# 14. The man page renders (docs/spec/testing.md, the man-page bullet) in a disposable container.
+# These images put a stub at /usr/bin/man that prints a notice and exits 0, divert the real binary
+# to /usr/bin/man.REAL and ship no man-db. The case looks for the page text first and prepares the
+# image only when it is absent: install man-db, remove the stub, drop the local diversion, reinstall
+# man-db so the real binary lands in place. That order is the one that works: removing the diversion
+# while the stub is still there fails with "rename involves overwriting". Needs the network.
+for v in 20.04 22.04 24.04 26.04; do
+  if [ $# -gt 0 ]; then case " $* " in *" $v "*) ;; *) continue ;; esac; fi
+  got=$(docker run --rm --network bridge --platform "$platform" \
+    -v "$PWD/man/apt-scout.1":/usr/share/man/man1/apt-scout.1:ro ubuntu:$v \
+    sh -c 'man apt-scout >/tmp/page 2>&1; rc=$?; grep -q SYNOPSIS /tmp/page || { apt-get update -qq >/dev/null 2>&1; apt-get install -y -qq man-db >/dev/null 2>&1; rm -f /usr/bin/man; dpkg-divert --local --rename --remove /usr/bin/man >/dev/null 2>&1; apt-get install -y -qq --reinstall man-db >/dev/null 2>&1; man apt-scout >/tmp/page 2>&1; rc=$?; }; echo; echo rc=$rc' 2>&1) || true
+  if printf '%s\n' "$got" | grep -qx 'rc=0' && [[ "$got" == *NAME* ]] && [[ "$got" == *SYNOPSIS* ]] \
+    && [[ "$got" == *'find a fresh, fast Ubuntu archive mirror'* ]]; then
+    pass "ubuntu:$v -> the man page renders with NAME and SYNOPSIS"
+  else
+    fail "ubuntu:$v -> man page render: $(printf '%s\n' "$got" | head -4)"
+  fi
+done
+
+# 15. The formatting half (same bullet): `mandoc -Tlint`, the check docs/spec/testing.md names as its
+# example. D20 recorded exactly one warning on this page -- the .TH date is empty on purpose, because a
+# date copied here would drift from the release -- so the case accepts that one line and fails on any
+# other diagnostic. Needs the network for mandoc.
+got=$(docker run --rm --network bridge --platform "$platform" \
+  -v "$PWD/man/apt-scout.1":/usr/share/man/man1/apt-scout.1:ro ubuntu:24.04 \
+  sh -c 'apt-get update -qq >/dev/null 2>&1; apt-get install -y -qq mandoc >/dev/null 2>&1; mandoc -Tlint /usr/share/man/man1/apt-scout.1 2>&1; true' 2>&1) || true
+known='missing date, using'
+# grep exits 1 when it filters everything out, and set -e would end the run there.
+unexpected=$(printf '%s\n' "$got" | grep -v "$known" | grep -v '^$' || true)
+if [ -z "$unexpected" ] && printf '%s\n' "$got" | grep -q "$known"; then
+  pass "man page -> mandoc -Tlint prints only the known missing-date warning"
+else
+  fail "man page -> mandoc -Tlint: $(printf '%s\n' "$got" | head -4)"
+fi
+
+# 16. The flag half (same bullet): every flag --help lists must carry an OPTIONS tag, or a parser flag ships undocumented.
+# The page also documents --tui and --refresh as planned and not accepted, which --help does not list;
+# those two are declared here so that a third page-only flag fails the case instead of slipping past.
+# The plain binary is a Linux build, so --help is read inside a container rather than on this host.
+rc=0
+help_flags=$(run none ubuntu:24.04 /apt-scout --help 2>&1 | grep -o -- '--[a-z-]\+' | sort -u) || rc=$?
+if [ "$rc" != 0 ] || [ -z "$help_flags" ]; then
+  fail "man page -> could not read --help from the container (rc=$rc)"
+  page_flags=; missing=; unplanned=
+else
+page_flags=$(sed -n '/^\.SH OPTIONS/,/^\.SH /p' man/apt-scout.1 | sed 's/\\-/-/g' | grep -o -- '--[a-z-]\+' | sort -u)
+missing=$(comm -23 <(printf '%s\n' "$help_flags") <(printf '%s\n' "$page_flags"))
+extra=$(comm -13 <(printf '%s\n' "$help_flags") <(printf '%s\n' "$page_flags"))
+planned=$'--refresh\n--tui'
+unplanned=$(comm -23 <(printf '%s\n' "$extra") <(printf '%s\n' "$planned"))
+fi
+if [ "$rc" != 0 ] || [ -z "$help_flags" ]; then
+  : # already failed above, one message per cause
+elif [ -z "$missing" ] && [ -z "$unplanned" ]; then
+  pass "man page -> every --help flag has an OPTIONS tag and no unplanned flag is documented"
+else
+  fail "man page -> missing from the page: $(echo $missing); documented but unplanned: $(echo $unplanned)"
+fi
+
 fi # end of the read-only cases: skipped only by --write-only
 
 # --- Write cases ------------------------------------------------------------------------------
@@ -1003,5 +1062,6 @@ if [ "$rc" -eq 0 ] && printf '%s\n' "$got" | grep -qx 'restore-rc=0' \
 else
   fail "W33 restore prompt -> exit $rc: $(echo "$got" | head -16)"
 fi
+
 
 exit $status
