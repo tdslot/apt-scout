@@ -183,7 +183,6 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   drift: the sentence at `docs/threat-model.md:92` says the refusal is "not a directory; symlinks are not
   followed" and cites `src/sources.rs:653`, which holds that string in an `issue: Some(...)` field, so the words that
   matter are not the words the triage compares.
-  and a reader sees that in seconds.
   Two of the four citations D87 had moved were in that list before this branch fixed them, and two were not, so the
   triage catches some drift, not all of it, and a reader stays the instrument.
   A stricter check was built and abandoned: for each citation attached to a backticked name, require that name within
