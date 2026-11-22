@@ -38,5 +38,8 @@
   (it only creates the file when missing, so an upgrade does not overwrite it).
 - `PLAT-3` The run MUST accept the architectures `amd64` and `i386` only (from
   `dpkg --print-architecture`).
+  The subprocess MUST run with the environment cleared and its stdin set to null, so no variable a
+  user sets before `sudo` reaches it; the call runs in every run that selects a mirror, which excludes
+  `--restore`, and it is the root run that makes the inheritance a hazard.
   Other architectures (arm64, ...) use `ports.ubuntu.com`, which has no mirror choice: the run MUST
   print an explanation and make no changes.
