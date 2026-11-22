@@ -42,7 +42,7 @@ Task order, task states, merged PRs, and verification evidence live in `ROADMAP.
   defect.
 - A control that exists is cited `path:line`; a control that must still be built is written as `must`, in the voice of the S tests, and says plainly that it does not exist yet. A present-tense sentence with no citation is a claim about shipped code, and a claim the code cannot support is a defect.
 - `rg -n "OPEN — needs a human ruling" docs/threat-model.md` returns nothing; a gap left open with that marker, or a ruling that reads as if it answered a different question, is a defect.
-- The ruling count is one number in the record and in `ROADMAP.md`: `rg -no '^- \*\*7\.[1-9]' docs/threat-model.md | wc -l` returns 9, `rg -no '^\*\*G[1-3]' docs/threat-model.md | wc -l` returns 3, and `rg -ni "twelve rulings" docs/threat-model.md ROADMAP.md docs/history/` returns five lines across those three files — one in the record, one in `ROADMAP.md` (D6e) and three in the archive (D9d, the D50 entry and the log line). A different count anywhere is a defect.
+- The ruling count is one number in the record and in `ROADMAP.md`: `rg -no '^- \*\*7\.[1-9]' docs/threat-model.md | wc -l` returns 9, `rg -no '^\*\*G[1-3]' docs/threat-model.md | wc -l` returns 3, and `rg -ni "twelve rulings" docs/threat-model.md ROADMAP.md docs/history/` returns five lines across those three files — one in the record and four in the archive (D6e, D9d, the D50 entry and the log line), none in `ROADMAP.md` since D84 moved them. A different count anywhere is a defect.
 - `rg -n "^[0-9]+\. \*\*(APPLIED|PENDING)" docs/threat-model.md` lists the ledger; review it for an item that carries no state.
 - `rg -n "^## " docs/threat-model.md` lists the record's sections; a ruling in the decision record that gates a write must point at least one S-ID.
 
@@ -52,4 +52,4 @@ Task order, task states, merged PRs, and verification evidence live in `ROADMAP.
   with a `MUST`/`SHOULD`/`MAY` obligation in the sentence that opens each one, `(planned)`, no history
   or rationale, and the layout rule this folder also applies.
 - `decisions/` holds one file per decision and an index of the ids recorded elsewhere; it has no `AGENTS.md` of its own and is covered by this file.
-- `history/` is the evidence archive: one file per milestone plus the change log, moved out of `ROADMAP.md` by D77. It is read-only history — a correction goes in a new entry, never into a past one — and it states no rules.
+- `history/` is the evidence archive: one file per `ROADMAP.md` section plus the change log — `m1` to `m5`, `backlog.md` for the Backlog section — moved out of the ledger by D77 and D84. It is read-only history — a correction goes in a new entry, never into a past one — and it states no rules.
