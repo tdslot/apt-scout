@@ -176,25 +176,24 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   dispatch). Two sentences moved with their citations: the terminal row now names the newline-free `print!`
   prompt path (`main.rs:553`) beside `println!`, and the S16 bullet says that W10 and W11 add
   tmpfs-only mounts (`:123`, `:455`). Every citation in the file now resolves inside its target.
-- [ ] D86. Audit the rest of the `path:line` citations in `docs/threat-model.md` against the code, not just their
-  bounds: a line number can drift and stay in range. `scripts/citation-triage.py` flags the ones that need a
-  reader, by comparing the words of five characters or more on the citing line with those of the cited line
-  and the five either side of it. The entry states no count: the script prints it, and it has moved with every
-  merge since it was written.
-  Four citations at three places had already drifted when this branch opened, moved by 38 lines: D87 inserted 54
-  lines into `src/main.rs`, but everything that moved sat after the insertion, so the shift is one number and
-  the net gain is not it. The three places are `fn main`, `write_baseline` cited twice, and the harness
-  dispatch, and they are re-pointed here. That is the whole cost of drift: a number that still resolves, still
-  looks right, and now names a different line.
-  A stricter check was built and abandoned: for each citation attached to a backticked name, require that name
-  within five lines of the cited line. It flagged 5 of 32 named citations, and 3 of the 5 were false, because an
-  environment variable never appears in the code that reads it and a sentence listing two functions pairs the second
-  name with the first citation. A check whose flags are mostly wrong teaches the reader to ignore it, so it was
-  deleted rather than tuned; D88 is the question of running the triage where drift would be seen.
+- [x] D86. Audit the `path:line` citations in `docs/threat-model.md` that the triage flags, against the code, not
+  just their bounds: `scripts/citation-triage.py` compares the words of five characters or more on the citing line
+  with those of the cited line and the five either side of it, and prints the citations that share none of them.
+  Every one was read here against the line it names, and all of them are correct: the flags are word mismatches, not
+  drift: the sentence at `docs/threat-model.md:92` says the refusal is "not a directory; symlinks are not
+  followed" and cites `src/sources.rs:653`, which holds that string in an `issue: Some(...)` field, so the words that
+  matter are not the words the triage compares.
+  Two of the four citations D87 had moved were in that list before this branch fixed them, and two were not, so the
+  triage catches some drift, not all of it, and a reader stays the instrument.
+  A stricter check was built and abandoned: for each citation attached to a backticked name, require that name within
+  five lines of the cited line. It flagged 5 of 32 named citations and all five were false, because an environment
+  variable never appears in the code that reads it and a sentence listing two functions pairs the second name with the
+  first citation. A check whose flags are mostly wrong teaches the reader to ignore it, so it was deleted rather than
+  tuned.
   [docs/AGENTS.md]
 - [ ] D88. Decide whether `scripts/citation-triage.py` runs in CI, and where: as a weekly advisory beside
   `scripts/check-sources.sh`, or as a required step that would fail a PR whose code moved a cited line. Required
-  is what would have caught D87 moving the three places it moved, but the flag set is a triage, so a
+  is what would have caught two of the three places D87 moved, but the flag set is mostly correct citations, so a
   required step fails today on a list that is mostly correct, and the entry states no count of it. 
   [.github/workflows/source-contract.yml]
 - [x] D87. Audit the one process a root run spawns for its environment: `src/main.rs` ran `/usr/bin/dpkg --print-architecture`
