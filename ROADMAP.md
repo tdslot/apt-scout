@@ -174,8 +174,9 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   bounds: 207 citations into `src/` and `scripts/` resolve, but a line number can drift and stay in range. A
   token-window triage — the identifiers on the citing line against the five lines either side of the cited one —
   flags 37 occurrences over 33 distinct targets, and 34 citing lines carry no identifier a strict reader could match.
-  Two of the flagged ones were genuinely wrong (`wrun` mount and the verification temp directory), so this is not a
-  cosmetic backlog: each needs a reader, and a wrong fix is worse than a stale number.
+  Five of the flagged ones were genuinely wrong — the `wrun` mount, `wro`'s flags, the fixture builder, the
+  read-only-rootfs case and the verification temp directory — and all five are corrected, so this is not a cosmetic
+  backlog: each needs a reader, and a wrong fix is worse than a stale number.
   [docs/AGENTS.md]
 - [ ] D83. Move the rationale and the measurement evidence out of the requirement bodies in `docs/spec/`: `docs/AGENTS.md` sends `why` to an ADR and evidence to `ROADMAP.md`, and D76b deliberately left both in place because deleting a measured claim (the Launchpad page structure in `pipeline.md` step 3, the 2026-11-11 freshness measurement in step 8, the `pop-default-settings` verification in `platform.md`) would drop input the parsers are tested against. Acceptance: every `because`, `so that`, `Verified from`, `Measured` and dated observation inside a requirement is either cited as `ADR-####` or moved to a ledger entry, and no requirement is left without the fact it needs to be testable. No behavior change. [docs/AGENTS.md, SPEC: docs/spec/AGENTS.md]
 
