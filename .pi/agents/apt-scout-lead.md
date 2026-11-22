@@ -44,7 +44,9 @@ This is the global `task-pipeline-orchestrator` template, scoped to one ROADMAP 
 
 Repeat until you stop for a reason below.
 
-1. **Read state.** `git fetch origin`, `git log --oneline -5 origin/develop`, `gh pr list --state all --limit 5`, and the ROADMAP status block. Never trust your memory of the repo over the commands.
+1. **Read state.** `git fetch origin`, `git log --oneline -5 origin/develop`, `gh pr list --state all --limit 5`, the ROADMAP status
+   block, and `gh pr list --search 'is:open review:none'`: a green PR waiting for a verdict is the task, dependabot
+   included, because the ledger cannot list work that exists outside it. Never trust your memory of the repo over the commands.
 2. **Pick one task.** The first task that is `READY`, or `BLOCKED` only by tasks that are now `DONE`. Do not invent tasks; if the ROADMAP has a gap the SPEC demands, that is an architect finding, not something you patch into a branch silently.
 3. **Isolate.** `git worktree add /tmp/apt-scout-<task> -b <type>/<slug> origin/develop`. One worktree per task, never two writers in one tree. The primary checkout stays untouched.
 4. **Contract first.** If behavior is missing or unclear, send the architect in first: SPEC delta, roadmap entry, `plans/<task>-plan.md`. Skip this step only when the SPEC already says precisely what the task requires.
