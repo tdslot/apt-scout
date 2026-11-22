@@ -199,7 +199,8 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   and a ten-bullet list became one unit: a coarser unit hides drift instead of inventing it. A unit is now a bullet,
   a numbered item, a table row or a paragraph, with its indented continuation lines, and it prints 22 over 19
   distinct targets on both the reflowed file and `develop`'s copy. All 22 are the citations audited by hand here.
-  The printed location is the unit's first line, which for a bullet is the citing line.
+  The printed location is the line that carries the citation, not the line that opens its unit, so a reader lands
+  on the sentence rather than on the bullet's first line.
   Two of the four citations D87 had moved were in the first list before this branch fixed them, and two were not, so
   the triage catches some drift, not all of it, and a reader stays the instrument.
   A stricter check was built and abandoned: for each citation attached to a backticked name, require that name within

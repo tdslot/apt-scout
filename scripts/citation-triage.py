@@ -32,31 +32,34 @@ def words(text):
 
 
 def units(lines):
-    """Bullets, list items, table rows and paragraphs, as (line_number, text).
+    """Bullets, list items, table rows and paragraphs, as (number, text, members).
 
     A bullet or a numbered item starts a unit; a continuation line (indented,
     not starting with a marker) belongs to it; a blank line or heading ends it.
+    `members` is the list of (line number, line) the unit is built from, so a
+    citation can be reported at the line that actually carries it.
     """
     out = []
-    block, start = [], 0
+    block, members, start = [], [], 0
+    def flush():
+        if block:
+            out.append((start, " ".join(block), list(members)))
     for number, line in enumerate(lines, start=1):
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
-            if block:
-                out.append((start, " ".join(block)))
-                block = []
+            flush()
+            block, members = [], []
             continue
         marked = stripped.startswith(("- ", "|")) or re.match(r"[0-9]+[.)] ", stripped) is not None
         indented = line[:1] in (" ", chr(9))
-        starts = marked or not indented
-        if starts and block:
-            out.append((start, " ".join(block)))
-            block = []
+        if (marked or not indented) and block:
+            flush()
+            block, members = [], []
         if not block:
             start = number
         block.append(stripped)
-    if block:
-        out.append((start, " ".join(block)))
+        members.append((number, line))
+    flush()
     return out
 
 def main(argv):
@@ -65,8 +68,10 @@ def main(argv):
     sources = {}
     flagged = []
     total = 0
-    for number, text in units(lines):
+    for number, text, members in units(lines):
         for target, start in CITE.findall(text):
+            marker = target + ':' + start
+            cited = next((n for n, l in members if marker in l), number)
             total += 1
             if target not in sources:
                 sources[target] = Path(target).read_text(encoding="utf-8").splitlines()
@@ -75,7 +80,7 @@ def main(argv):
             end = min(len(body), int(start) + WINDOW)
             context = words(" ".join(body[begin:end]))
             if not (words(text) & context):
-                flagged.append((number, target, int(start)))
+                flagged.append((cited, target, int(start)))
     targets = {(target, start) for _, target, start in flagged}
     print(f"citations: {total}")
     print(f"flagged: {len(flagged)} over {len(targets)} distinct targets")
