@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 usage() {
   echo "Usage: scripts/docker-test.sh [--build-only | --write-only] [ubuntu-version ...]"
   echo
-  echo "  (no mode)           build both binaries, run the thirteen read-only cases, then the write cases"
+  echo "  (no mode)           build both binaries, run the sixteen read-only cases, then the write cases"
   echo "  --build-only        build both binaries, print their digests, run no case"
   echo "  --write-only        build both binaries, then run only the write cases"
   echo "  ubuntu-version ...  limit the Ubuntu loops to these versions (default: all four)"
@@ -164,7 +164,7 @@ if [ -e /var/backups/apt-scout ]; then echo backups=yes; else echo backups=no; f
 cat /tmp/out"
 }
 
-# --write-only skips the thirteen read-only cases below, which read and never write: the write
+# --write-only skips the sixteen read-only cases below, which read and never write: the write
 # cases run in both modes, so a write case's result never depends on which mode started it.
 if [ "$mode" != write ]; then
 # 1. Offline: the release codename is detected on every supported Ubuntu, and geolocation fails
