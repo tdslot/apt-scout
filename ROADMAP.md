@@ -160,8 +160,8 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   ledger lines keep the claim and a link, which took the file from 19 lines over 1000 characters to 10.
 - [ ] D85. Rule where an unstarted task's brief lives: seven entries (D53, D46, D30b, D30c, D32, D33, D34) are 1.4–3.0 KB
   of what has to be built and hold no evidence, so moving them to `docs/history/` would hide the brief and trimming them
-  decides what to build. The same pass rewraps the three status paragraphs (28, 47, 122), which are 1.2–2.5 KB
-  of prose on one line each. Location is a human call; the rewrap follows it.
+  decides what to build. The same pass rewraps the three long prose lines (28, 47, and 122, which is the shared
+  acceptance block), 1.2–2.5 KB each on one line. Location is a human call; the rewrap follows it.
 - [ ] D78. Apply the style contract in `docs/AGENTS.md` to `docs/threat-model.md` (21 lines over 1000 characters). Rulings and content unchanged. [docs/AGENTS.md]
 - [ ] D79. Rule the localization question: `docs/spec/localization.md` requires `fluent-templates` 0.15.1 and a `locales/` tree that do not exist, while `AGENTS.md` states a one-dependency rule. Say whether localization is v1 and fix whichever document is wrong. [SPEC: docs/spec/localization.md]
 - [ ] D80. Rule the TUI and `--refresh` scope: both are specified and neither is implemented, and `--refresh` is an unknown option today. [SPEC: docs/spec/tui.md, docs/spec/cli.md]
