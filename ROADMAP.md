@@ -179,11 +179,11 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
 - [ ] D86. Audit the rest of the `path:line` citations in `docs/threat-model.md` against the code, not just their
   bounds: 208 citations into `src/` and `scripts/` resolve, but a line number can drift and stay in range.
   `scripts/citation-triage.py` flags the ones that need a reader: for each citation it compares the
-  identifiers on the citing line with those of the five lines either side of the cited one, and prints the
-  citations whose line shares none of them. It prints 23 over 20 distinct targets today, and because the script
+  words of five characters or more on the citing line with those of the five lines either side of the cited one, and prints the
+  citations whose line shares none of them. It prints 22 over 19 distinct targets today, and because the script
   is the definition, the number cannot drift from the rule.
   Eight of the flagged ones were genuinely wrong, and all eight are corrected: the `wrun` mount, `wro`'s flags, the
-  fixture builder, the read-only-rootfs case, the verification temp directory twice (S16 and A5), the report
+  fixture builder, the read-only-rootfs case, the verification pointer in A5, the report
   print path, the closing line of a write, and the rejected-entry note. The last three matter most: the terminal
   row and B7 named one of four print paths while a mirror-controlled URL reached stderr unescaped as well, so the
   record now names all four and leaves the escaping to D13, which is where it was.

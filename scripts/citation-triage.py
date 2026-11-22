@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Triage the path:line citations in docs/threat-model.md against the code.
 
-For every `path:line` citation, compare the identifiers on the citing line with
-the identifiers in the five lines either side of the cited one. A citation whose
-line shares no identifier with the code it names needs a reader: the number may
-have drifted, or the sentence may be describing something else. This is a
-triage, not a verdict -- a flagged citation can be right and an unflagged one
-can be wrong.
+For every citation into `src/` or `scripts/`, compare the words of five
+characters or more on the citing line with those of the five lines either side
+of the cited line. A citation whose line shares no such word with the code it
+names needs a reader: the number may have drifted, or the sentence may be
+describing something else.
+
+This is a triage, not a verdict. A flagged citation can be right and an
+unflagged one can be wrong. Citations into documents rather than code are not
+checked, and a range is judged by its first line.
 
 Usage: python3 scripts/citation-triage.py [path-to-threat-model]
 """
@@ -45,7 +48,7 @@ def main(argv):
     print(f"citations: {total}")
     print(f"flagged: {len(flagged)} over {len(targets)} distinct targets")
     for number, target, start in flagged:
-        print(f"  docs/threat-model.md:{number} -> {target}:{start}")
+        print(f"  {path.name}:{number} -> {target}:{start}")
     return 0
 
 
