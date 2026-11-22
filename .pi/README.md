@@ -31,9 +31,9 @@ pi
 subagent({ agent: "apt-scout-lead", task: "Take the next READY task from ROADMAP.md and run the loop until you stop." })
 ```
 
-That single launch is the whole loop. The lead reads `ROADMAP.md`, picks the first
-`READY` task that is not blocked, classifies it, has `apt-scout-architect` settle the
-spec and write `plans/<task>-plan.md`, has `apt-scout-coder` implement it in a fresh
+That single launch is the whole loop. The lead reads `ROADMAP.md` and `gh pr list --state open`: an open PR is
+taken first and carried to a merge, and only then the first `READY` task that is not blocked, which it
+classifies and has `apt-scout-architect` settle the spec and write `plans/<task>-plan.md`, has `apt-scout-coder` implement it in a fresh
 worktree, runs the gates itself, gets a review and a security verdict on the exact diff,
 opens the PR, merges into `develop` when every check is green, records the evidence in
 `ROADMAP.md` and starts the next task. It stops and asks the human at Gate 1 (plan
