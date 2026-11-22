@@ -184,9 +184,10 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   is the definition, the number cannot drift from the rule.
   Eight of the flagged ones were genuinely wrong, and all eight are corrected: the `wrun` mount, `wro`'s flags, the
   fixture builder, the read-only-rootfs case, the verification pointer in A5, the report
-  print path, the closing line of a write, and the rejected-entry note. The last three matter most: the terminal
-  row and B7 named one of four print paths while a mirror-controlled URL reached stderr unescaped as well, so the
-  record now names all four and leaves the escaping to D13, which is where it was.
+  print path, the closing line of a write, the rejected-entry note, and the error and warning lines. The last four
+  matter most: the terminal row and B7 named one of the paths by which a mirror string reaches a terminal, and three
+  more carry it raw — the closing line of a successful write, the rejected-entry note and the error text — so
+  the record now names all of them and leaves the escaping to D13, which is where it was.
   [docs/AGENTS.md]
 - [ ] D83. Move the rationale and the measurement evidence out of the requirement bodies in `docs/spec/`: `docs/AGENTS.md` sends `why` to an ADR and evidence to `ROADMAP.md`, and D76b deliberately left both in place because deleting a measured claim (the Launchpad page structure in `pipeline.md` step 3, the 2026-11-11 freshness measurement in step 8, the `pop-default-settings` verification in `platform.md`) would drop input the parsers are tested against. Acceptance: every `because`, `so that`, `Verified from`, `Measured` and dated observation inside a requirement is either cited as `ADR-####` or moved to a ledger entry, and no requirement is left without the fact it needs to be testable. No behavior change. [docs/AGENTS.md, SPEC: docs/spec/AGENTS.md]
 
