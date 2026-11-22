@@ -51,7 +51,8 @@ Deliver a safe Ubuntu-family CLI that discovers and ranks mirrors, lets the user
   hygiene, optional country/AS with Team Cymru ranking, `-updates`/`-security` freshness, the parallel probe and the
   ranker, and the read-only CLI (`--list`, `--any`, `--country`, `--no-geo`, `--top`, `--https-only`, `--verbose`,
   `--no-color` and, since PR #63, `--version`), merged through PRs #13–#16, D6a in PR #18 and D6b in PR #19.
-  Its audit produced **D6a–D6c, D6e and D6f** — five task ids, no sixth — and those are closed: D6c's two P1s by D6f
+  Its audit produced **D6a–D6c, D6e and D6f** — five task ids, no sixth — and those are closed: D6c's two P1s by
+  D6f
   in PR #29, the boundary itself by D6e in PR #28.
   The findings still open under this milestone are ledger items with owners, not a block on any write: D22, D29 and
   D46.
@@ -116,7 +117,8 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
 
 **Status: COMPLETE ON THE EVIDENCE, WITH D54-D56 AND D24 OPEN** — the D12 audit found Milestone 2 feature-complete
   with its controls enforced in code (thirteen inventory rows: twelve with a control that refuses and a test that
-  would fail if the control were removed, the thirteenth — the write path's isolation — proved by a source scan whose
+  would fail if the control were removed, the thirteenth — the write path's isolation — proved by a source scan
+  whose
   blind spot is D54), and filed three evidence-quality gaps and one documentation debt rather than closing over them.
   D6a/D6b, D7, and D8 are complete; D6c signature verification merged as PR #25 and its P1 findings were closed by D6f
   in PR #29, so D6e's privilege boundary stands and the security-acceptance gate is what the write tasks must satisfy.
@@ -300,8 +302,7 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
   that process has exited by the time the line is read, so the person is back in their own unprivileged shell where
   `apt update` fails with permission denied. — [evidence](docs/history/m2.md#d52)
 - [ ] **D53 — READY; the rule three tests broke on 2026-11-14, carried by the next test that is written or reviewed.**
-  the rule three tests broke on 2026-11-14, carried by the next test that is written or reviewed —
-  [brief](docs/tasks/D53.md)
+  The brief carries the rule, the three tests and the acceptance for carrying it forward — [brief](docs/tasks/D53.md)
 - [x] **D12 — DONE.** — [evidence](docs/history/m2.md#d12)
 
 - [x] **D57 — DONE.** — [evidence](docs/history/m2.md#d57)
@@ -447,9 +448,11 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   were 1.4–3.0 KB inside `ROADMAP.md` and held no evidence, so they were neither archives nor claims.
   Each now has `docs/tasks/<id>.md`, kept verbatim with its status, and the ledger keeps one line: the claim, the
   state and a link. `docs/AGENTS.md` states the rule — forward-looking, deleted when the task lands, because
-  `history/` holds what was done. The same pass reflowed the ledger to the style contract: it was 50 KB in 291
-  lines, with three prose paragraphs over 1000 characters; it is 44 KB in 542 lines, no character line over 120 outside
-  a table, and the text is word for word unchanged, checked the way D78 checked the record.
+  `history/` holds what was done. The same pass reflowed the ledger to the style contract: it was 56 126 bytes in
+  239 lines, three of them prose paragraphs over 1000 characters; it is 44 930 bytes in 550 lines, no line over 120
+  characters or over 120 bytes, and the text is word for word unchanged, checked the way D78 checked the record. The
+  byte count matters here because an em dash is three bytes: two lines sat at 116 characters and 122 bytes, which a
+  character measure calls short and a byte measure calls long.
   [docs/AGENTS.md]
 - [x] D78. Apply the style contract in `docs/AGENTS.md` to `docs/threat-model.md`: one sentence per line and every
   prose line under 120 characters, with the rulings and the content untouched. It had 21 lines over 1000
