@@ -164,9 +164,40 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   acceptance block), 1.2–2.5 KB each on one line. Location is a human call; the rewrap follows it.
 - [ ] D78. Apply the style contract in `docs/AGENTS.md` to `docs/threat-model.md` (21 lines over 1000 characters). Rulings and content unchanged. [docs/AGENTS.md]
 - [ ] D79. Rule the localization question: `docs/spec/localization.md` requires `fluent-templates` 0.15.1 and a `locales/` tree that do not exist, while `AGENTS.md` states a one-dependency rule. Say whether localization is v1 and fix whichever document is wrong. [SPEC: docs/spec/localization.md]
-- [ ] D80. Rule the TUI and `--refresh` scope: both are specified and neither is implemented, and `--refresh` is an unknown option today. [SPEC: docs/spec/tui.md, docs/spec/cli.md]
+- [ ] D80. Rule the TUI and `--refresh` scope: both are specified and neither is implemented, and `--refresh` is an
+  unknown option today. The ruling reaches further than the flag: B7 defers terminal escaping to D13, which is the TUI
+  implementation, so a no-TUI ruling leaves the exposure named at `docs/threat-model.md:152` without an owner — a
+  root run printing a mirror URL or a rejected entry verbatim is `today`'s behaviour, not the TUI's.
+  [SPEC: docs/spec/tui.md, docs/spec/cli.md]
 - [ ] D81. Rule the mirror-list cache (D28): specified with a 24 h validity and never implemented. [SPEC: docs/spec/pipeline.md]
-- [ ] D82. Re-point the stale `path:line` citations in `docs/threat-model.md` that predate this restructure: fact 4 names `src/main.rs:1926`/`:2003` for the terminal checks (now `:2090`/`:2169`), fact 1 names `:2343`/`:2352`/`:2370`, section 5 names `:2867` for `write_baseline` (now `:3045`), and B7 names `:721`, which is `Ok(3)`. A `path:line` that does not resolve is a defect under `docs/AGENTS.md`. [docs/AGENTS.md]
+- [x] D82. Re-point the stale `path:line` citations in `docs/threat-model.md` that predated the restructure:
+  16 distinct stale citations, 22 occurrences at 13 places in the record, re-pointed and each verified by the symbol on the cited
+  line (`main.rs:861–862` is the `NO_COLOR` read, `:2510–2515` the non-root exit 3, `:3446–3448` the harness
+  dispatch). Two sentences moved with their citations: the terminal row now names the newline-free `print!`
+  prompt path (`main.rs:553`) beside `println!`, and the S16 bullet says that W10 and W11 add
+  tmpfs-only mounts (`:123`, `:455`). Every citation in the file now resolves inside its target.
+- [ ] D86. Audit the rest of the `path:line` citations in `docs/threat-model.md` against the code, not just their
+  bounds: every citation into `src/` and `scripts/` resolves, but a line number can drift and stay in range. The
+  ledger does not restate the total: the script prints it. The total has moved three times while this branch was open, which is
+  the same defect the entry exists to remove.
+  `scripts/citation-triage.py` flags the ones that need a reader: for each citation it compares the
+  words of five characters or more on the citing line with those of the five lines either side of it plus the cited line, and prints the
+  citations whose line shares none of them. It prints 22 over 19 distinct targets today, and because the script
+  is the definition, the number cannot drift from the rule.
+  The flagged ones that were genuinely wrong are corrected: the `wrun` mount, `wro`'s flags, the fixture
+  builder, the read-only-rootfs case, the A5 pointer, the report print path, the closing line of a write, the
+  rejected-entry note, the error line and the warning line. No count is stated: the list is the count. The output
+  paths matter most — the terminal row and B7 named one of them while a mirror string reached the rest raw —
+  so the record now names each carrier and leaves the escaping to D13, which is where it was. The prompt is a
+  static literal and the record says so rather than counting it among the carriers.
+  [docs/AGENTS.md]
+- [ ] D87. Audit the one process a root run spawns for its environment: `src/main.rs:2734` runs `/usr/bin/dpkg --print-architecture`
+  with no `.env_clear()`, unlike the `gpgv` call (`src/verify.rs:234–246`), so a variable a user can set before
+  `sudo` reaches it and is loaded before any of the program's code runs. The vector is the dynamic loader (`LD_PRELOAD`,
+  `LD_AUDIT`, `LD_LIBRARY_PATH`), so the outcome is code execution in the root process rather than a variable that reaches
+  it; `DPKG_ADMINDIR` is not consulted by `--print-architecture` at all. The record now states the inheritance in fact 5, the
+  threat row and A2; whether root may inherit an environment at all is the ruling, and it comes before the code.
+  [docs/threat-model.md]
 - [ ] D83. Move the rationale and the measurement evidence out of the requirement bodies in `docs/spec/`: `docs/AGENTS.md` sends `why` to an ADR and evidence to `ROADMAP.md`, and D76b deliberately left both in place because deleting a measured claim (the Launchpad page structure in `pipeline.md` step 3, the 2026-11-11 freshness measurement in step 8, the `pop-default-settings` verification in `platform.md`) would drop input the parsers are tested against. Acceptance: every `because`, `so that`, `Verified from`, `Measured` and dated observation inside a requirement is either cited as `ADR-####` or moved to a ledger entry, and no requirement is left without the fact it needs to be testable. No behavior change. [docs/AGENTS.md, SPEC: docs/spec/AGENTS.md]
 
 ## Change log
