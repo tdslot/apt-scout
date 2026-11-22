@@ -2753,15 +2753,27 @@ fn architecture() -> Result<String, (u8, String)> {
         .map_err(|e| (1, format!("cannot run '{DPKG} --print-architecture' to find the CPU architecture: {e}. Is dpkg installed?")))?;
     if !out.status.success() {
         let said = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let why = if said.is_empty() {
+            out.status.to_string()
+        } else {
+            format!("{}: {said}", out.status)
+        };
         return Err((
             1,
             format!(
-                "'{DPKG} --print-architecture' failed with {}: {said}",
-                out.status
+                "cannot read the CPU architecture: '{DPKG} --print-architecture' failed with {why}. Is dpkg installed and working?"
             ),
         ));
     }
     let arch = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if arch.is_empty() {
+        return Err((
+            1,
+            format!(
+                "cannot read the CPU architecture: '{DPKG} --print-architecture' printed nothing. Is dpkg installed and working?"
+            ),
+        ));
+    }
     match arch.as_str() {
         "amd64" | "i386" => Ok(arch),
         other => Err((

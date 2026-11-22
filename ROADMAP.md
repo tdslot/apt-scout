@@ -198,8 +198,10 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   constructed environment to any child. The child is now built by `cleared_command` (`src/main.rs:2738`), which clears the
   environment and closes stdin the way the verifier does, and `a_cleared_command_starts_with_no_environment` runs
   `/usr/bin/env` through the same builder, asserting the output is exactly the one variable it sets: it fails when
-  `.env_clear()` is removed, which was checked by removing it. A failing child is now reported with its own
-  message and status instead of arriving as an empty architecture. `docs/spec/platform.md` PLAT-3 states the
+  `.env_clear()` is removed, which was checked by removing it. A failing child, and a child that prints
+  nothing, are now reported with their own message, status and a next step instead of arriving as an empty
+  architecture that the ports arm would then describe as an unsupported CPU; neither failure path has a test, so
+  that branch is held by review too. `docs/spec/platform.md` PLAT-3 states the
   requirement; the record says the children are cleared and that the run's own loader cannot be, since it runs before
   any line of the program. The test covers the builder, not the use site: nothing pins that `architecture()`
   calls `dpkg_command()`, and a second spawn written later would not be caught by it, so that wiring is held by
