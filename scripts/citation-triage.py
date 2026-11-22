@@ -32,27 +32,32 @@ def words(text):
 
 
 def units(lines):
-    """Paragraphs and single table rows, as (first_line_number, text)."""
+    """Bullets, list items, table rows and paragraphs, as (line_number, text).
+
+    A bullet or a numbered item starts a unit; a continuation line (indented,
+    not starting with a marker) belongs to it; a blank line or heading ends it.
+    """
     out = []
     block, start = [], 0
     for number, line in enumerate(lines, start=1):
         stripped = line.strip()
-        if stripped.startswith("|"):
+        if not stripped or stripped.startswith("#"):
             if block:
                 out.append((start, " ".join(block)))
                 block = []
-            out.append((number, stripped))
-        elif stripped and not stripped.startswith("#"):
-            if not block:
-                start = number
-            block.append(stripped)
-        elif block:
+            continue
+        marked = stripped.startswith(("- ", "|")) or re.match(r"[0-9]+[.)] ", stripped) is not None
+        indented = line[:1] in (" ", chr(9))
+        starts = marked or not indented
+        if starts and block:
             out.append((start, " ".join(block)))
             block = []
+        if not block:
+            start = number
+        block.append(stripped)
     if block:
         out.append((start, " ".join(block)))
     return out
-
 
 def main(argv):
     path = Path(argv[1] if len(argv) > 1 else "docs/threat-model.md")

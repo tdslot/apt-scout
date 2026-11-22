@@ -192,10 +192,13 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   drift. The record's sentence about `sources.list.d` (`docs/threat-model.md:231`) cites
   `src/sources.rs:653`, where the refusal is the string "not a directory; symlinks are not followed" inside an
   `issue: Some(...)` field, so the words that matter are not the words the triage compares.
-  The unit matters: while the script read one physical line at a time it flagged 22 citations, and D78's reflow
-  would have raised that to 65 without a single citation changing, because a wrapped fragment shares fewer words
-  with the code than its sentence does. It reads paragraphs now, and the list is 12 citations, all of them among
-  the 22 that were audited by hand here.
+  The unit matters. Reading one physical line at a time flagged 22 citations, and D78's reflow raised that to 65
+  with no citation changed, because a wrapped fragment shares fewer words with the code than its sentence does.
+  Reading whole paragraphs swung the other way to 12, because consecutive bullets have no blank line between them
+  and a ten-bullet list became one unit: a coarser unit hides drift instead of inventing it. A unit is now a bullet,
+  a numbered item, a table row or a paragraph, with its indented continuation lines, and it prints 22 over 19
+  distinct targets on both the reflowed file and `develop`'s copy. All 22 are the citations audited by hand here.
+  The printed location is the unit's first line, which for a bullet is the citing line.
   Two of the four citations D87 had moved were in the first list before this branch fixed them, and two were not, so
   the triage catches some drift, not all of it, and a reader stays the instrument.
   A stricter check was built and abandoned: for each citation attached to a backticked name, require that name within
