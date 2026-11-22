@@ -5558,6 +5558,9 @@ mod tests {
 
     #[test]
     fn a_cleared_command_starts_with_no_environment() {
+        if !std::path::Path::new("/usr/bin/env").exists() {
+            return;
+        }
         let mut probe = cleared_command("/usr/bin/env");
         probe.env("APT_SCOUT_PROBE", "kept");
         let out = probe.output().expect("the probe must run");

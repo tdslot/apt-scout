@@ -201,7 +201,9 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   `.env_clear()` is removed, which was checked by removing it. A failing child is now reported with its own
   message and status instead of arriving as an empty architecture. `docs/spec/platform.md` PLAT-3 states the
   requirement; the record says the children are cleared and that the run's own loader cannot be, since it runs before
-  any line of the program.
+  any line of the program. The test covers the builder, not the use site: nothing pins that `architecture()`
+  calls `dpkg_command()`, and a second spawn written later would not be caught by it, so that wiring is held by
+  review rather than by a gate.
   [docs/spec/platform.md, docs/threat-model.md]
 - [ ] D83. Move the rationale and the measurement evidence out of the requirement bodies in `docs/spec/`: `docs/AGENTS.md` sends `why` to an ADR and evidence to `ROADMAP.md`, and D76b deliberately left both in place because deleting a measured claim (the Launchpad page structure in `pipeline.md` step 3, the 2026-11-11 freshness measurement in step 8, the `pop-default-settings` verification in `platform.md`) would drop input the parsers are tested against. Acceptance: every `because`, `so that`, `Verified from`, `Measured` and dated observation inside a requirement is either cited as `ADR-####` or moved to a ledger entry, and no requirement is left without the fact it needs to be testable. No behavior change. [docs/AGENTS.md, SPEC: docs/spec/AGENTS.md]
 
