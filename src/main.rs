@@ -2730,9 +2730,28 @@ fn restore_lines(
 /// Privilege boundary forbids a write-path command resolved from the environment.
 const DPKG: &str = "/usr/bin/dpkg";
 
+/// The command that asks `dpkg` for the architecture.
+///
+/// It is built the way the verifier builds `gpgv`: the environment is cleared and no stdin is
+/// inherited, so a variable set before `sudo` cannot load an object into a process the run starts
+/// as root (docs/threat-model.md A2 and the environment row, `ROADMAP.md` D87).
+fn cleared_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    command
+        .env_clear()
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    command
+}
+
+fn dpkg_command() -> std::process::Command {
+    let mut command = cleared_command(DPKG);
+    command.arg("--print-architecture");
+    command
+}
+
 fn architecture() -> Result<String, (u8, String)> {
-    let out = std::process::Command::new(DPKG)
-        .arg("--print-architecture")
+    let out = dpkg_command()
         .output()
         .map_err(|e| (1, format!("cannot run '{DPKG} --print-architecture' to find the CPU architecture: {e}. Is dpkg installed?")))?;
     let arch = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -5528,6 +5547,22 @@ mod tests {
                 report(mode)
             );
         }
+    }
+
+    #[test]
+    fn a_cleared_command_starts_with_no_environment() {
+        let mut probe = cleared_command("/usr/bin/env");
+        probe.env("APT_SCOUT_PROBE", "kept");
+        let out = probe.output().expect("the probe must run");
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            text.contains("APT_SCOUT_PROBE=kept"),
+            "the probe must see the one variable it sets, or the check proves nothing: {text}"
+        );
+        assert!(
+            !text.contains("PATH="),
+            "a cleared command runs as root from the write path and must inherit nothing: {text}"
+        );
     }
 
     #[test]

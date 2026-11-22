@@ -38,5 +38,7 @@
   (it only creates the file when missing, so an upgrade does not overwrite it).
 - `PLAT-3` The run MUST accept the architectures `amd64` and `i386` only (from
   `dpkg --print-architecture`).
+  The subprocess MUST run with the environment cleared and its stdin closed: it runs as root on a path
+  that reaches the write, so no variable set before `sudo` may reach it.
   Other architectures (arm64, ...) use `ports.ubuntu.com`, which has no mirror choice: the run MUST
   print an explanation and make no changes.
