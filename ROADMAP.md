@@ -166,7 +166,16 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
 - [ ] D79. Rule the localization question: `docs/spec/localization.md` requires `fluent-templates` 0.15.1 and a `locales/` tree that do not exist, while `AGENTS.md` states a one-dependency rule. Say whether localization is v1 and fix whichever document is wrong. [SPEC: docs/spec/localization.md]
 - [ ] D80. Rule the TUI and `--refresh` scope: both are specified and neither is implemented, and `--refresh` is an unknown option today. [SPEC: docs/spec/tui.md, docs/spec/cli.md]
 - [ ] D81. Rule the mirror-list cache (D28): specified with a 24 h validity and never implemented. [SPEC: docs/spec/pipeline.md]
-- [ ] D82. Re-point the stale `path:line` citations in `docs/threat-model.md` that predate this restructure: fact 4 names `src/main.rs:1926`/`:2003` for the terminal checks (now `:2090`/`:2169`), fact 1 names `:2343`/`:2352`/`:2370`, section 5 names `:2867` for `write_baseline` (now `:3045`), and B7 names `:721`, which is `Ok(3)`. A `path:line` that does not resolve is a defect under `docs/AGENTS.md`. [docs/AGENTS.md]
+- [x] D82. Re-point the stale `path:line` citations in `docs/threat-model.md` that predated the restructure:
+  16 occurrences across eight facts, re-pointed to what the code does now and each verified by the symbol on the cited
+  line (`main.rs:861–862` is the `NO_COLOR` read, `:2510–2515` the non-root exit 3, `:3446–3448` the harness
+  dispatch). Every citation in the file now resolves inside its target.
+- [ ] D86. Audit the rest of the `path:line` citations in `docs/threat-model.md` against the code, not just their
+  bounds: 207 citations resolve, but a line number can drift and stay in range. A token-window triage flags 35
+  whose sentence shares no identifier with the cited lines; each needs a reader, and a wrong "fix" is worse than a
+  stale number. Reproduce with a script that extracts the backticked identifiers of the sentence and compares them
+  with the five lines either side of the citation.
+  [docs/AGENTS.md]
 - [ ] D83. Move the rationale and the measurement evidence out of the requirement bodies in `docs/spec/`: `docs/AGENTS.md` sends `why` to an ADR and evidence to `ROADMAP.md`, and D76b deliberately left both in place because deleting a measured claim (the Launchpad page structure in `pipeline.md` step 3, the 2026-11-11 freshness measurement in step 8, the `pop-default-settings` verification in `platform.md`) would drop input the parsers are tested against. Acceptance: every `because`, `so that`, `Verified from`, `Measured` and dated observation inside a requirement is either cited as `ADR-####` or moved to a ledger entry, and no requirement is left without the fact it needs to be testable. No behavior change. [docs/AGENTS.md, SPEC: docs/spec/AGENTS.md]
 
 ## Change log
