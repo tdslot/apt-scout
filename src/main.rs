@@ -2737,10 +2737,7 @@ const DPKG: &str = "/usr/bin/dpkg";
 /// as root (docs/threat-model.md A2 and the environment row, `ROADMAP.md` D87).
 fn cleared_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
     let mut command = std::process::Command::new(program);
-    command
-        .env_clear()
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+    command.env_clear().stdin(std::process::Stdio::null());
     command
 }
 
@@ -2754,6 +2751,16 @@ fn architecture() -> Result<String, (u8, String)> {
     let out = dpkg_command()
         .output()
         .map_err(|e| (1, format!("cannot run '{DPKG} --print-architecture' to find the CPU architecture: {e}. Is dpkg installed?")))?;
+    if !out.status.success() {
+        let said = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err((
+            1,
+            format!(
+                "'{DPKG} --print-architecture' failed with {}: {said}",
+                out.status
+            ),
+        ));
+    }
     let arch = String::from_utf8_lossy(&out.stdout).trim().to_string();
     match arch.as_str() {
         "amd64" | "i386" => Ok(arch),
@@ -5555,13 +5562,10 @@ mod tests {
         probe.env("APT_SCOUT_PROBE", "kept");
         let out = probe.output().expect("the probe must run");
         let text = String::from_utf8_lossy(&out.stdout);
-        assert!(
-            text.contains("APT_SCOUT_PROBE=kept"),
-            "the probe must see the one variable it sets, or the check proves nothing: {text}"
-        );
-        assert!(
-            !text.contains("PATH="),
-            "a cleared command runs as root from the write path and must inherit nothing: {text}"
+        assert_eq!(
+            text.trim(),
+            "APT_SCOUT_PROBE=kept",
+            "a cleared command runs as root from the write path and must inherit nothing but what it sets"
         );
     }
 

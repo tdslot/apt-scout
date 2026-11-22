@@ -194,12 +194,14 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
 - [x] D87. Audit the one process a root run spawns for its environment: `src/main.rs` ran `/usr/bin/dpkg --print-architecture`
   with the inherited environment, so a variable a user could set before `sudo` reached a process running as root,
   and the vector was the dynamic loader (`LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`): code execution in the root
-  process, not a variable that reaches it. It was a compliance defect rather than a new rule: 
-  `docs/threat-model.md` already required the run to pass a constructed environment to any child. The child is now
-  built by `cleared_command` (`src/main.rs:2738`), which clears the environment and closes stdin, and
-  `a_cleared_command_starts_with_no_environment` asserts it by running `/usr/bin/env` through the same
-  builder: it fails when `.env_clear()` is removed, which was checked by removing it. `docs/spec/platform.md`
-  PLAT-3 states the requirement, and the record, the environment row and A2 say the child is cleared.
+  process. It was a compliance defect rather than a new rule, because the record already required the run to pass a
+  constructed environment to any child. The child is now built by `cleared_command` (`src/main.rs:2738`), which clears the
+  environment and closes stdin the way the verifier does, and `a_cleared_command_starts_with_no_environment` runs
+  `/usr/bin/env` through the same builder, asserting the output is exactly the one variable it sets: it fails when
+  `.env_clear()` is removed, which was checked by removing it. A failing child is now reported with its own
+  message and status instead of arriving as an empty architecture. `docs/spec/platform.md` PLAT-3 states the
+  requirement; the record says the children are cleared and that the run's own loader cannot be, since it runs before
+  any line of the program.
   [docs/spec/platform.md, docs/threat-model.md]
 - [ ] D83. Move the rationale and the measurement evidence out of the requirement bodies in `docs/spec/`: `docs/AGENTS.md` sends `why` to an ADR and evidence to `ROADMAP.md`, and D76b deliberately left both in place because deleting a measured claim (the Launchpad page structure in `pipeline.md` step 3, the 2026-11-11 freshness measurement in step 8, the `pop-default-settings` verification in `platform.md`) would drop input the parsers are tested against. Acceptance: every `because`, `so that`, `Verified from`, `Measured` and dated observation inside a requirement is either cited as `ADR-####` or moved to a ledger entry, and no requirement is left without the fact it needs to be testable. No behavior change. [docs/AGENTS.md, SPEC: docs/spec/AGENTS.md]
 
