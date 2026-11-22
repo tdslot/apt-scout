@@ -11,6 +11,8 @@ A unit is a paragraph (the lines between two blank lines) or a single table
 row, because the style contract wraps a sentence across lines and a fragment
 shares fewer words with the code than the sentence does.
 
+A citation whose path escapes the repository is skipped rather than read.
+
 This is a triage, not a verdict. A flagged citation can be right and an
 unflagged one can be wrong. Citations into documents rather than code are not
 checked, and a range is judged by its first line.
@@ -70,9 +72,11 @@ def main(argv):
     total = 0
     for number, text, members in units(lines):
         for target, start in CITE.findall(text):
+            if ".." in target or target.startswith(("/", "src/../")):
+                continue
+            total += 1
             marker = target + ':' + start
             cited = next((n for n, l in members if marker in l), number)
-            total += 1
             if target not in sources:
                 sources[target] = Path(target).read_text(encoding="utf-8").splitlines()
             body = sources[target]
