@@ -1,6 +1,9 @@
 # Delivery Roadmap
 
-This file is the execution ledger for `SPEC.md`. `SPEC.md` defines behavior; this file defines work order and records delivery evidence. Keep entries current after each merged PR. Do not duplicate detailed design from the spec here.
+This file is the execution ledger for `SPEC.md`.
+  `SPEC.md` defines behavior; this file defines work order and records delivery evidence.
+  Keep entries current after each merged PR.
+  Do not duplicate detailed design from the spec here.
 
 The gates, verdicts and logs behind each task live in `docs/history/`, one file per milestone,
 linked from the task that earned them.
@@ -9,159 +12,449 @@ linked from the task that earned them.
 
 For each task, in order:
 
-1. Read `AGENTS.md`, this roadmap, and the referenced `SPEC.md` sections. Confirm the target branch is current and the worktree is clean.
-2. Before behavior changes, update `SPEC.md` if the required behavior is missing or incorrect. Split the task into bounded acceptance criteria and tests here.
-3. Implement one coherent task on one feature branch. Parallel agents are allowed only for independent work in isolated branches/worktrees; never allow concurrent writers to the same files or shared worktree.
-4. Run focused tests while changing code, then all required local checks, including `scripts/docker-test.sh` for Rust/build changes. Open a PR to `develop`.
-5. Run an independent reviewer on the exact PR diff, fix or explicitly answer findings, wait for all required CI checks, then merge. Never push directly to `develop` or `main`.
-6. Immediately record merged PR, verification, and next task in this file; start the next unblocked task without waiting for another prompt.
-7. At each milestone boundary, run an Oracle audit against the original goal, `SPEC.md`, delivered code, tests, and known real-system behavior. Oracle may propose missing requirements; add accepted requirements to `SPEC.md`, then update this roadmap before implementation resumes.
+1. Read `AGENTS.md`, this roadmap, and the referenced `SPEC.md` sections.
+   Confirm the target branch is current and the worktree is clean.
+2. Before behavior changes, update `SPEC.md` if the required behavior is missing or incorrect.
+   Split the task into bounded acceptance criteria and tests here.
+3. Implement one coherent task on one feature branch.
+   Parallel agents are allowed only for independent work in isolated branches/worktrees; never allow concurrent
+   writers to the same files or shared worktree.
+4. Run focused tests while changing code, then all required local checks, including `scripts/docker-test.sh` for
+   Rust/build changes.
+   Open a PR to `develop`.
+5. Run an independent reviewer on the exact PR diff, fix or explicitly answer findings, wait for all required CI
+   checks, then merge.
+   Never push directly to `develop` or `main`.
+6. Immediately record merged PR, verification, and next task in this file; start the next unblocked task without
+   waiting for another prompt.
+7. At each milestone boundary, run an Oracle audit against the original goal, `SPEC.md`, delivered code, tests, and
+   known real-system behavior.
+   Oracle may propose missing requirements; add accepted requirements to `SPEC.md`, then update this roadmap before
+   implementation resumes.
 
-Use task states `DONE`, `READY`, `BLOCKED`, and `PENDING`. `DONE` requires merged PR and passing verification. Keep task records concise and link them to `SPEC.md` sections. A task discovered during implementation becomes a new roadmap entry before it is forgotten.
+Use task states `DONE`, `READY`, `BLOCKED`, and `PENDING`.
+  `DONE` requires merged PR and passing verification.
+  Keep task records concise and link them to `SPEC.md` sections.
+  A task discovered during implementation becomes a new roadmap entry before it is forgotten.
 
 ## Goal
 
-Deliver a safe Ubuntu-family CLI that discovers and ranks mirrors, lets the user inspect the result in a TUI, and safely applies/restores apt source changes. The TUI must be runnable on the user's laptop for visual inspection; Ubuntu runtime behavior must be exercised locally in Docker emulation.
+Deliver a safe Ubuntu-family CLI that discovers and ranks mirrors, lets the user inspect the result in a TUI, and
+  safely applies/restores apt source changes.
+  The TUI must be runnable on the user's laptop for visual inspection; Ubuntu runtime behavior must be exercised
+  locally in Docker emulation.
 
 ## Milestone 1 — Read-only discovery and ranking
 
-**Status: IMPLEMENTED; OPEN FINDINGS TRACKED BELOW, NONE OF THEM A WRITE GATE** — what M1 delivered is the read-only product: Ubuntu-family/codename/architecture detection, Launchpad and `mirrors.ubuntu.com` discovery, URL and DNS hygiene, optional country/AS with Team Cymru ranking, `-updates`/`-security` freshness, the parallel probe and the ranker, and the read-only CLI (`--list`, `--any`, `--country`, `--no-geo`, `--top`, `--https-only`, `--verbose`, `--no-color` and, since PR #63, `--version`), merged through PRs #13–#16, D6a in PR #18 and D6b in PR #19. Its audit produced **D6a–D6c, D6e and D6f** — five task ids, no sixth — and those are closed: D6c's two P1s by D6f in PR #29, the boundary itself by D6e in PR #28. The findings still open under this milestone are ledger items with owners, not a block on any write: D22, D29 and D46. **The write path does not wait on D6e and has not since PR #43:** D6e is `DONE` with PR #28, the writer merged as D9b (PR #36) and reached the CLI as D11a (PR #43), the restore engine followed as D10a/D10b (PR #59) and its flag as D11b (PR #62), and the follow-ups the record left open closed with D25 (PR #43) and D49 (PR #64). D6f merged as PR #29.
+**Status: IMPLEMENTED; OPEN FINDINGS TRACKED BELOW, NONE OF THEM A WRITE GATE** — what M1 delivered is the read-only
+  product: Ubuntu-family/codename/architecture detection, Launchpad and `mirrors.ubuntu.com` discovery, URL and DNS
+  hygiene, optional country/AS with Team Cymru ranking, `-updates`/`-security` freshness, the parallel probe and the
+  ranker, and the read-only CLI (`--list`, `--any`, `--country`, `--no-geo`, `--top`, `--https-only`, `--verbose`,
+  `--no-color` and, since PR #63, `--version`), merged through PRs #13–#16, D6a in PR #18 and D6b in PR #19.
+  Its audit produced **D6a–D6c, D6e and D6f** — five task ids, no sixth — and those are closed: D6c's two P1s by
+  D6f
+  in PR #29, the boundary itself by D6e in PR #28.
+  The findings still open under this milestone are ledger items with owners, not a block on any write: D22, D29 and
+  D46.
+  **The write path does not wait on D6e and has not since PR #43:** D6e is `DONE` with PR #28, the writer merged as
+  D9b (PR #36) and reached the CLI as D11a (PR #43), the restore engine followed as D10a/D10b (PR #59) and its flag as
+  D11b (PR #62), and the follow-ups the record left open closed with D25 (PR #43) and D49 (PR #64).
+  D6f merged as PR #29.
 
-- [x] D1. Detect Ubuntu family, release codename, and supported architecture. [SPEC: docs/spec/platform.md, docs/spec/pipeline.md 1]
-- [x] D2. Parse and validate Launchpad mirror candidates, with `mirrors.ubuntu.com` fallback. [SPEC: docs/spec/pipeline.md 3–4]
+- [x] D1.
+  Detect Ubuntu family, release codename, and supported architecture. [SPEC: docs/spec/platform.md,
+  docs/spec/pipeline.md 1]
+- [x] D2.
+  Parse and validate Launchpad mirror candidates, with `mirrors.ubuntu.com` fallback. [SPEC: docs/spec/pipeline.md
+  3–4]
 - [x] D3. Probe mirrors, measure freshness/speed, rank, and expose read-only CLI. [SPEC: docs/spec/pipeline.md 6–9]
-- [x] D4. Detect country/AS optionally; support `--no-geo`; add bounded, validated Team Cymru AS lookups and AS tie-break. [SPEC: docs/spec/pipeline.md steps 2 and 5]
+- [x] D4.
+  Detect country/AS optionally; support `--no-geo`; add bounded, validated Team Cymru AS lookups and AS tie-break.
+  [SPEC: docs/spec/pipeline.md steps 2 and 5]
 - [x] D5. Add local Docker runtime coverage and CI checks. [SPEC: docs/spec/testing.md]
-- [x] D6. Formal Oracle audit completed. Accepted requirements recorded in SPEC and tasks D6a–D6c. [SPEC: docs/spec/pipeline.md preflight, docs/spec/pipeline.md 9, docs/spec/non-functional.md security note, docs/spec/apply.md testing]
-- [x] D6a. Reorder preflight so invalid/unknown `--country` and unsupported architecture fail before geo, HTTP, or DNS; Docker regression proves both cases are rejected without network attempts. Merged PR #18.
-- [x] D6b. Show mirror AS and same/different/unknown status in CLI output; tests cover status mapping and scheme/port handling. Merged PR #19.
-- [x] D6c. Fail-closed `InRelease` verification with fixed `/usr/bin/gpgv` and the Ubuntu archive keyring; `verified`/`invalid`/`unavailable` are shown without blocking read-only ranking, the `.deb` depends on `gpgv` and `ubuntu-keyring`, and README, AGENTS, SPEC, and the Docker suite document the boundary. Merged PR #25 as `665f1ed` (reviewed head `0207555`); on that head fmt, Clippy `-D warnings`, `cargo test --locked` (110 passed), `cargo deny check`, and Docker 19/19 (Ubuntu 20.04–26.04 offline and live, the missing-`gpgv` case, and the earlier negative cases) exited 0 and CI `changes`, `pr-title`, `docs-and-conventions`, `check`, `deny`, and `musl-build` were SUCCESS. The code review returned `CHANGES REQUESTED` and the security audit returned `FAIL` with open P1 findings, and the human authorized that merge directly instead of through the loop's merge condition; those P1 findings stay open in D6f. [SPEC: docs/spec/non-functional.md security note, docs/spec/apply.md]
-- [x] **D6e — DONE.** Oracle threat-model/design audit plus independent security review of the privilege boundary, approving the boundary and its acceptance tests before any privileged implementation, and ruling on self-reexec. — [evidence](docs/history/m1.md#d6e)
+- [x] D6.
+  Formal Oracle audit completed.
+  Accepted requirements recorded in SPEC and tasks D6a–D6c. [SPEC: docs/spec/pipeline.md preflight,
+  docs/spec/pipeline.md 9, docs/spec/non-functional.md security note, docs/spec/apply.md testing]
+- [x] D6a.
+  Reorder preflight so invalid/unknown `--country` and unsupported architecture fail before geo, HTTP, or DNS; Docker
+  regression proves both cases are rejected without network attempts.
+  Merged PR #18.
+- [x] D6b.
+  Show mirror AS and same/different/unknown status in CLI output; tests cover status mapping and scheme/port handling.
+  Merged PR #19.
+- [x] D6c.
+  Fail-closed `InRelease` verification with fixed `/usr/bin/gpgv` and the Ubuntu archive keyring;
+  `verified`/`invalid`/`unavailable` are shown without blocking read-only ranking, the `.deb` depends on `gpgv` and
+  `ubuntu-keyring`, and README, AGENTS, SPEC, and the Docker suite document the boundary.
+  Merged PR #25 as `665f1ed` (reviewed head `0207555`); on that head fmt, Clippy `-D warnings`, `cargo test --locked`
+  (110 passed), `cargo deny check`, and Docker 19/19 (Ubuntu 20.04–26.04 offline and live, the missing-`gpgv` case,
+  and the earlier negative cases) exited 0 and CI `changes`, `pr-title`, `docs-and-conventions`, `check`, `deny`, and
+  `musl-build` were SUCCESS.
+  The code review returned `CHANGES REQUESTED` and the security audit returned `FAIL` with open P1 findings, and the
+  human authorized that merge directly instead of through the loop's merge condition; those P1 findings stay open in
+  D6f. [SPEC: docs/spec/non-functional.md security note, docs/spec/apply.md]
+- [x] **D6e — DONE.** Oracle threat-model/design audit plus independent security review of the privilege boundary,
+  approving the boundary and its acceptance tests before any privileged implementation, and ruling on self-reexec. —
+  [evidence](docs/history/m1.md#d6e)
 - [x] **D6f — DONE.** Fix the open D6c findings before any privileged write. — [evidence](docs/history/m1.md#d6f)
 
 
-Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6c PR #25 (merge commit `665f1ed`), and D6f PR #29 (merge commit `8bbfa72`). D6a evidence: 79 unit tests and Docker 17/17; D6b evidence: 80 unit tests, fmt, Clippy `-D warnings`, `cargo deny check`, Docker 17/17; D7 evidence: 92 unit tests and Docker 18/18. D8 evidence: 97 unit tests, fmt, Clippy `-D warnings`, `cargo deny check`, Docker 18/18; PR #23 required CI and final review passed. D6c evidence on reviewed head `0207555`: 110 unit tests, fmt, Clippy `-D warnings`, `cargo deny check`, Docker 19/19, and all six required checks SUCCESS, but the code review returned `CHANGES REQUESTED` and the security audit `FAIL` with open P1 findings, so that merge rests on human authorization rather than a clean verdict, and D6f carries the findings. PR #26 is a delivery-team chore and is not counted here. Oracle audit run 2026-11-12; see D6a–D6c, D6e and D6f.
+Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6c PR #25 (merge commit `665f1ed`),
+  and D6f PR #29 (merge commit `8bbfa72`).
+  D6a evidence: 79 unit tests and Docker 17/17; D6b evidence: 80 unit tests, fmt, Clippy `-D warnings`,
+  `cargo deny check`, Docker 17/17; D7 evidence: 92 unit tests and Docker 18/18.
+  D8 evidence: 97 unit tests, fmt, Clippy `-D warnings`, `cargo deny check`, Docker 18/18; PR #23 required CI and
+  final review passed.
+  D6c evidence on reviewed head `0207555`: 110 unit tests, fmt, Clippy `-D warnings`, `cargo deny check`, Docker
+  19/19, and all six required checks SUCCESS, but the code review returned `CHANGES REQUESTED` and the security audit
+  `FAIL` with open P1 findings, so that merge rests on human authorization rather than a clean verdict, and D6f
+  carries the findings.
+  PR #26 is a delivery-team chore and is not counted here.
+  Oracle audit run 2026-11-12; see D6a–D6c, D6e and D6f.
 
 ## Milestone 2 — Apt source discovery, apply, backup, restore
 
-**Status: COMPLETE ON THE EVIDENCE, WITH D54-D56 AND D24 OPEN** — the D12 audit found Milestone 2 feature-complete with its controls enforced in code (thirteen inventory rows: twelve with a control that refuses and a test that would fail if the control were removed, the thirteenth — the write path's isolation — proved by a source scan whose blind spot is D54), and filed three evidence-quality gaps and one documentation debt rather than closing over them. D6a/D6b, D7, and D8 are complete; D6c signature verification merged as PR #25 and its P1 findings were closed by D6f in PR #29, so D6e's privilege boundary stands and the security-acceptance gate is what the write tasks must satisfy. D9a (pure core), D9b (the writer) and D9c (the harness and the S-matrix subset it owns) are done, so the writer is exercised end to end in disposable containers. D9d closed the D9 record, D11a merged as PR #43 and made the writer reachable from the CLI, and D25 closed in that same PR before the wiring landed. What is left of the CLI is D11b's `--restore`; D10a and D10b build the restore it wires and are done (D10 was split on 2026-11-13 because the engine alone and the reader alone are each one PR). Above that, the surface a person actually touches is delivered and recorded here: D42's progress line and colour (PR #51), D44's `-v` threshold (PR #53), D47's `README.md` as the one user document (PR #58) and D48's `.deb` builder (PR #56) are `DONE` as of 2026-11-14, alongside D37's single report (PR #47), D38's short aliases (PR #49) and D43's `--any` with its one widening (PR #52). Two follow-ups the human found by testing the installed `.deb` are `DONE` in PR #63 (`7e36cc2`): D51's `--version` and `-V`, which was an unknown option, and D52's `sudo apt update` hint, which a root run printed without the privilege the reader no longer has. So the open work here is the two `.deb` builders D48 leaves in step by hand — no task owns changing the release path, because `.github/**` is closed to every delivery agent — the test rule D53 carries into the next test written or reviewed, and the `READY` and `PENDING` items this file already carried. D49, the other deferred finding, is `DONE` in PR #64 (`fa2a955`): `Plan::validate` now refuses a removal outside a restore plan. D50, the one PR #60's security read deferred, closed in the docs pass that wrote this line: the record's evidence commands assert their own output and its citations name their definitions.
+**Status: COMPLETE ON THE EVIDENCE, WITH D54-D56 AND D24 OPEN** — the D12 audit found Milestone 2 feature-complete
+  with its controls enforced in code (thirteen inventory rows: twelve with a control that refuses and a test that
+  would fail if the control were removed, the thirteenth — the write path's isolation — proved by a source scan
+  whose
+  blind spot is D54), and filed three evidence-quality gaps and one documentation debt rather than closing over them.
+  D6a/D6b, D7, and D8 are complete; D6c signature verification merged as PR #25 and its P1 findings were closed by D6f
+  in PR #29, so D6e's privilege boundary stands and the security-acceptance gate is what the write tasks must satisfy.
+  D9a (pure core), D9b (the writer) and D9c (the harness and the S-matrix subset it owns) are done, so the writer is
+  exercised end to end in disposable containers.
+  D9d closed the D9 record, D11a merged as PR #43 and made the writer reachable from the CLI, and D25 closed in that
+  same PR before the wiring landed.
+  What is left of the CLI is D11b's `--restore`; D10a and D10b build the restore it wires and are done (D10 was split
+  on 2026-11-13 because the engine alone and the reader alone are each one PR).
+  Above that, the surface a person actually touches is delivered and recorded here: D42's progress line and colour (PR
+  #51), D44's `-v` threshold (PR #53), D47's `README.md` as the one user document (PR #58) and D48's `.deb` builder
+  (PR #56) are `DONE` as of 2026-11-14, alongside D37's single report (PR #47), D38's short aliases (PR #49) and D43's
+  `--any` with its one widening (PR #52).
+  Two follow-ups the human found by testing the installed `.deb` are `DONE` in PR #63 (`7e36cc2`): D51's `--version`
+  and `-V`, which was an unknown option, and D52's `sudo apt update` hint, which a root run printed without the
+  privilege the reader no longer has.
+  So the open work here is the two `.deb` builders D48 leaves in step by hand — no task owns changing the release
+  path, because `.github/**` is closed to every delivery agent — the test rule D53 carries into the next test written
+  or reviewed, and the `READY` and `PENDING` items this file already carried.
+  D49, the other deferred finding, is `DONE` in PR #64 (`fa2a955`): `Plan::validate` now refuses a removal outside a
+  restore plan.
+  D50, the one PR #60's security read deferred, closed in the docs pass that wrote this line: the record's evidence
+  commands assert their own output and its citations name their definitions.
 
-- [x] D7. Read-only apt source inventory and legacy/deb822 parsers; print eligible/skipped URIs and stop before probes if no eligible source exists. No apt writes. Tests cover comments/options, malformed/duplicate/missing fields, disabled/security stanzas, current mirrors, Pop!_OS mixed security suites, invalid URI ports/userinfo, root/file/directory symlinks, non-UTF8 files, third-party-only sources, and Docker CLI output. Merged PR #21.
-- [x] D8. Pure, byte-preserving rewrite plan for legacy/deb822 URI tokens; returns transformed contents and staged Pop!_OS security file without filesystem IO. Tests cover CRLF/comments/options, multi-URI/disabled/security stanzas, Pop split, round trips, and invalid selected URLs. Merged PR #23.
-- [x] **D9a — DONE.** Pure core of the writer: `src/digest.rs`, `src/plan.rs`, `src/manifest.rs` — closed target enumeration, plan and manifest types, whole-plan validation, and the validating manifest parser. Unit tests only; nothing in the runtime calls it yet. — [evidence](docs/history/m2.md#d9a)
-- [x] **D9b — DONE.** The writer in `src/apply.rs`: root check, state capture and disk binding, freshness gate, ownership gate, target validation, backup phase with manifest, and the atomic write path that preserves mode and owner. — [evidence](docs/history/m2.md#d9b)
-- [x] **D9c — DONE.** The write harness, compiled out of every default and release build, plus the container matrix for S5/S6/S7/S8/S9/S11/S15/S16/S17 in disposable Ubuntu images with a container-local `/etc/apt`. — [evidence](docs/history/m2.md#d9c)
-- [x] **D26 — DONE (#92), a human `chore:` PR.** Nothing compiled `src/harness.rs` in CI: the module is gated on `apt_scout_write_harness`, no workflow passed that cfg, and the only compiler that saw the file was `scripts/docker-test.sh`, which never runs in CI. The `check` job — already a required status — now runs clippy a second time with `RUSTFLAGS=--cfg apt_scout_write_harness`. Measured, not assumed: with a deliberate syntax error appended to `src/harness.rs`, plain clippy reports **0** errors and the cfg pass reports **3**, and with the file restored both are clean. docs/spec/testing.md states the pass, so the reason survives the commit message. [SPEC: docs/spec/testing.md]
-- [x] **D27 — DONE.** `scripts/docker-test.sh` piped an unpinned remote script into a shell inside a container with the checkout mounted read-write; it now fetches the published `rustup-init`, verifies it against the `.sha256`, and runs that; the toolchain version stays whatever `rust-toolchain.toml` names. — [evidence](docs/history/m2.md#d27)
-- [x] **D9d — DONE.** The D9 closeout: the writer's glossary terms, the ledger entry that was missing, and the record corrected where D9a/D9b/D9c had made it stale. [SPEC: docs/spec/apply.md] — [evidence](docs/history/m2.md#d9d)
-- [ ] **D22 — PENDING, not on the critical path.** Split the Docker suite into a deterministic offline part that CI runs and a live part that stays local. — [evidence](docs/history/m2.md#d22)
-- [x] **D23 — DONE.** Root `AGENTS.md` described `src/` as it was before D9a, which added `digest.rs`, `plan.rs` and `manifest.rs` while the root Project list named none of them. — [evidence](docs/history/m2.md#d23)
-- [x] **D24 — DONE (#67), a human `chore:` PR; no delivery agent may do it.** The root `AGENTS.md` Project list is behind the tree in seven ways, all closed to every delivery agent: it still carries no `src/apply.rs` bullet and still says "Apply/source rewriting is not implemented yet", which D9b falsifies (the writer, its backup and the manifest path exist); and D9c added `src/harness.rs`, `build.rs` and a `scripts/docker-test.sh` that now does more than "container tests", none of which that list describes; and D43 added `-a`/`--any` with the one automatic widening, neither of which the `src/main.rs` bullet's flag list names; and `AGENTS.md:120`'s Tracking bullet still says "Testing: unit tests on fixtures; integration tests in Docker", which PR #63 falsifies by adding `tests/cli.rs` — a cargo integration test target that `cargo test` runs on the developer's machine, reading no fixture and needing no container. — [evidence](docs/history/m2.md#d24)
-- [x] **D25 — DONE.** The write proof was forgeable from inside the process, so `docs/threat-model.md` 3.10 and Appendix A item 4 did not hold and S15's claim that the value cannot be constructed without the verification pass was false. — [evidence](docs/history/m2.md#d25)
-- [ ] **D28 — PENDING, not on the critical path; found while splitting D11.** `--refresh` is in the docs/spec/cli.md flag table and there is no cache behind it, so the flag has nothing to refresh and is not parsed: a run given it fails as an unknown option with exit 2 (`rg -n -- '"--refresh"' src/` prints nothing), while docs/spec/pipeline.md step 2.3 describes a `~/.cache/apt-scout/mirrors.json` disk cache valid for 24 h, `Errors and self-healing` names its missing, empty and corrupt cases, and `Non-functional` lists the geo/mirror cache as planned work that no roadmap task owns. — [evidence](docs/history/m2.md#d28)
-- [ ] **D29 — PENDING; start after D11b, which adds its restore cases to the same script.** A live-network container case lets a third-party mirror gate a merge. — [evidence](docs/history/m2.md#d29)
-- [x] **D10a — DONE.** Make the writer able to express a restore's write set, so that `--restore` has a plan to hand it and one writer still writes. — [evidence](docs/history/m2.md#d10a)
-- [x] **D10b — DONE.** The restore engine, no CLI: `src/restore.rs` builds a `Plan` from the newest backup alone, and `apply::apply(&plan, None, now)` is the writer it hands it to, so the writer keeps one entry point and no new one is added for restore. — [evidence](docs/history/m2.md#d10b)
-- [x] **D11a — DONE.** The CLI write path: a root run builds the plan from the run's own inventory and rewrite output, prints it, asks one confirmation unless `--yes`, then calls `apply()` and prints the backup id and the files written; a non-root run prints the recommendation and the `sudo apt-scout …` line and exits 3; `--list` prints the table and the planned change and never writes; refusals exit 1. — [evidence](docs/history/m2.md#d11a)
-- [x] **D11b — DONE.** The other half of the CLI: `--restore` parses and behaves by uid — a non-root run prints only `sudo apt-scout --restore`, exits 3 and opens no backup, a root run restores the newest backup after one confirmation (`--yes` skips it) — plus the container case that restores into an isolated `/etc/apt` and compares bytes, mode and owner (S4, S10, S11's manifest half). — [evidence](docs/history/m2.md#d11b)
-- [x] **D35 — DONE.** A mirror a previous run wrote must survive a country change; ruled by the human 2026-11-13, found in a container. — [evidence](docs/history/m2.md#d35)
-- [ ] **D36 — PENDING; ruled by the human 2026-11-13, not a dependency of D35.** When every mirror list fails but the network works, the canonical archive should still be a candidate, so a run does not end with nothing to do because a list is down. It is not today: `load_candidates` returns exit 1 "no mirror list is available" (`src/main.rs:1645`) before any probe, and the `archive.ubuntu.com` fetch in Pipeline 6 is the freshness reference, not a candidate. The task: add `http://archive.ubuntu.com/ubuntu/` as a last list source with a warning and a source name in the output, ranked and verified like any other candidate; it then either plans an empty change and exits 0 (already on the canonical archive) or writes it. Needs its own `SPEC.md` delta in Pipeline 3–4 and the exit-code section, plus the container case where both lists are blocked but the archive answers. [SPEC: docs/spec/pipeline.md 3–4, docs/spec/cli.md]
-- [x] **D37 — DONE; the id was assigned when the merge was recorded, not before it.** A run prints one structured report instead of a table plus loose lines: a header, `Sources`, `Ranked — <n> of <m> usable, <k> rejected`, `Recommendation`, `Planned change`, and a `Rejected` section whose entries are grouped by the reason they were rejected (`src/main.rs:627`, `:873`, `:988`, `:1352`, `:1381`). — [evidence](docs/history/m2.md#d37)
-- [x] **D38 — DONE; the id was assigned when the merge was recorded, not before it.** A short form for every flag that exists — `-c`, `-l`, `-y`, `-t`, `-n`, `-s`, `-v` and `-h` — with `-a`, `-r` and `-R` reserved for `--any`, `--restore` and `--refresh` and rejected until those flags exist; no bundling, so `-lyc NO` stays an unknown option (`src/main.rs:2068`); and the line a non-root run prints still spells the long forms, so a copied command is unambiguous. — [evidence](docs/history/m2.md#d38)
-- [x] **D39 — DONE (#96), docs-only; found by PR #47's review.** The exit-code tables did not cover a case the program already has. docs/spec/non-functional.md's list and `--help`'s `EXIT CODES` block (`src/main.rs:237–239`) both defined 4 as unsupported distro or architecture, while `src/main.rs:2188–2194` exits 4 for a second, unrelated case: when the reference `-updates` `InRelease` answers 404 and the release has moved to `old-releases.ubuntu.com`, the run exits 4 with a message naming the codename. — [evidence](docs/history/m2.md#d39)
-- [x] **D40 — DONE.** The dot-segment refusal recognises one encoding layer while `%252e` and `...` are ordinary segment names; ruled as a ruling, not a defect, and the entry says why keeping the check at one layer is not a hole. — [evidence](docs/history/m2.md#d40)
-- [x] **D41 — DONE (#94).** The report shape lived in `--help` and in code comments, not in the contract. docs/spec/output.md now states the two facts a reader of the table needs and the code already had: the trailing `notes` cell carries exactly `redir:<host>`, cut to 16 columns and ending in `~` when it did not fit (`REDIR_HOST_MAX`, `CUT_MARKER` in `src/main.rs`), and nothing else — the `-security` lag moved to `Detail`; and a column that would be empty is dropped, the AS column when no shown row has AS data and the `notes` column when no shown row has a note. The old row text named `sec:<n>m` as cell content; that is no longer true of the product — `rg -n "sec:" src/main.rs` finds only the comment recording why it left — so the row records what the code does, not what it did.
-- [x] **D60 — DONE (#TBD).** An independent documentation-versus-product audit and its fixes: a reviewer given *documentation must match the product 100%* tried to falsify every claim in `README.md`, the man page, `--help` and the user-facing `SPEC.md`. — [evidence](docs/history/m2.md#d60)
-- [x] **D61 — DONE (#TBD).** The three product-text defects the D60 audit found, fixed in the product rather than documented around, starting with a closing line that printed `changed wrote <path>`. — [evidence](docs/history/m2.md#d61)
-- [x] **D62 — DONE (#TBD).** The second documentation-versus-product audit: 6 mismatches, 5 documents and 1 product, after re-checking all 13 of D60 and finding them held. — [evidence](docs/history/m2.md#d62)
-- [x] **D63 — DONE (#TBD).** The `Rejected` block prints a count per class, because three documents and `SPEC.md` said it did and the code did not. — [evidence](docs/history/m2.md#d63)
+- [x] D7.
+  Read-only apt source inventory and legacy/deb822 parsers; print eligible/skipped URIs and stop before probes if no
+  eligible source exists.
+  No apt writes.
+  Tests cover comments/options, malformed/duplicate/missing fields, disabled/security stanzas, current mirrors,
+  Pop!_OS mixed security suites, invalid URI ports/userinfo, root/file/directory symlinks, non-UTF8 files,
+  third-party-only sources, and Docker CLI output.
+  Merged PR #21.
+- [x] D8.
+  Pure, byte-preserving rewrite plan for legacy/deb822 URI tokens; returns transformed contents and staged Pop!_OS
+  security file without filesystem IO.
+  Tests cover CRLF/comments/options, multi-URI/disabled/security stanzas, Pop split, round trips, and invalid selected
+  URLs.
+  Merged PR #23.
+- [x] **D9a — DONE.** Pure core of the writer: `src/digest.rs`, `src/plan.rs`, `src/manifest.rs` — closed target
+  enumeration, plan and manifest types, whole-plan validation, and the validating manifest parser.
+  Unit tests only; nothing in the runtime calls it yet. — [evidence](docs/history/m2.md#d9a)
+- [x] **D9b — DONE.** The writer in `src/apply.rs`: root check, state capture and disk binding, freshness gate,
+  ownership gate, target validation, backup phase with manifest, and the atomic write path that preserves mode and
+  owner. — [evidence](docs/history/m2.md#d9b)
+- [x] **D9c — DONE.** The write harness, compiled out of every default and release build, plus the container matrix
+  for S5/S6/S7/S8/S9/S11/S15/S16/S17 in disposable Ubuntu images with a container-local `/etc/apt`. —
+  [evidence](docs/history/m2.md#d9c)
+- [x] **D26 — DONE (#92), a human `chore:` PR.** Nothing compiled `src/harness.rs` in CI: the module is gated on
+  `apt_scout_write_harness`, no workflow passed that cfg, and the only compiler that saw the file was
+  `scripts/docker-test.sh`, which never runs in CI.
+  The `check` job — already a required status — now runs clippy a second time with
+  `RUSTFLAGS=--cfg apt_scout_write_harness`.
+  Measured, not assumed: with a deliberate syntax error appended to `src/harness.rs`, plain clippy reports **0**
+  errors and the cfg pass reports **3**, and with the file restored both are clean. docs/spec/testing.md states the
+  pass, so the reason survives the commit message. [SPEC: docs/spec/testing.md]
+- [x] **D27 — DONE.** `scripts/docker-test.sh` piped an unpinned remote script into a shell inside a container with
+  the checkout mounted read-write; it now fetches the published `rustup-init`, verifies it against the `.sha256`, and
+  runs that; the toolchain version stays whatever `rust-toolchain.toml` names. — [evidence](docs/history/m2.md#d27)
+- [x] **D9d — DONE.** The D9 closeout: the writer's glossary terms, the ledger entry that was missing, and the record
+  corrected where D9a/D9b/D9c had made it stale. [SPEC: docs/spec/apply.md] — [evidence](docs/history/m2.md#d9d)
+- [ ] **D22 — PENDING, not on the critical path.** Split the Docker suite into a deterministic offline part that CI
+  runs and a live part that stays local. — [evidence](docs/history/m2.md#d22)
+- [x] **D23 — DONE.** Root `AGENTS.md` described `src/` as it was before D9a, which added `digest.rs`, `plan.rs` and
+  `manifest.rs` while the root Project list named none of them. — [evidence](docs/history/m2.md#d23)
+- [x] **D24 — DONE (#67), a human `chore:` PR; no delivery agent may do it.** The root `AGENTS.md` Project list is
+  behind the tree in seven ways, all closed to every delivery agent: it still carries no `src/apply.rs` bullet and
+  still says "Apply/source rewriting is not implemented yet", which D9b falsifies (the writer, its backup and the
+  manifest path exist); and D9c added `src/harness.rs`, `build.rs` and a `scripts/docker-test.sh` that now does more
+  than "container tests", none of which that list describes; and D43 added `-a`/`--any` with the one automatic
+  widening, neither of which the `src/main.rs` bullet's flag list names; and `AGENTS.md:120`'s Tracking bullet still
+  says "Testing: unit tests on fixtures; integration tests in Docker", which PR #63 falsifies by adding `tests/cli.rs`
+  — a cargo integration test target that `cargo test` runs on the developer's machine, reading no fixture and needing
+  no container. — [evidence](docs/history/m2.md#d24)
+- [x] **D25 — DONE.** The write proof was forgeable from inside the process, so `docs/threat-model.md` 3.10 and
+  Appendix A item 4 did not hold and S15's claim that the value cannot be constructed without the verification pass
+  was false. — [evidence](docs/history/m2.md#d25)
+- [ ] **D28 — PENDING, not on the critical path; found while splitting D11.** `--refresh` is in the docs/spec/cli.md
+  flag table and there is no cache behind it, so the flag has nothing to refresh and is not parsed: a run given it
+  fails as an unknown option with exit 2 (`rg -n -- '"--refresh"' src/` prints nothing), while docs/spec/pipeline.md
+  step 2.3 describes a `~/.cache/apt-scout/mirrors.json` disk cache valid for 24 h, `Errors and self-healing` names
+  its missing, empty and corrupt cases, and `Non-functional` lists the geo/mirror cache as planned work that no
+  roadmap task owns. — [evidence](docs/history/m2.md#d28)
+- [ ] **D29 — PENDING; start after D11b, which adds its restore cases to the same script.** A live-network container
+  case lets a third-party mirror gate a merge. — [evidence](docs/history/m2.md#d29)
+- [x] **D10a — DONE.** Make the writer able to express a restore's write set, so that `--restore` has a plan to hand
+  it and one writer still writes. — [evidence](docs/history/m2.md#d10a)
+- [x] **D10b — DONE.** The restore engine, no CLI: `src/restore.rs` builds a `Plan` from the newest backup alone, and
+  `apply::apply(&plan, None, now)` is the writer it hands it to, so the writer keeps one entry point and no new one is
+  added for restore. — [evidence](docs/history/m2.md#d10b)
+- [x] **D11a — DONE.** The CLI write path: a root run builds the plan from the run's own inventory and rewrite output,
+  prints it, asks one confirmation unless `--yes`, then calls `apply()` and prints the backup id and the files
+  written; a non-root run prints the recommendation and the `sudo apt-scout …` line and exits 3; `--list` prints the
+  table and the planned change and never writes; refusals exit 1. — [evidence](docs/history/m2.md#d11a)
+- [x] **D11b — DONE.** The other half of the CLI: `--restore` parses and behaves by uid — a non-root run prints only
+  `sudo apt-scout --restore`, exits 3 and opens no backup, a root run restores the newest backup after one
+  confirmation (`--yes` skips it) — plus the container case that restores into an isolated `/etc/apt` and compares
+  bytes, mode and owner (S4, S10, S11's manifest half). — [evidence](docs/history/m2.md#d11b)
+- [x] **D35 — DONE.** A mirror a previous run wrote must survive a country change; ruled by the human 2026-11-13,
+  found in a container. — [evidence](docs/history/m2.md#d35)
+- [ ] **D36 — PENDING; ruled by the human 2026-11-13, not a dependency of D35.** When every mirror list fails but the
+  network works, the canonical archive should still be a candidate, so a run does not end with nothing to do because a
+  list is down.
+  It is not today: `load_candidates` returns exit 1 "no mirror list is available" (`src/main.rs:1645`) before any
+  probe, and the `archive.ubuntu.com` fetch in Pipeline 6 is the freshness reference, not a candidate.
+  The task: add `http://archive.ubuntu.com/ubuntu/` as a last list source with a warning and a source name in the
+  output, ranked and verified like any other candidate; it then either plans an empty change and exits 0 (already on
+  the canonical archive) or writes it.
+  Needs its own `SPEC.md` delta in Pipeline 3–4 and the exit-code section, plus the container case where both lists
+  are blocked but the archive answers. [SPEC: docs/spec/pipeline.md 3–4, docs/spec/cli.md]
+- [x] **D37 — DONE; the id was assigned when the merge was recorded, not before it.** A run prints one structured
+  report instead of a table plus loose lines: a header, `Sources`, `Ranked — <n> of <m> usable, <k> rejected`,
+  `Recommendation`, `Planned change`, and a `Rejected` section whose entries are grouped by the reason they were
+  rejected (`src/main.rs:627`, `:873`, `:988`, `:1352`, `:1381`). — [evidence](docs/history/m2.md#d37)
+- [x] **D38 — DONE; the id was assigned when the merge was recorded, not before it.** A short form for every flag that
+  exists — `-c`, `-l`, `-y`, `-t`, `-n`, `-s`, `-v` and `-h` — with `-a`, `-r` and `-R` reserved for `--any`,
+  `--restore` and `--refresh` and rejected until those flags exist; no bundling, so `-lyc NO` stays an unknown option
+  (`src/main.rs:2068`); and the line a non-root run prints still spells the long forms, so a copied command is
+  unambiguous. — [evidence](docs/history/m2.md#d38)
+- [x] **D39 — DONE (#96), docs-only; found by PR #47's review.** The exit-code tables did not cover a case the program
+  already has. docs/spec/non-functional.md's list and `--help`'s `EXIT CODES` block (`src/main.rs:237–239`) both
+  defined 4 as unsupported distro or architecture, while `src/main.rs:2188–2194` exits 4 for a second, unrelated case:
+  when the reference `-updates` `InRelease` answers 404 and the release has moved to `old-releases.ubuntu.com`, the
+  run exits 4 with a message naming the codename. — [evidence](docs/history/m2.md#d39)
+- [x] **D40 — DONE.** The dot-segment refusal recognises one encoding layer while `%252e` and `...` are ordinary
+  segment names; ruled as a ruling, not a defect, and the entry says why keeping the check at one layer is not a hole.
+  — [evidence](docs/history/m2.md#d40)
+- [x] **D41 — DONE (#94).** The report shape lived in `--help` and in code comments, not in the contract.
+  docs/spec/output.md now states the two facts a reader of the table needs and the code already had: the trailing
+  `notes` cell carries exactly `redir:<host>`, cut to 16 columns and ending in `~` when it did not fit
+  (`REDIR_HOST_MAX`, `CUT_MARKER` in `src/main.rs`), and nothing else — the `-security` lag moved to `Detail`; and a
+  column that would be empty is dropped, the AS column when no shown row has AS data and the `notes` column when no
+  shown row has a note.
+  The old row text named `sec:<n>m` as cell content; that is no longer true of the product —
+  `rg -n "sec:" src/main.rs` finds only the comment recording why it left — so the row records what the code does, not
+  what it did.
+- [x] **D60 — DONE (#TBD).** An independent documentation-versus-product audit and its fixes: a reviewer given
+  *documentation must match the product 100%* tried to falsify every claim in `README.md`, the man page, `--help` and
+  the user-facing `SPEC.md`. — [evidence](docs/history/m2.md#d60)
+- [x] **D61 — DONE (#TBD).** The three product-text defects the D60 audit found, fixed in the product rather than
+  documented around, starting with a closing line that printed `changed wrote <path>`. —
+  [evidence](docs/history/m2.md#d61)
+- [x] **D62 — DONE (#TBD).** The second documentation-versus-product audit: 6 mismatches, 5 documents and 1 product,
+  after re-checking all 13 of D60 and finding them held. — [evidence](docs/history/m2.md#d62)
+- [x] **D63 — DONE (#TBD).** The `Rejected` block prints a count per class, because three documents and `SPEC.md` said
+  it did and the code did not. — [evidence](docs/history/m2.md#d63)
 
 
-- [x] **D42 — DONE; the human's presentation request of 2026-11-13, from trying the tool.** Three changes, one PR: a transient progress line so a root run does not look hung, colour in the report, and three lines deleted. docs/spec/output.md is the contract and `docs/threat-model.md` Appendix A item 14 records the environment read; no ruling and no S1–S17 assertion moves, so no Gate 1 is owed. — [evidence](docs/history/m2.md#d42)
-- [x] **D43 — DONE; ruled by the human 2026-11-13, and it is the last thing he asked for before this entry.** `--any` (`-a`) plus the automatic widening a run does when his own country has nothing usable, so a home country whose nearest mirror is down or incomplete costs him no fiddling. — [evidence](docs/history/m2.md#d43)
-- [x] **D44 — DONE; the human's presentation ruling of 2026-11-13, from trying the tool, and it is one PR.** The default report shows only what a person deciding needs; every other fact moves behind `-v`/`--verbose`. — [evidence](docs/history/m2.md#d44)
-- [x] **D47 — DONE, docs-only; merged after #56 and #57 and superseded their `README.md` hunks.** `README.md` becomes the one complete user document — what it is, requirements, install (the `.deb`, the tarball, from source), quick start, how a run works, what the output means, options, modes and exit codes, backups with the hand-restore path, network and privacy, troubleshooting, a documentation index and the licence — and it points at `SPEC.md` instead of restating it. — [evidence](docs/history/m2.md#d47)
-- [x] **D48 — DONE; the id was assigned when the merge was recorded, not before it.** `scripts/build-deb.sh` builds the installable package from the static binary with no `cargo-deb` on the machine — which matters on macOS, where there is no `dpkg-deb` either, so the script falls back to an `ubuntu:24.04` container for the build. — [evidence](docs/history/m2.md#d48)
-- [x] **D49 — DONE.** (P2 from PR #59's security read, deliberately deferred rather than fixed there.) **Every `src/plan.rs` line number in this bullet and the acceptance one is the file at `7e36cc2`, the head the task was written against; the fix inserts its own arm above these, so those numbers do not name the branch's file.** `Effect::Remove` is not bound to `Authority::Restore`. — [evidence](docs/history/m2.md#d49)
-- [x] **D50 — DONE (P3s from PR #59's and PR #60's security reads, deferred from those PRs rather than fixed in them).** The record's evidence does not check itself. — [evidence](docs/history/m2.md#d50)
-- [x] **D51 — DONE.** `apt-scout --version` was an unknown option: the installed `.deb` answered `error: unknown option '--version'; try --help` and exited 2, so a person with the package installed could not say which version they had without `dpkg -l`, and the bug report template at `.github/ISSUE_TEMPLATE/bug_report.yml:15` already asks them for that output. **The human found it while testing the installed package**, in the same demo that produced the `--help` check. — [evidence](docs/history/m2.md#d51)
-- [x] **D52 — DONE.** The last line a write prints named a command the reader cannot run: `Next: run 'apt update' to refresh the package lists.` is printed by a root run started as `sudo apt-scout …`, and that process has exited by the time the line is read, so the person is back in their own unprivileged shell where `apt update` fails with permission denied. — [evidence](docs/history/m2.md#d52)
-- [ ] **D53 — READY; the rule three tests broke on 2026-11-14, carried by the next test that is written or reviewed.** No separate PR: docs/spec/testing.md now states the rule — an assertion compares a value with an expectation that does not derive from the same expression as the value — and every task that writes or changes a test applies it, which is what makes it a gate rather than a resolution. The rule earns its place from how the three were found, so each is recorded with the finding and the fix: (1) **an ownership assertion in the restore round trip** asserted the owner of a file it had just restored, and a non-root test's files are its own uid, so an `fchown` to that uid is a no-op that succeeds whichever way the writer treats ownership — found by reading the assertion against the environment it runs in while the restore engine was reviewed (PR #59/#60), and the owner comparison is now the container case W27, which runs as root and compares uid/gid against the pre-write state; (2) **an assertion on the baseline a restore hands the writer** was true of the outcome either way, because `check_freshness` returns early for a restore plan and accepts either value, so the assertion asserted nothing — found the same way, and closed by observing the argument through the `run_as` seam with a sentinel planted on the wrong side (`let mut handed = Some(0i64);`), so a `Some(..)` fails with `left: Some(...), right: None` (`restore::tests::run_restores_the_backup_and_a_second_run_is_refused`); (3) **a version assertion whose two sides came from one expression** compared the printed line with `env!("CARGO_PKG_VERSION")`, the same string `VERSION_LINE` interpolates, so it matched itself — found by the review of PR #63 and closed by recomposing the expectation from Cargo's split parts (`MAJOR`, `MINOR`, `PATCH`, `PRE`), so a hardcoded constant or a changed prefix fails instead of matching itself (`tests::version_is_two_spellings_and_the_line_is_the_crate_version`). Acceptance, and it is a review gate rather than a note: a task that writes or changes a test states in its PR the mutation the test survives — the code it covers is broken by hand, the test watched failing, the code restored — or says why no such mutation exists; a reviewer who cannot name that mutation does not pass the test; and `rg -n 'An assertion compares a value' SPEC.md` prints the rule. [SPEC: docs/spec/testing.md]
+- [x] **D42 — DONE; the human's presentation request of 2026-11-13, from trying the tool.** Three changes, one PR: a
+  transient progress line so a root run does not look hung, colour in the report, and three lines deleted.
+  docs/spec/output.md is the contract and `docs/threat-model.md` Appendix A item 14 records the environment read; no
+  ruling and no S1–S17 assertion moves, so no Gate 1 is owed. — [evidence](docs/history/m2.md#d42)
+- [x] **D43 — DONE; ruled by the human 2026-11-13, and it is the last thing he asked for before this entry.** `--any`
+  (`-a`) plus the automatic widening a run does when his own country has nothing usable, so a home country whose
+  nearest mirror is down or incomplete costs him no fiddling. — [evidence](docs/history/m2.md#d43)
+- [x] **D44 — DONE; the human's presentation ruling of 2026-11-13, from trying the tool, and it is one PR.** The
+  default report shows only what a person deciding needs; every other fact moves behind `-v`/`--verbose`. —
+  [evidence](docs/history/m2.md#d44)
+- [x] **D47 — DONE, docs-only; merged after #56 and #57 and superseded their `README.md` hunks.** `README.md` becomes
+  the one complete user document — what it is, requirements, install (the `.deb`, the tarball, from source), quick
+  start, how a run works, what the output means, options, modes and exit codes, backups with the hand-restore path,
+  network and privacy, troubleshooting, a documentation index and the licence — and it points at `SPEC.md` instead of
+  restating it. — [evidence](docs/history/m2.md#d47)
+- [x] **D48 — DONE; the id was assigned when the merge was recorded, not before it.** `scripts/build-deb.sh` builds
+  the installable package from the static binary with no `cargo-deb` on the machine — which matters on macOS, where
+  there is no `dpkg-deb` either, so the script falls back to an `ubuntu:24.04` container for the build. —
+  [evidence](docs/history/m2.md#d48)
+- [x] **D49 — DONE.** (P2 from PR #59's security read, deliberately deferred rather than fixed there.) **Every
+  `src/plan.rs` line number in this bullet and the acceptance one is the file at `7e36cc2`, the head the task was
+  written against; the fix inserts its own arm above these, so those numbers do not name the branch's file.**
+  `Effect::Remove` is not bound to `Authority::Restore`. — [evidence](docs/history/m2.md#d49)
+- [x] **D50 — DONE (P3s from PR #59's and PR #60's security reads, deferred from those PRs rather than fixed in
+  them).** The record's evidence does not check itself. — [evidence](docs/history/m2.md#d50)
+- [x] **D51 — DONE.** `apt-scout --version` was an unknown option: the installed `.deb` answered
+  `error: unknown option '--version'; try --help` and exited 2, so a person with the package installed could not say
+  which version they had without `dpkg -l`, and the bug report template at `.github/ISSUE_TEMPLATE/bug_report.yml:15`
+  already asks them for that output.
+  **The human found it while testing the installed package**, in the same demo that produced the `--help` check. —
+  [evidence](docs/history/m2.md#d51)
+- [x] **D52 — DONE.** The last line a write prints named a command the reader cannot run:
+  `Next: run 'apt update' to refresh the package lists.` is printed by a root run started as `sudo apt-scout …`, and
+  that process has exited by the time the line is read, so the person is back in their own unprivileged shell where
+  `apt update` fails with permission denied. — [evidence](docs/history/m2.md#d52)
+- [ ] **D53 — READY; the rule three tests broke on 2026-11-14, carried by the next test that is written or reviewed.**
+  The brief carries the rule, the three tests and the acceptance for carrying it forward — [brief](docs/tasks/D53.md)
 - [x] **D12 — DONE.** — [evidence](docs/history/m2.md#d12)
 
 - [x] **D57 — DONE.** — [evidence](docs/history/m2.md#d57)
 
-- [x] **D59 — DONE (#78), Ubuntu's carrot orange on the three places the proposal of 2026-11-14 named.** — [evidence](docs/history/m2.md#d59)
+- [x] **D59 — DONE (#78), Ubuntu's carrot orange on the three places the proposal of 2026-11-14 named.** —
+  [evidence](docs/history/m2.md#d59)
 
 ## Milestone 3 — TUI core and laptop inspection
 
 **Status: PENDING** — blocked by D12 and completion of Milestone 2.
 
-- [ ] **D13 — BLOCKED by D12.** Implement the `--tui` core with ranked mirror table, details, selection, confirmation, cancellation, write result, and terminal restoration. As root, confirm validates and writes; as non-root, confirm prints `sudo apt-scout --tui`. Every user-facing string the TUI adds goes through the message catalog of D30a, not a literal at the call site: D30c's whole-tree literal test is what makes that mandatory, so a TUI string left in English is a failing test rather than a follow-up. [SPEC: docs/spec/cli.md, docs/spec/tui.md, docs/spec/localization.md]
-- [ ] **D14 — BLOCKED by D13.** Add `ratatui::TestBackend` snapshots and coverage of `--tui` as an opt-in mode: no TUI without the flag, non-TTY behavior, `--list` and the non-root `sudo` line. [SPEC: docs/spec/cli.md, docs/spec/tui.md, docs/spec/testing.md]
-- [ ] **D15 — BLOCKED by D14.** Provide a laptop command/script that builds and launches the TUI against safe fixture/mock data, without touching host apt files; document how the user inspects it. Then verify program runtime in local Ubuntu Docker emulation. [SPEC: docs/spec/tui.md, docs/spec/testing.md]
-- [ ] **D16 — BLOCKED by D15.** User visually inspects the laptop terminal UI; capture feedback and fix accepted issues. Do not claim visual acceptance until user confirms.
+- [ ] **D13 — BLOCKED by D12.** Implement the `--tui` core with ranked mirror table, details, selection, confirmation,
+  cancellation, write result, and terminal restoration.
+  As root, confirm validates and writes; as non-root, confirm prints `sudo apt-scout --tui`.
+  Every user-facing string the TUI adds goes through the message catalog of D30a, not a literal at the call site:
+  D30c's whole-tree literal test is what makes that mandatory, so a TUI string left in English is a failing test
+  rather than a follow-up. [SPEC: docs/spec/cli.md, docs/spec/tui.md, docs/spec/localization.md]
+- [ ] **D14 — BLOCKED by D13.** Add `ratatui::TestBackend` snapshots and coverage of `--tui` as an opt-in mode: no TUI
+  without the flag, non-TTY behavior, `--list` and the non-root `sudo` line. [SPEC: docs/spec/cli.md,
+  docs/spec/tui.md, docs/spec/testing.md]
+- [ ] **D15 — BLOCKED by D14.** Provide a laptop command/script that builds and launches the TUI against safe
+  fixture/mock data, without touching host apt files; document how the user inspects it.
+  Then verify program runtime in local Ubuntu Docker emulation. [SPEC: docs/spec/tui.md, docs/spec/testing.md]
+- [ ] **D16 — BLOCKED by D15.** User visually inspects the laptop terminal UI; capture feedback and fix accepted
+  issues.
+  Do not claim visual acceptance until user confirms.
 - [ ] **D17 — BLOCKED by D16.** Oracle milestone audit; update SPEC and roadmap.
 
 ## Milestone 4 — TUI custom mirror operations
 
 **Status: PENDING** — blocked by D17 and completion of Milestone 3.
 
-- [ ] **D18 — BLOCKED by D17.** Add custom URL (`Insert`) validation and isolated probe flow. [SPEC: docs/spec/tui.md, docs/spec/apply.md]
-- [ ] **D19 — BLOCKED by D18.** Add current-run candidate removal (`Delete`) and confirmation. [SPEC: docs/spec/tui.md]
-- [x] **D20 — DONE; pulled forward from after D19 on 2026-11-14, because the page documents only what ships.** The human installed the `0.1.0` `.deb` and `man apt-scout` answered "No manual entry": `SPEC.md:193` requires a comprehensive Linux man page at `man/apt-scout.1` and the package carried none. — [evidence](docs/history/m4.md#d20)
+- [ ] **D18 — BLOCKED by D17.** Add custom URL (`Insert`) validation and isolated probe flow. [SPEC: docs/spec/tui.md,
+  docs/spec/apply.md]
+- [ ] **D19 — BLOCKED by D18.** Add current-run candidate removal (`Delete`) and confirmation. [SPEC:
+  docs/spec/tui.md]
+- [x] **D20 — DONE; pulled forward from after D19 on 2026-11-14, because the page documents only what ships.** The
+  human installed the `0.1.0` `.deb` and `man apt-scout` answered "No manual entry": `SPEC.md:193` requires a
+  comprehensive Linux man page at `man/apt-scout.1` and the package carried none. — [evidence](docs/history/m4.md#d20)
 - [x] **D58 — DONE (#68), the two-builder gap D48 recorded.** — [evidence](docs/history/m4.md#d58)
-- [x] **D45 — DONE (#68).** `SPEC.md:196` requires the page to be "include[d] in the release `.tar.gz` with installation instructions", and the archive now carries both halves without inventing a file: `release.yml` copies `man/apt-scout.1` beside the binary, and `README.md` — already in the archive — is the installation document, with the `.deb` path, the tarball path and the two packages a tarball install needs. The previous state is recorded in [the m4 history](docs/history/m4.md#d58): nothing copied the page at all until this PR.
-- [ ] **D46 — READY, coder; found while delivering D20.** docs/spec/testing.md requires the man-page check — the formatting check (`mandoc -Tlint` is its example) and a `man apt-scout` render in a disposable Ubuntu container — and no container case does either: `rg -n 'mandoc|man1' scripts/docker-test.sh` prints nothing, so the page's only verification today is the ad-hoc run D20 records. Acceptance: one case in `scripts/docker-test.sh` mounts `man/apt-scout.1` at `/usr/share/man/man1/apt-scout.1`, runs `man apt-scout`, and asserts exit 0 and that the rendered text carries the `NAME` and `SYNOPSIS` lines; the case says in the script which images are minimized and therefore need `man-db` installed first (`ubuntu:24.04` is, and its `/usr/bin/man` is a diversion that `unminimize` removes, so `unminimize` then `apt-get install man-db` is the order that works); and it compares the page's `OPTIONS` tags against the flags `--help` lists, so a flag added to the parser without the page fails the case, which is docs/spec/testing.md's "every example must match `--help`" made checkable. The `mandoc` half needs that binary in the image, which is a network install; if the case cannot have it, the script says so and the check stays D20's recorded manual run. D20 also records the one `missing date` warning that the `mandoc -Tlint` half would have to accept or fix. [SPEC: docs/spec/testing.md, docs/spec/non-functional.md]
-- [ ] **D21 — BLOCKED by D16, D33 and the last translation group D31j.** Re-run laptop visual inspection and Ubuntu Docker tests; Oracle final audit against original goal and all of `SPEC.md`, Localization and every shipped locale included.
+- [x] **D45 — DONE (#68).** `SPEC.md:196` requires the page to be "include[d] in the release `.tar.gz` with
+  installation instructions", and the archive now carries both halves without inventing a file: `release.yml` copies
+  `man/apt-scout.1` beside the binary, and `README.md` — already in the archive — is the installation document, with
+  the `.deb` path, the tarball path and the two packages a tarball install needs.
+  The previous state is recorded in [the m4 history](docs/history/m4.md#d58): nothing copied the page at all until
+  this PR.
+- [ ] **D46 — READY, coder; found while delivering D20.** the man-page check docs/spec/testing.md requires, and no
+  container case runs it — [brief](docs/tasks/D46.md)
+- [ ] **D21 — BLOCKED by D16, D33 and the last translation group D31j.** Re-run laptop visual inspection and Ubuntu
+  Docker tests; Oracle final audit against original goal and all of `SPEC.md`, Localization and every shipped locale
+  included.
 
 ## Milestone 5 — Localization and localized manuals
 
-**Status: PENDING** — no entry here waits for a milestone as a whole: D30a waited for the CLI write path, which merged as D11a in PR #43, and D33 waited for D20 until that page landed, so the catalog work can start before Milestones 3 and 4 close. The rules are docs/spec/localization.md and they bind every entry below. The mechanism is Fluent: one `locales/<tag>/main.ftl` per locale, compiled into the binary at build time by `fluent-templates`' `static_loader!` with English as the fallback language.
+**Status: PENDING** — no entry here waits for a milestone as a whole: D30a waited for the CLI write path, which
+  merged as D11a in PR #43, and D33 waited for D20 until that page landed, so the catalog work can start before
+  Milestones 3 and 4 close.
+  The rules are docs/spec/localization.md and they bind every entry below.
+  The mechanism is Fluent: one `locales/<tag>/main.ftl` per locale, compiled into the binary at build time by
+  `fluent-templates`' `static_loader!` with English as the fallback language.
 
-Shared acceptance, inherited by every entry here and not restated: docs/spec/localization.md read in full; `cargo fmt --all -- --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` and `cargo deny check` each exit 0 with `CARGO_TARGET_DIR=/tmp/apt-scout-target`; the catalog gates of docs/spec/localization.md extended to every catalog the entry adds; the entry's tag added to the shipped set the tests require in `src/l10n.rs`, so a translation PR changes a `.rs` file too — without that, a `locales/`-only diff matches no path in the `changes` job of `.github/workflows/ci.yml` and `check` is skipped, which would let an incomplete catalog merge green; a container run of the read-only CLI under `LANG=C` and under the entry's locale(s), with the same exit code and byte-identical container-local `/etc/apt`, and the printed text differing exactly as that entry's catalogs differ — an entry that ships a translated catalog prints that locale's text, while D30a, which ships none, prints English in all three of its cases; and one rendered sample of `--list` in each added locale, pasted in the PR inside a fenced block exactly as the program printed it. That sample is the only non-English text a PR carries, and it is evidence rather than prose: the PR's own sentences stay English (docs/spec/non-functional.md), and D34 records the same exception where the rule lives. No translated text in any `.rs`, `.md`, `.toml` or `.yml` file: `docs-and-conventions` fails a file in those globs that carries Lithuanian letters, so translated text lives only in `locales/*/main.ftl` and `man/<locale>/`; `.ftl` is outside that glob list, which is why a catalog-only diff does not turn the guard red. No dependency change after D30a.
+Shared acceptance, inherited by every entry here and not restated: docs/spec/localization.md read in full;
+  `cargo fmt --all -- --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` and
+  `cargo deny check` each exit 0 with `CARGO_TARGET_DIR=/tmp/apt-scout-target`; the catalog gates of
+  docs/spec/localization.md extended to every catalog the entry adds; the entry's tag added to the shipped set the
+  tests require in `src/l10n.rs`, so a translation PR changes a `.rs` file too — without that, a `locales/`-only diff
+  matches no path in the `changes` job of `.github/workflows/ci.yml` and `check` is skipped, which would let an
+  incomplete catalog merge green; a container run of the read-only CLI under `LANG=C` and under the entry's locale(s),
+  with the same exit code and byte-identical container-local `/etc/apt`, and the printed text differing exactly as
+  that entry's catalogs differ — an entry that ships a translated catalog prints that locale's text, while D30a, which
+  ships none, prints English in all three of its cases; and one rendered sample of `--list` in each added locale,
+  pasted in the PR inside a fenced block exactly as the program printed it.
+  That sample is the only non-English text a PR carries, and it is evidence rather than prose: the PR's own sentences
+  stay English (docs/spec/non-functional.md), and D34 records the same exception where the rule lives.
+  No translated text in any `.rs`, `.md`, `.toml` or `.yml` file: `docs-and-conventions` fails a file in those globs
+  that carries Lithuanian letters, so translated text lives only in `locales/*/main.ftl` and `man/<locale>/`; `.ftl`
+  is outside that glob list, which is why a catalog-only diff does not turn the guard red.
+  No dependency change after D30a.
 
-- [ ] **D30a — READY.** The Fluent mechanism, the dependency, and the English catalog for the CLI surface. — [evidence](docs/history/m5.md#d30a)
+- [ ] **D30a — READY.** The Fluent mechanism, the dependency, and the English catalog for the CLI surface. —
+  [evidence](docs/history/m5.md#d30a)
 
-- [ ] **D30b — BLOCKED by D30a.** The read-only path's messages. Every message a run can print from `src/distro.rs`, `src/mirrors.rs`, `src/sources.rs`, `src/probe.rs`, `src/fresh.rs`, `src/verify.rs`, `src/geo.rs`, `src/http.rs` and `src/cymru.rs` becomes a message id whose values — path, URL, field name, OS error — become placeholders, so each module keeps the context it already passes. The split accounts for the whole tree: thirteen modules carry text, and they are these nine plus `src/main.rs` in D30a and `src/plan.rs`, `src/manifest.rs`, `src/apply.rs` in D30c; `src/digest.rs` carries no text at all, and `src/countries.rs` carries the Launchpad country names and no sentence: those names stay English because they are lookup keys against the Launchpad page and reach output only as a placeholder value inside a catalog message (`src/main.rs:744`), so translating one would break the lookup and is a defect rather than a missing translation. `src/harness.rs` is accounted for in D30c. No behavior change: the English message is byte-identical to the text printed today, except where a value became a placeholder. Acceptance: the id-completeness, comment and placeholder-parity gates walk the new ids; the existing Docker cases that assert message content pass unchanged, which is the no-behavior-change proof; the `src/main.rs` literal gate from D30a is extended to these nine modules, so a printed sentence outside `src/l10n.rs` fails `cargo test`; and `rg -n 'l10n::t\(' src/` shows every call site in a printing position and none in a comparison, a path, a sort key or an exit code. [SPEC: docs/spec/localization.md, docs/spec/errors.md]
+- [ ] **D30b — BLOCKED by D30a.** the read-only path's messages — [brief](docs/tasks/D30b.md)
 
-- [ ] **D30c — BLOCKED by D30b.** The write path's messages, the harness, the closing whole-tree gate, and the write path's locale evidence. `src/plan.rs`, `src/manifest.rs` and `src/apply.rs` move their text behind the catalog with the same byte-identical-English rule; the record's control sentences are unaffected because no control reads message text. `src/harness.rs` is named here rather than left out: its own ten print sites are the container matrix's protocol (`OK`, `ERR <token>`, `STRICT refused`, `TOLERANT`) and stay English on an allowlist entry that names `scripts/docker-test.sh` as the parser and the `#[cfg(apt_scout_write_harness)]` gate that keeps the module out of every release binary, while every error it prints is one of this entry's catalog messages, so a translated text can only follow a stable ASCII token. The locale-invariance evidence reaches the write path here: one root write case runs twice against the same fixture image, once under `LANG=C` and once under `LANG=lt_LT.UTF-8`, compared on exactly four things — the exit code, the bytes of the container-local `/etc/apt` tree, the backup manifest's bytes, and the harness tokens. **This pair is a determinism check, not a leak proof, and says so:** English is the only shipped catalog in this entry, so both runs print the same text and the pair would pass whatever the write path read — it cannot tell a locale-reading writer from one that never reads it. Its discriminating power starts at D31a, which carries the same four comparisons plus the requirement that the Lithuanian run print Lithuanian text; a pair whose two runs are identical is two copies of one run and is not evidence. `docs/threat-model.md` takes the delta this entry creates: §0 fact 5 and §2 row A2 gain the locale read as the environment's second consumer — display only, resolved before any apt file is opened — and Appendix A gains the item with the `SPEC.md` section that carries it; no ruling and no S-acceptance test changes, so `docs/AGENTS.md` lets the architect write that delta. Acceptance: the literal gate covers the whole `src/` tree — `src/l10n.rs` excepted, and every remaining literal an allowlist entry with a reason — so every printed sentence comes from the catalog; `rg -n 'l10n::t\(' src/` shows every call site in a printing or error-construction position and none in a comparison, a path, a sort key or an exit code; the container write matrix W1–W22 passes unchanged plus the two-locale pair; and a security verdict on the exact diff states that no control reads a message, that the English catalog is the review artifact every translated entry is checked against by placeholder parity, and that a translated entry can change no decision. The translated catalogs are the only text a reviewer cannot read, which is why the English entry and the call-site rule are what the review signs. [SPEC: docs/spec/localization.md, SPEC.md privilege boundary, docs/spec/testing.md]
+- [ ] **D30c — BLOCKED by D30b.** the write path's messages, the harness, the closing whole-tree gate, and the write
+  path's locale evidence — [brief](docs/tasks/D30c.md)
 
 - [ ] **D31 — the translations, in ordered groups.** One group is one PR. — [evidence](docs/history/m5.md#d31)
 
-- [ ] **D31a — BLOCKED by D30c.** Lithuanian, the first translated catalog, as group 1 of D31; no group starts before D30c. Closes: the first non-English catalog and the first plural rule with three categories. Acceptance: the shared criteria of this milestone with `LANG=lt_LT.UTF-8`, both catalog gates passing for `locales/lt/main.ftl` with `lt` added to the shipped set the tests require, a `--list` sample in Lithuanian pasted in the PR, the container pair compared on exit code, container-local `/etc/apt` bytes, backup manifest bytes and harness tokens, with the printed text the only thing allowed to differ and the Lithuanian run required to print Lithuanian text — the first entry whose pair can discriminate; and the rename proof: renaming one English id makes `cargo test` fail naming that id as missing from `locales/lt/main.ftl`, then reverted, which is what makes `never derived from English text` falsifiable. [SPEC: docs/spec/localization.md]
-- [ ] **D31b — BLOCKED by D30c.** Latvian and Estonian, group 2 of D31; taken after D31a. [SPEC: docs/spec/localization.md]
-- [ ] **D31c — BLOCKED by D30c.** Swedish, Danish and Finnish, group 3 of D31; the EU official Nordic languages. [SPEC: docs/spec/localization.md]
-- [ ] **D31d — BLOCKED by D30c.** Norwegian Bokmål and Icelandic, group 4 of D31; Nordic, not EU official languages. [SPEC: docs/spec/localization.md]
+- [ ] **D31a — BLOCKED by D30c.** Lithuanian, the first translated catalog, as group 1 of D31; no group starts before
+  D30c.
+  Closes: the first non-English catalog and the first plural rule with three categories.
+  Acceptance: the shared criteria of this milestone with `LANG=lt_LT.UTF-8`, both catalog gates passing for
+  `locales/lt/main.ftl` with `lt` added to the shipped set the tests require, a `--list` sample in Lithuanian pasted
+  in the PR, the container pair compared on exit code, container-local `/etc/apt` bytes, backup manifest bytes and
+  harness tokens, with the printed text the only thing allowed to differ and the Lithuanian run required to print
+  Lithuanian text — the first entry whose pair can discriminate; and the rename proof: renaming one English id makes
+  `cargo test` fail naming that id as missing from `locales/lt/main.ftl`, then reverted, which is what makes
+  `never derived from English text` falsifiable. [SPEC: docs/spec/localization.md]
+- [ ] **D31b — BLOCKED by D30c.** Latvian and Estonian, group 2 of D31; taken after D31a. [SPEC:
+  docs/spec/localization.md]
+- [ ] **D31c — BLOCKED by D30c.** Swedish, Danish and Finnish, group 3 of D31; the EU official Nordic languages.
+  [SPEC: docs/spec/localization.md]
+- [ ] **D31d — BLOCKED by D30c.** Norwegian Bokmål and Icelandic, group 4 of D31; Nordic, not EU official languages.
+  [SPEC: docs/spec/localization.md]
 - [ ] **D31e — BLOCKED by D30c.** German, French and Dutch, group 5 of D31. [SPEC: docs/spec/localization.md]
 - [ ] **D31f — BLOCKED by D30c.** Italian, Spanish and Portuguese, group 6 of D31. [SPEC: docs/spec/localization.md]
-- [ ] **D31g — BLOCKED by D30c.** Greek and Bulgarian, group 7 of D31; the first non-Latin scripts shipped. [SPEC: docs/spec/localization.md]
+- [ ] **D31g — BLOCKED by D30c.** Greek and Bulgarian, group 7 of D31; the first non-Latin scripts shipped. [SPEC:
+  docs/spec/localization.md]
 - [ ] **D31h — BLOCKED by D30c.** Polish, Czech and Slovak, group 8 of D31. [SPEC: docs/spec/localization.md]
 - [ ] **D31i — BLOCKED by D30c.** Hungarian, Romanian and Croatian, group 9 of D31. [SPEC: docs/spec/localization.md]
 - [ ] **D31j — BLOCKED by D30c.** Slovenian and the closure check, group 10 of D31. [SPEC: docs/spec/localization.md]
 
-- [ ] **D32 — BLOCKED by D30c; taken after D31j.** Simplified Chinese (`zh-Hans`), the one catalog in a double-width script, and the script rule from docs/spec/localization.md. It edits the shipped set in `src/l10n.rs` tests and the ranked table's padding in `src/main.rs`, so it cannot share a branch with a D31 group. The padding change is the substance: the table pads with `{:<48}` and `{:>9}`, which count characters, so a header or a rejection reason in Chinese would misalign every row below it; padding now counts display columns through `l10n::display_width`, with no new dependency. Not translated, per `SPEC.md`: mirror hostnames, URIs, package names, paths, option names, country codes, AS numbers, the program name and the `sudo apt-scout ...` line. Traditional Chinese (`zh-Hant`) is deferred and never substituted: `zh_TW`, `zh_HK` and `zh_MO` print English. Acceptance: the shared criteria with `LANG=zh_CN.UTF-8` and `LANG=zh_SG.UTF-8` selecting Simplified while `zh_TW.UTF-8` and `zh_HK.UTF-8` print English; `l10n::display_width` matching a fixture table of code points with a known East Asian Width, including an ASCII header, a CJK ideograph, a fullwidth punctuation mark and a combining mark; the formatter asserted directly — fed a header and a row taken from that fixture, the two assembled lines have equal display width, in a unit test over the real formatting function rather than over a rendered table; and a `--list` sample whose header and rows line up in a monospace terminal, pasted in the PR as visual evidence. **Not claimed:** that a real translated table's rendered width is asserted, that emoji or zero-width-joiner sequences align, that the width table is complete Unicode East Asian Width, or that right-to-left text is handled — the function covers the ranges it lists and the tests cover those ranges only. [SPEC: docs/spec/localization.md, docs/spec/testing.md]
+- [ ] **D32 — BLOCKED by D30c; taken after D31j.** Simplified Chinese, the one catalog in a double-width script, and
+  the script rule from docs/spec/localization.md — [brief](docs/tasks/D32.md)
 
-- [ ] **D33 — BLOCKED by D31a and D32.** The localized manuals, and the answer to who owns `--help`. D20 has written `man/apt-scout.1` and every example in it; D30a owns the text of `--help`, which is a catalog message id; each translation entry owns that id's value in its catalog; D33 owns the pages and the check, never a second copy of the help text. Ships `man/lt/man1/apt-scout.1` and `man/zh_CN/man1/apt-scout.1` — `zh_CN` and not `zh-Hans` because man-db looks up a system locale name — as complete pages for the behavior that locale's `--help` describes, installed by the `.deb` at `/usr/share/man/<locale>/man1/apt-scout.1` through `[package.metadata.deb]` assets, and included in the release `.tar.gz` with the installation instructions the English page already gets. Further locales add their own page later as their own PR under the same check; no release requires more than English. Acceptance: `mandoc -Tlint` exits 0 on both pages; `man -L lt apt-scout` and `man -L zh_CN apt-scout` render both pages in a disposable Ubuntu container, and the `.deb` built there installs them under the two directories; every command example in a localized page appears in that locale's `--help` output and every implemented option is documented once; and the English page and `--help` are unchanged by this task. [SPEC: docs/spec/localization.md, docs/spec/non-functional.md, docs/spec/testing.md]
+- [ ] **D33 — BLOCKED by D31a and D32.** the localized manuals, and the answer to who owns `--help` —
+  [brief](docs/tasks/D33.md)
 
-- [ ] **D34 — READY, human `chore:` PR; no delivery agent may make it.** Three contracts contradict docs/spec/localization.md once D30a lands, and all of them are closed to every delivery agent. First, the root `AGENTS.md` language rule says project artifacts are English only and names "CLI output, error messages", which a shipped catalog falsifies; the same bullet is where the PR evidence exception belongs, so it names a pasted run of the program in the entry's locale as evidence and keeps PR prose English. Second, the `docs-and-conventions` job is an English-only guard over `*.{md,rs,toml,yml}` that passes today only because the catalogs are `.ftl`; its comment and failure message say nothing about the exception, so the next reader who widens its globs to `locales/` turns every translation PR red. Third, `AGENTS.md` states the crate has one dependency, `ureq`; D30a adds a second family, so that sentence and the Project list must carry `fluent-templates`, `src/l10n.rs` and `locales/`. Acceptance: the `AGENTS.md` language rule keeps source, comments, specs, docs, commit messages and PR text English, names the shipped catalogs, the localized man pages and a pasted locale sample as the exceptions, and its Project list gains `fluent-templates`, a `src/l10n.rs` bullet and a `locales/` bullet; and either the guard's comment and failure message name the exception, or `AGENTS.md` records that the guard checks source and docs only and that `locales/*/main.ftl` and `man/<locale>/` are deliberately outside it — the human picks one and says why in the PR. `rg -n 'CLI output' AGENTS.md` shows the narrowed wording, `rg -n 'one dependency' AGENTS.md` shows the corrected sentence, and `git diff --stat` touches `AGENTS.md` and, in the first option only, `.github/workflows/ci.yml`. [SPEC: docs/spec/localization.md, docs/spec/non-functional.md]
+- [ ] **D34 — READY, human `chore:` PR; no delivery agent may make it.** three contracts contradict
+  docs/spec/localization.md once D30a lands, and every delivery agent is closed to them — [brief](docs/tasks/D34.md)
 
 ## Backlog — opened by the SPEC restructure
 
-**Status: OPEN** — none of these blocks the next milestone; each is a decision or a cleanup the restructure deliberately left in place.
+**Status: OPEN** — none of these blocks the next milestone; each is a decision or a cleanup the restructure
+  deliberately left in place.
 
-- [x] D76a. Give every requirement a stable id, a `(planned)` marker where the code does not implement it, and one row per id in the `SPEC.md` index. Done in this branch: 117 ids across ten chapters, 32 marked planned and 6 marked partial. [SPEC: docs/spec/AGENTS.md]
-- [x] **D76b — DONE.** The requirements speak normatively: `MUST`/`SHOULD`/`MAY` judged per id across all 117, with the index regenerated from those sentences. — [evidence](docs/history/backlog.md#d76b)
+- [x] D76a.
+  Give every requirement a stable id, a `(planned)` marker where the code does not implement it, and one row per id in
+  the `SPEC.md` index.
+  Done in this branch: 117 ids across ten chapters, 32 marked planned and 6 marked partial. [SPEC:
+  docs/spec/AGENTS.md]
+- [x] **D76b — DONE.** The requirements speak normatively: `MUST`/`SHOULD`/`MAY` judged per id across all 117, with
+  the index regenerated from those sentences. — [evidence](docs/history/backlog.md#d76b)
 - [x] D77. Slim this file: it was 321 KB in 469 lines, 102 of them over 1000 characters. The evidence behind
   the 34 tasks that carried it moved to `docs/history/`, one file per milestone, and the change log to
-  `docs/history/change-log.md`; the ledger keeps each such task's claim and a link. The rest carried no evidence block, and the nine longest of their claims were D84's work.
+`docs/history/change-log.md`; the ledger keeps each such task's claim and a link.
+  The rest carried no evidence block, and the nine longest of their claims were D84's work.
 - [x] D84. Trim the task claims that are still over 1000 characters in `ROADMAP.md`: the rationale of the nine
   finished tasks that carried one — D6e, D9a, D27, D40, D60–D63 and D76b — moved to `docs/history/` and their
   ledger lines keep the claim and a link, which took the file from 19 lines over 1000 characters to 10.
-- [ ] D85. Rule where an unstarted task's brief lives: seven entries (D53, D46, D30b, D30c, D32, D33, D34) are 1.4–3.0 KB
-  of what has to be built and hold no evidence, so moving them to `docs/history/` would hide the brief and trimming them
-  decides what to build. The same pass rewraps the three long prose lines (28, 47, and 122, which is the shared
-  acceptance block), 1.2–2.5 KB each on one line. Location is a human call; the rewrap follows it.
+- [x] D85. Rule where an unstarted task's brief lives: seven entries (D53, D46, D30b, D30c, D32, D33, D34)
+  were 1.4–3.0 KB inside `ROADMAP.md` and held no evidence, so they were neither archives nor claims.
+  Each now has `docs/tasks/<id>.md`, kept verbatim with its status, and the ledger keeps one line: the claim, the
+  state and a link. `docs/AGENTS.md` states the rule — forward-looking, deleted when the task lands, because
+  `history/` holds what was done. The same pass reflowed the ledger to the style contract: it was 56 126 bytes in
+  238 lines, three of them prose paragraphs over 1000 characters; it is 551 lines now, with no line over 120
+  characters or over 120 bytes, and the text is word for word unchanged, checked the way D78 checked the record. The
+  byte half is not pedantry: an em dash is three bytes, so two lines sat at 116 characters and 122 bytes, which a
+  character measure calls short and a byte measure calls long. No byte total is stated, because this sentence sits
+  inside the file it would describe.
+  [docs/AGENTS.md]
 - [x] D78. Apply the style contract in `docs/AGENTS.md` to `docs/threat-model.md`: one sentence per line and every
   prose line under 120 characters, with the rulings and the content untouched. It had 21 lines over 1000
   characters and now has none; 168 lines were rewrapped and the text is word for word the same, checked by
@@ -170,18 +463,25 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   whose content is a single `rg` command in a code span, which breaking would corrupt.
   Two references into the file moved with the reflow and were re-pointed: B7 is `:366`, and the
   `sources.list.d` sentence D86 quotes is `:231`, and the record also had one reference to itself:
-  the terminal row said escaping is D13 (`:152`), which is `:366` now. The quotation in D86 was a quotation of the code,
+the terminal row said escaping is D13 (`:152`), which is `:366` now.
+  The quotation in D86 was a quotation of the code,
   never of the record, and it now says so.
   [docs/AGENTS.md]
-- [ ] D79. Rule the localization question: `docs/spec/localization.md` requires `fluent-templates` 0.15.1 and a `locales/` tree that do not exist, while `AGENTS.md` states a one-dependency rule. Say whether localization is v1 and fix whichever document is wrong. [SPEC: docs/spec/localization.md]
+- [ ] D79.
+  Rule the localization question: `docs/spec/localization.md` requires `fluent-templates` 0.15.1 and a `locales/` tree
+  that do not exist, while `AGENTS.md` states a one-dependency rule.
+  Say whether localization is v1 and fix whichever document is wrong. [SPEC: docs/spec/localization.md]
 - [ ] D80. Rule the TUI and `--refresh` scope: both are specified and neither is implemented, and `--refresh` is an
   unknown option today. The ruling reaches further than the flag: B7 defers terminal escaping to D13, which is the TUI
   implementation, so a no-TUI ruling leaves the exposure named at `docs/threat-model.md:366` without an owner — a
   root run printing a mirror URL or a rejected entry verbatim is `today`'s behaviour, not the TUI's.
   [SPEC: docs/spec/tui.md, docs/spec/cli.md]
-- [ ] D81. Rule the mirror-list cache (D28): specified with a 24 h validity and never implemented. [SPEC: docs/spec/pipeline.md]
+- [ ] D81.
+  Rule the mirror-list cache (D28): specified with a 24 h validity and never implemented. [SPEC:
+  docs/spec/pipeline.md]
 - [x] D82. Re-point the stale `path:line` citations in `docs/threat-model.md` that predated the restructure:
-  16 distinct stale citations, 22 occurrences at 13 places in the record, re-pointed and each verified by the symbol on the cited
+16 distinct stale citations, 22 occurrences at 13 places in the record, re-pointed and each verified by the symbol
+  on the cited
   line (`main.rs:861–862` is the `NO_COLOR` read, `:2510–2515` the non-root exit 3, `:3446–3448` the harness
   dispatch). Two sentences moved with their citations: the terminal row now names the newline-free `print!`
   prompt path (`main.rs:553`) beside `println!`, and the S16 bullet says that W10 and W11 add
@@ -209,16 +509,21 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   the first citation. A check whose flags are mostly wrong teaches the reader to ignore it, so it was deleted rather
   than tuned.
   [docs/AGENTS.md]
-- [ ] D88. Decide whether `scripts/citation-triage.py` runs in CI, and where: as a weekly advisory beside
-  `scripts/check-sources.sh`, or as a required step that would fail a PR whose code moved a cited line. Required
-  is what would have caught two of the three places D87 moved, but the flag set is mostly correct citations, so a
-  required step fails today on a list that is mostly correct, and the entry states no count of it. 
+- [x] D88. Decide whether `scripts/citation-triage.py` runs in CI, and where. It runs in the weekly
+  `source-contract.yml` advisory, beside `check-sources.sh`: the same workflow and the same contract of
+  advisory-never-required, with its output in the step summary rather than a second kind of issue.
+  It is not a required check because the flag set is a triage: a required step would fail today on a list that is
+  mostly correct citations, and a check that fails for the wrong reason gets switched off. What it buys is a weekly
+  list written down, so drift is seen before an audit finds it. It catches two of the three places D87 moved and not
+  the third, so a reader stays the instrument; D86 records that measurement.
   [.github/workflows/source-contract.yml]
-- [x] D87. Audit the one process a root run spawns for its environment: `src/main.rs` ran `/usr/bin/dpkg --print-architecture`
+- [x] D87.
+  Audit the one process a root run spawns for its environment: `src/main.rs` ran `/usr/bin/dpkg --print-architecture`
   with the inherited environment, so a variable a user could set before `sudo` reached a process running as root,
   and the vector was the dynamic loader (`LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`): code execution in the root
   process. It was a compliance defect rather than a new rule, because the record already required the run to pass a
-  constructed environment to any child. The child is now built by `cleared_command` (`src/main.rs:2738`), which clears the
+constructed environment to any child.
+  The child is now built by `cleared_command` (`src/main.rs:2738`), which clears the
   environment and closes stdin the way the verifier does, and `a_cleared_command_starts_with_no_environment` runs
   `/usr/bin/env` through the same builder, asserting the output is exactly the one variable it sets: it fails when
   `.env_clear()` is removed, which was checked by removing it. A failing child, and a child that prints
@@ -231,7 +536,15 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   review rather than by a gate, and the stdin half of the requirement is untested for the same reason: a builder that
   cleared the environment and inherited stdin would pass.
   [docs/spec/platform.md, docs/threat-model.md]
-- [ ] D83. Move the rationale and the measurement evidence out of the requirement bodies in `docs/spec/`: `docs/AGENTS.md` sends `why` to an ADR and evidence to `ROADMAP.md`, and D76b deliberately left both in place because deleting a measured claim (the Launchpad page structure in `pipeline.md` step 3, the 2026-11-11 freshness measurement in step 8, the `pop-default-settings` verification in `platform.md`) would drop input the parsers are tested against. Acceptance: every `because`, `so that`, `Verified from`, `Measured` and dated observation inside a requirement is either cited as `ADR-####` or moved to a ledger entry, and no requirement is left without the fact it needs to be testable. No behavior change. [docs/AGENTS.md, SPEC: docs/spec/AGENTS.md]
+- [ ] D83.
+  Move the rationale and the measurement evidence out of the requirement bodies in `docs/spec/`: `docs/AGENTS.md`
+  sends `why` to an ADR and evidence to `ROADMAP.md`, and D76b deliberately left both in place because deleting a
+  measured claim (the Launchpad page structure in `pipeline.md` step 3, the 2026-11-11 freshness measurement in step
+  8, the `pop-default-settings` verification in `platform.md`) would drop input the parsers are tested against.
+  Acceptance: every `because`, `so that`, `Verified from`, `Measured` and dated observation inside a requirement is
+  either cited as `ADR-####` or moved to a ledger entry, and no requirement is left without the fact it needs to be
+  testable.
+  No behavior change. [docs/AGENTS.md, SPEC: docs/spec/AGENTS.md]
 
 ## Change log
 

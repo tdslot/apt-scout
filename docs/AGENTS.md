@@ -52,4 +52,10 @@ Task order, task states, merged PRs, and verification evidence live in `ROADMAP.
   with a `MUST`/`SHOULD`/`MAY` obligation in the sentence that opens each one, `(planned)`, no history
   or rationale, and the layout rule this folder also applies.
 - `decisions/` holds one file per decision and an index of the ids recorded elsewhere; it has no `AGENTS.md` of its own and is covered by this file.
+- `tasks/` holds the brief of an unstarted task, one file per task id, moved out of `ROADMAP.md` by D85.
+  It is forward-looking: what has to be built, with its acceptance, and no evidence. The ledger keeps the claim and
+  the state. An agent that starts a task reads its brief first: the brief is the acceptance, and the ledger line is
+  the index. When a task lands, its brief is deleted rather than archived, but any sentence that limits what the
+  work proves — a caveat, a not-claimed clause, a bound on the evidence — moves into the `history/` entry or the record
+  before the file goes, because `history/` holds what was done and what it did not show.
 - `history/` is the evidence archive: one file per `ROADMAP.md` section plus the change log — `m1` to `m5`, `backlog.md` for the Backlog section — moved out of the ledger by D77 and D84. It is read-only history — a correction goes in a new entry, never into a past one — and it states no rules.
