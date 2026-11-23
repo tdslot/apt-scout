@@ -37,6 +37,9 @@ Never chain with `&&`. If a check cannot run (no network, missing toolchain), sa
 3. Weakened proof: deleted or loosened assertions, `#[ignore]`, expectations changed to match new output, a test that now passes for the wrong reason.
 4. Error paths: the exit code, the message, and whether the failure is fail-closed or fail-open.
 5. Tests that cannot fail: assertions on values the code computes both sides of, mocks that assert the mock.
+   A test that was written or changed also arrives with its mutation: the code the author broke by hand, the failure
+   it printed, and that they restored it — or why no such mutation can exist. If the PR cannot name the code it
+   broke, the test is unproven: raise it as a P1, because a test nobody watched fail is a claim, not a gate.
 6. Scope creep: files touched outside the plan, refactors bundled with behavior changes, dead code left behind.
 7. DOX: if behavior or contracts changed, were `SPEC.md` / `AGENTS.md` / `ROADMAP.md` / `CHANGELOG.md` updated to match, and does the nearest `AGENTS.md` still describe the tree truthfully?
 8. Rust quality: ownership and allocation choices, needless clones, `unwrap`/`expect` on fallible input, integer overflow in size and duration arithmetic, blocking calls in a thread budget.
