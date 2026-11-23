@@ -32,7 +32,8 @@ For each task, in order:
    Oracle may propose missing requirements; add accepted requirements to `SPEC.md`, then update this roadmap before
    implementation resumes.
 
-Use task states `DONE`, `READY`, `BLOCKED`, and `PENDING`.
+Use task states `DONE`, `READY`, `BLOCKED`, `PENDING`, and two the scope rulings
+  added: `DEFERRED by Dn` when a ruling moves a task out of v1, and `CLOSED by Dn, not planned` when it is dropped.
   `DONE` requires merged PR and passing verification.
   Keep task records concise and link them to `SPEC.md` sections.
   A task discovered during implementation becomes a new roadmap entry before it is forgotten.
@@ -326,9 +327,10 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
 - [ ] **D13 — BLOCKED by D12.** Implement the `--tui` core with ranked mirror table, details, selection, confirmation,
   cancellation, write result, and terminal restoration.
   As root, confirm validates and writes; as non-root, confirm prints `sudo apt-scout --tui`.
-  Every user-facing string the TUI adds goes through the message catalog of D30a, not a literal at the call site:
-  D30c's whole-tree literal test is what makes that mandatory, so a TUI string left in English is a failing test
-  rather than a follow-up. [SPEC: docs/spec/cli.md, docs/spec/tui.md, docs/spec/localization.md]
+  Every user-facing string the TUI adds goes through the message catalog of D30a **once localization returns**; with D79
+  ruling v1 English only, D13 writes English strings at the call site and D30c's whole-tree literal test moves with the
+  catalog work. A TUI that ships before the catalog is not a localization defect, it is the v1 scope D79 ruled.
+  [SPEC: docs/spec/cli.md, docs/spec/tui.md, docs/spec/localization.md]
 - [ ] **D14 — BLOCKED by D13.** Add `ratatui::TestBackend` snapshots and coverage of `--tui` as an opt-in mode: no TUI
   without the flag, non-TTY behavior, `--list` and the non-root `sudo` line. [SPEC: docs/spec/cli.md,
   docs/spec/tui.md, docs/spec/testing.md]
@@ -391,8 +393,7 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   No dependency change after D30a.
 
 - [ ] **D30a — DEFERRED by D79, not v1.** The Fluent mechanism, the dependency, and the English catalog
-  for the CLI surface. — [brief](docs/tasks/D30a.md)
-  [evidence](docs/history/m5.md#d30a)
+  for the CLI surface. — [evidence](docs/history/m5.md#d30a)
 
 - [ ] **D30b — BLOCKED by D30a.** the read-only path's messages — [brief](docs/tasks/D30b.md)
 
