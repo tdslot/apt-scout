@@ -40,7 +40,8 @@ Use task states `DONE`, `READY`, `BLOCKED`, and `PENDING`.
 ## Goal
 
 Deliver a safe Ubuntu-family CLI that discovers and ranks mirrors, lets the user inspect the result in a TUI, and
-  safely applies/restores apt source changes.
+  safely applies/restores apt source changes. v1 prints **English only** (D79); the localization chapters
+  stay the post-v1 design.
   The TUI must be runnable on the user's laptop for visual inspection; Ubuntu runtime behavior must be exercised
   locally in Docker emulation.
 
@@ -195,7 +196,7 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
 - [x] **D25 — DONE.** The write proof was forgeable from inside the process, so `docs/threat-model.md` 3.10 and
   Appendix A item 4 did not hold and S15's claim that the value cannot be constructed without the verification pass
   was false. — [evidence](docs/history/m2.md#d25)
-- [ ] **D28 — PENDING, not on the critical path; found while splitting D11.** `--refresh` is in the docs/spec/cli.md
+- [x] **D28 — CLOSED by D81, not planned.** `--refresh` is in the `docs/spec/cli.md`
   flag table and there is no cache behind it, so the flag has nothing to refresh and is not parsed: a run given it
   fails as an unknown option with exit 2 (`rg -n -- '"--refresh"' src/` prints nothing), while docs/spec/pipeline.md
   step 2.3 describes a `~/.cache/apt-scout/mirrors.json` disk cache valid for 24 h, `Errors and self-healing` names
@@ -304,6 +305,13 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
 - [x] **D53 — DONE.** The rule is `TEST-1`: an assertion compares a value with an expectation that does not
   derive from the same expression, and a changed test is shown to fail. What was missing was enforcement, and
   the reviewer now demands the mutation named — [evidence](docs/history/m2.md#d53)
+- [ ] **D89 — READY; v1 security work, independent of the TUI.** Escape what a root run prints: replace control
+  characters in every mirror-derived string on the four paths B7 names (`docs/threat-model.md:371`), so a mirror
+  cannot write an escape sequence into a terminal root prints to. Acceptance: a unit test per path feeds a string
+  containing `ESC` and asserts the printed line carries no control character; the container matrix gains one case
+  that prints a rejected entry built from a URL with an escape in it and greps the output for the raw byte; the PR
+  states the mutation each test survives (TEST-1). No new dependency is expected: the escape table is a small map.
+  [SPEC: docs/spec/output.md, docs/threat-model.md] — [brief](docs/tasks/D89.md)
 - [x] **D12 — DONE.** — [evidence](docs/history/m2.md#d12)
 
 - [x] **D57 — DONE.** — [evidence](docs/history/m2.md#d57)
@@ -358,9 +366,8 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
 
 ## Milestone 5 — Localization and localized manuals
 
-**Status: PENDING** — no entry here waits for a milestone as a whole: D30a waited for the CLI write path, which
-  merged as D11a in PR #43, and D33 waited for D20 until that page landed, so the catalog work can start before
-  Milestones 3 and 4 close.
+**Status: DEFERRED** — D79 ruled v1 English only, so every entry in this section is post-v1 and none of them
+  blocks a release. Their dependencies are unchanged and they stay ordered as written, when the question comes back.
   The rules are docs/spec/localization.md and they bind every entry below.
   The mechanism is Fluent: one `locales/<tag>/main.ftl` per locale, compiled into the binary at build time by
   `fluent-templates`' `static_loader!` with English as the fallback language.
@@ -383,7 +390,8 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   is outside that glob list, which is why a catalog-only diff does not turn the guard red.
   No dependency change after D30a.
 
-- [ ] **D30a — READY.** The Fluent mechanism, the dependency, and the English catalog for the CLI surface. —
+- [ ] **D30a — DEFERRED by D79, not v1.** The Fluent mechanism, the dependency, and the English catalog
+  for the CLI surface. — [brief](docs/tasks/D30a.md)
   [evidence](docs/history/m5.md#d30a)
 
 - [ ] **D30b — BLOCKED by D30a.** the read-only path's messages — [brief](docs/tasks/D30b.md)
@@ -423,7 +431,7 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
 - [ ] **D33 — BLOCKED by D31a and D32.** the localized manuals, and the answer to who owns `--help` —
   [brief](docs/tasks/D33.md)
 
-- [ ] **D34 — READY, human `chore:` PR; no delivery agent may make it.** three contracts contradict
+- [ ] **D34 — DEFERRED by D79; human `chore:` PR; no delivery agent may make it.** three contracts contradict
   docs/spec/localization.md once D30a lands, and every delivery agent is closed to them — [brief](docs/tasks/D34.md)
 
 ## Backlog — opened by the SPEC restructure
@@ -468,18 +476,29 @@ the terminal row said escaping is D13 (`:152`), which is `:366` now.
   The quotation in D86 was a quotation of the code,
   never of the record, and it now says so.
   [docs/AGENTS.md]
-- [ ] D79.
-  Rule the localization question: `docs/spec/localization.md` requires `fluent-templates` 0.15.1 and a `locales/` tree
-  that do not exist, while `AGENTS.md` states a one-dependency rule.
-  Say whether localization is v1 and fix whichever document is wrong. [SPEC: docs/spec/localization.md]
-- [ ] D80. Rule the TUI and `--refresh` scope: both are specified and neither is implemented, and `--refresh` is an
-  unknown option today. The ruling reaches further than the flag: B7 defers terminal escaping to D13, which is the TUI
-  implementation, so a no-TUI ruling leaves the exposure named at `docs/threat-model.md:366` without an owner — a
-  root run printing a mirror URL or a rejected entry verbatim is `today`'s behaviour, not the TUI's.
+- [x] D79. Rule the localization question: **v1 prints English only**. `docs/spec/localization.md` stays the
+  post-v1 design and its 13 `(planned)` rows stay as they are: the index already counts them, so a reader who
+  wants to know what ships reads the state column. D30a–D34, D31a–D31j, D32, D33 and D21 are deferred with it and
+  keep their state; none is v1. Evidence: every `LOC-*` row is `(planned)` except the English half of `LOC-14`
+  (the manual page, which ships), `src/` has no `l10n` symbol, and `Cargo.toml` has one dependency. The Goal now
+  says so, which is what turns an omission into a decision.
+  [SPEC: docs/spec/localization.md]
+- [x] D80. Rule the TUI and `--refresh` scope: **the TUI stays in v1**, which the Goal already says, so D13 keeps
+  it and D14–D19 stay queued behind it; D21 is deferred with the
+  translations (D79). `--refresh` is not in v1 (D81), and `CLI-3` and `CLI-7` keep it
+  failing as an unknown option, which is the normative state today and not a gap.
+  The part that could not wait is what this entry came with: B7 deferred terminal escaping to D13, and the
+  exposure it names is a plain root CLI run printing a mirror URL or a rejected entry verbatim — today, with no
+  TUI involved. It becomes **D89**, unblocked and independent: the four live paths are in `docs/threat-model.md`
+  and the record now points the mitigation at D89 rather than at the TUI.
   [SPEC: docs/spec/tui.md, docs/spec/cli.md]
-- [ ] D81.
-  Rule the mirror-list cache (D28): specified with a 24 h validity and never implemented. [SPEC:
-  docs/spec/pipeline.md]
+- [x] D81. Rule the mirror-list cache (D28): **out of v1**. D28 closes as not planned, `pipeline.md` keeps its
+  `(planned)` row, and `--refresh` stays an unknown option exactly as `CLI-3` and `CLI-7` require.
+  Evidence: the cache buys nothing measurable today — one list page and one `InRelease` per run — while it would
+  be the first thing the tool writes outside `/etc/apt` and `/var/backups/apt-scout`: a file that outlives the
+  run, is read by a later run, and can be poisoned by whoever can write it. A new trust surface for a latency
+  nobody complained about is the wrong trade for v1.
+  [SPEC: docs/spec/pipeline.md]
 - [x] D82. Re-point the stale `path:line` citations in `docs/threat-model.md` that predated the restructure:
 16 distinct stale citations, 22 occurrences at 13 places in the record, re-pointed and each verified by the symbol
   on the cited
