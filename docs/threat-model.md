@@ -418,10 +418,13 @@ What the design imposes now so D13 does not have to revisit it:
   The four paths are the report (`src/main.rs:774–776`), the closing line of a write, which interpolates the
   selected URI (`:2602`), a rejected entry echoed in a note (`rejected_note` at `:3339`, printed at `:3373`), and
   error or warning text that carries a URL (`:2318`, `:3549`).
-  The unit tests cover the paths whose text the run builds itself. Case 17 of `scripts/docker-test.sh` is the
-  end-to-end proof for the path a served list reaches: the write-harness build serves a list whose URL carries
-  `ESC`, the rejected note prints it, and the case fails on a raw control byte or on the character being
-  absent. The other three paths need a probed mirror or a failed write and are proven by their unit tests only.
+  Unit tests cover most of these sites: the helper, the report rows, the detail block, the recommendation, the
+  closing line, the rejected note and sections, the verbose rejection line, the AS note, the geolocation note, the
+  fallback warning, the inventory section and the error line. The six call sites D92 lists are escaped and not
+  pinned. Case 17 of `scripts/docker-test.sh` is the end-to-end proof for the path a served list reaches: the
+  write-harness build serves a list whose URL carries `ESC`, the rejected note prints it, and the case fails on
+  a raw control byte or on the character being absent. The other three paths need a probed mirror or a failed
+  write, so no container case reaches them today.
 
 ### B8 — A hostile local user writing where the program reads
 
