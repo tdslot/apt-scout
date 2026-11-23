@@ -1956,6 +1956,25 @@ fn utc_stamp(secs: i64) -> String {
 /// skip, with the reason (docs/spec/apply.md: report each inspected file and each skipped entry). One
 /// line per file and per URI, so the section is a list, not a paragraph. Paths are relative to the
 /// apt root named in the title, which keeps the list narrow and unambiguous.
+/// The geolocation note, with the source's answer escaped at the boundary that owns the string.
+fn geolocation_note(text: &str) -> String {
+    format!("note: geolocation: {}", escape::control_free(text))
+}
+
+/// The fallback warning: the failures that sent the run to `mirrors.ubuntu.com`, and the list URL.
+fn fallback_warning(failures: &[String], url: &str) -> String {
+    format!(
+        "warning: {}. Using {} instead (its URLs come over plain HTTP, so they are unverified).",
+        escape::control_free(&failures.join("; ")),
+        escape::control_free(url)
+    )
+}
+
+/// The last line a failed run prints, escaped so an error that quotes a mirror cannot carry a control byte.
+fn error_line(msg: &str) -> String {
+    format!("error: {}", escape::control_free(msg))
+}
+
 fn sources_section(root: &Path, inventory: &sources::Inventory, ink: Painter) -> Vec<String> {
     let mut out = vec![titled("Sources", &root.display().to_string(), ink)];
     if inventory.files.is_empty() {
@@ -2154,7 +2173,7 @@ fn run() -> Result<u8, (u8, String)> {
     if !args.no_geo {
         let (found, notes) = geo::detect(&net);
         for n in &notes {
-            eprintln!("note: geolocation: {}", escape::control_free(n));
+            eprintln!("{}", geolocation_note(n));
         }
         geo = found;
         if let (None, Some(ip)) = (&geo.asn, geo.ip.as_deref().and_then(|i| i.parse().ok())) {
@@ -3481,11 +3500,7 @@ fn load_candidates(
             notes.extend(rejected_note("mirrors.ubuntu.com", &rejected));
             let found: Vec<_> = all.into_iter().filter(keep).collect();
             if !found.is_empty() {
-                notes.push(format!(
-                    "warning: {}. Using {} instead (its URLs come over plain HTTP, so they are unverified).",
-                    escape::control_free(&failures.join("; ")),
-                    escape::control_free(&url)
-                ));
+                notes.push(fallback_warning(&failures, &url));
                 return Ok(LoadedCandidates {
                     found,
                     source: "mirrors.ubuntu.com (unverified)",
@@ -3528,7 +3543,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => ExitCode::from(code),
         Err((code, msg)) => {
-            eprintln!("error: {}", escape::control_free(&msg));
+            eprintln!("{}", error_line(&msg));
             ExitCode::from(code)
         }
     }
@@ -6842,6 +6857,79 @@ mod tests {
     /// listed host at a path outside the listed tree is `skip`, while the PPA and `-security` lines
     /// keep their own reasons.
     #[test]
+    fn the_sources_section_escapes_every_row_kind_it_can_print() {
+        let root = Path::new("/etc/apt");
+        let esc = "\u{1b}[2J";
+        let file = Path::new("/etc/apt/sources.list.d/one.list");
+        let mut inventory = sources::Inventory {
+            files: vec![sources::FileReport {
+                path: Path::new("/etc/apt/sources.list.d/bad").join(format!("utf8{}.list", esc)),
+                issue: Some(format!("not valid UTF-8{}", esc)),
+                entries: vec![sources::Entry {
+                    file: file.to_path_buf(),
+                    line: 7,
+                    format: sources::Format::Legacy,
+                    enabled: true,
+                    suites: vec![],
+                    uris: vec![],
+                    rewritable: vec![],
+                    issue: Some(format!("no URI{}", esc)),
+                }],
+            }],
+        };
+        let third = Path::new("/etc/apt/sources.list.d").join(format!("three{}.list", esc));
+        inventory.files.push(sources::FileReport {
+            path: third.to_path_buf(),
+            issue: None,
+            entries: vec![sources::Entry {
+                file: third.to_path_buf(),
+                line: 9,
+                format: sources::Format::Legacy,
+                enabled: true,
+                suites: vec![],
+                uris: vec![],
+                rewritable: vec![],
+                issue: Some(format!("no URI{}", esc)),
+            }],
+        });
+        let second = Path::new("/etc/apt/sources.list.d").join(format!("two{}.list", esc));
+        inventory.files.push(sources::FileReport {
+            path: second.to_path_buf(),
+            issue: None,
+            entries: vec![
+                sources::Entry {
+                    file: second.to_path_buf(),
+                    line: 1,
+                    format: sources::Format::Legacy,
+                    enabled: true,
+                    suites: vec![],
+                    uris: vec![format!("http://m.example{}/ubuntu", esc)],
+                    rewritable: vec![true],
+                    issue: None,
+                },
+                sources::Entry {
+                    file: second.to_path_buf(),
+                    line: 2,
+                    format: sources::Format::Legacy,
+                    enabled: true,
+                    suites: vec![],
+                    uris: vec![format!("https://ppa.example{}/ubuntu", esc)],
+                    rewritable: vec![false],
+                    issue: Some(format!("third-party mirror{}", esc)),
+                },
+            ],
+        });
+        let fourth = Path::new("/etc/apt/sources.list.d").join(format!("four{}.list", esc));
+        inventory.files.push(sources::FileReport {
+            path: fourth,
+            issue: None,
+            entries: vec![],
+        });
+        let lines = sources_section(root, &inventory, Painter::plain());
+        assert_no_control(&lines);
+    }
+
+    #[test]
     fn the_sources_section_lists_every_file_entry_and_reason() {
         let apt = TempApt::new("sources-section");
         apt.write(
@@ -8563,6 +8651,48 @@ mod tests {
         assert_no_control(&lines);
     }
 
+    /// Every `escape::control_free` call site in this file, counted.
+    ///
+    /// A new print site bumps the number and, with it, this test: the developer either pins the new site
+    /// with a test or records why it carries no foreign text. The number is the check, not a claim in prose:
+    /// `rg -o 'escape::control_free\(' src/main.rs | wc -l` prints it.
+    const ESCAPE_SITES: usize = 37;
+
+    /// The tests that pin those sites, by name, so a rename or a deletion is caught here.
+    const PINNING_TESTS: &[&str] = &[
+        "the_geolocation_note_escapes_what_the_source_answered",
+        "the_fallback_warning_escapes_both_of_its_arguments",
+        "the_error_line_escapes_the_message_it_prints",
+        "the_sources_section_escapes_every_row_kind_it_can_print",
+        "the_report_rows_escape_a_url_with_a_control_character",
+        "the_detail_block_escapes_the_url_the_country_and_the_as_name",
+        "the_recommendation_line_escapes_the_mirror_url_country_and_as_name",
+        "the_closing_line_of_a_write_escapes_the_uri_it_interpolates",
+        "the_rejected_note_escapes_every_url_it_lists",
+        "the_rejected_section_escapes_a_host_taken_from_a_url",
+        "the_rejected_section_escapes_a_stale_host_as_well",
+        "the_verbose_rejection_line_escapes_the_reason_it_quotes",
+        "the_as_note_escapes_the_reason_it_quotes",
+    ];
+
+    #[test]
+    fn every_escape_call_site_is_counted_and_every_pinning_test_exists() {
+        let source = include_str!("main.rs");
+        // Split so this line does not count itself: the needle appears whole only in the call sites.
+        let needle = concat!("escape::control_free", "(");
+        let sites = source.matches(needle).count();
+        assert_eq!(
+            sites, ESCAPE_SITES,
+            "a new escape call site needs a pinning test and a bump of ESCAPE_SITES, or a recorded reason"
+        );
+        for name in PINNING_TESTS {
+            assert!(
+                source.contains(&format!("fn {name}(")),
+                "pinning test {name} is gone: the site it covered is unproven again"
+            );
+        }
+    }
+
     fn assert_no_control(lines: &[String]) {
         for line in lines {
             let flat = line.replace('\n', " ");
@@ -8598,6 +8728,27 @@ mod tests {
         assert_no_control(&rejected_section(&rejected, Painter::plain()));
     }
 
+    #[test]
+    fn the_geolocation_note_escapes_what_the_source_answered() {
+        let note = geolocation_note("ipinfo said\u{1b}[2J");
+        assert_no_control(std::slice::from_ref(&note));
+        assert!(note.starts_with("note: geolocation: "), "{note}");
+    }
+
+    #[test]
+    fn the_fallback_warning_escapes_both_of_its_arguments() {
+        let failures = vec!["cannot load https://m.example/\u{1b}[2J".to_string()];
+        let warning = fallback_warning(&failures, "http://mirrors.ubuntu.com/LT.txt\u{7}");
+        assert_no_control(std::slice::from_ref(&warning));
+        assert!(warning.starts_with("warning: "), "{warning}");
+    }
+
+    #[test]
+    fn the_error_line_escapes_the_message_it_prints() {
+        let line = error_line("cannot reach https://m.example/\u{9b}2J");
+        assert_no_control(std::slice::from_ref(&line));
+        assert!(line.starts_with("error: "), "{line}");
+    }
     #[test]
     fn the_as_note_escapes_the_reason_it_quotes() {
         let row = Row {

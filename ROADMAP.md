@@ -323,11 +323,20 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
   write harness or a test-only environment read, and rule it in `docs/spec/` first, because a fourth environment read
   contradicts the record's inventory.
   [SPEC: docs/spec/testing.md, docs/spec/non-functional.md] — [brief](docs/tasks/D90.md)
-- [ ] **D91 — READY; the escapes that no test pins.** Four sites escape correctly and would stay correct only
-  while nobody edited them: the inventory section, the geolocation note, the fallback list warning and the `error:`
-  line. Deleting the `control_free` call at any of them leaves the suite green, which is what `TEST-1` exists
-  to prevent. One test per site, each shown to fail without the escape, and a script that fails when a new call
-  site has none. [SPEC: docs/spec/testing.md] — [brief](docs/tasks/D91.md)
+- [x] **D91 — DONE.** Five tests pin the four sites the reviewer named on #121: the geolocation note, the
+  fallback list warning, the `error:` line, and every sources-section row that interpolates a path, a host or a
+  reason. The sixth row kind, an empty inventory, interpolates nothing and so carries nothing to pin. Three builders
+  were extracted (`geolocation_note`, `fallback_warning`, `error_line`) so each prints through a
+  function a test can call. `TEST-9` states the rule that keeps it: the count of `escape::control_free` sites
+  is asserted by a test, so a new site fails the suite until it is covered. Nine mutations were run, each failing the
+  suite, including the count-preserving one the review used to find the row this fixture had missed. Six sites
+  elsewhere in `src/main.rs` are escaped and still unpinned, which is **D92**. Merged as #123 (PLACEHOLDER).
+  — [evidence](docs/history/backlog.md#d91)
+- [ ] **D92 — READY; six escapes no test pins.** `plan_changes` prints the new file bytes and both
+  URIs, `run` prints the Team Cymru failure, the reference-read warning and the `nothing to change` line
+  with the best URL. Each escape is correct and each can be undone with the suite green, which is the half of
+  `TEST-9` that the counting test cannot see. Merge the first two through a builder so a fixture can reach them, then
+  move `TEST-9` from `partial:` to implemented. [SPEC: docs/spec/testing.md] — [brief](docs/tasks/D92.md)
 - [x] **D12 — DONE.** — [evidence](docs/history/m2.md#d12)
 
 - [x] **D57 — DONE.** — [evidence](docs/history/m2.md#d57)

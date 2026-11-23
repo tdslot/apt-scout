@@ -106,3 +106,6 @@ Network answers in automated tests are otherwise injected from fixtures.
   `mandoc -Tlint`) and MUST confirm `man apt-scout` renders in a disposable Ubuntu container.
   Every example MUST match `--help` and the implemented CLI; a planned flag MUST NOT be documented as
   available.
+- `TEST-9` Every call site that rewrites a control character MUST be pinned by a test, and the count of
+  those sites MUST be asserted by a test rather than stated in prose, so a new site fails the suite until it is
+  either covered or recorded as carrying no text the run did not author.
