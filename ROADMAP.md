@@ -309,18 +309,24 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
   derive from the same expression, and a changed test is shown to fail. What was missing was enforcement, and
   the reviewer now demands the mutation named — [evidence](docs/history/m2.md#d53)
 - [ ] **D89 — PARTIAL; the escaping ships, its end-to-end case does not.** `escape::control_free` rewrites every
-  control character on the four paths B7 names (`docs/threat-model.md:418`), and four unit tests cover them: the
-  helper, the closing line, the rejected note and the rejected section.
+  control character on the four paths B7 names (`docs/threat-model.md:418`), on seven further sites the audit found, and
+  covers every Unicode `Cc` character, not ASCII alone. Thirteen tests pin the escaping: four on the helper in
+  `src/escape.rs`, nine in `src/main.rs` for the report rows, the detail block, the recommendation,
+  the closing line, the rejected note and both section cases, the verbose rejection line and the AS note.
   What is missing is the container half of the acceptance: reaching a mirror string end to end needs a list source
-  that can be injected, and none exists — the tool fetches Launchpad and `mirrors.ubuntu.com` and nothing else. That
-  seam is **D90**; until it lands the escaping is proven by unit tests and by the record, not by a container run.
-  [SPEC: docs/spec/output.md, docs/threat-model.md] — [brief](docs/tasks/D89.md)
+  that can be injected, and none exists, so that seam is **D90** and the escaping is proven by unit tests, not by a
+  container run. Merged as #121 (`e55a426`). — [evidence](docs/history/backlog.md#d89)
 - [ ] **D90 — READY; the seam D89's container case needs.** Let a test choose the mirror list the run reads, without
   adding a product flag: an injected `Fetch` in unit tests already exists, so the container case needs the binary to
   accept one source at run time. Decide whether that is a `#[cfg(apt_scout_write_harness)]` subcommand beside the
   write harness or a test-only environment read, and rule it in `docs/spec/` first, because a fourth environment read
   contradicts the record's inventory.
   [SPEC: docs/spec/testing.md, docs/spec/non-functional.md]
+- [ ] **D91 — READY; the escapes that no test pins.** Four sites escape correctly and would stay correct only
+  while nobody edited them: the inventory section, the geolocation note, the fallback list warning and the `error:`
+  line. Deleting the `control_free` call at any of them leaves the suite green, which is what `TEST-1` exists
+  to prevent. One test per site, each shown to fail without the escape, and a script that fails when a new call
+  site has none. [SPEC: docs/spec/testing.md] — [brief](docs/tasks/D91.md)
 - [x] **D12 — DONE.** — [evidence](docs/history/m2.md#d12)
 
 - [x] **D57 — DONE.** — [evidence](docs/history/m2.md#d57)
