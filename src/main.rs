@@ -1997,15 +1997,20 @@ fn sources_section(root: &Path, inventory: &sources::Inventory, ink: Painter) ->
                 let host = mirror_host_port(uri).map_or_else(|| uri.clone(), |(host, _)| host);
                 if entry.rewritable.get(i).copied().unwrap_or(false) {
                     out.push(format!(
-                        "  {path:<40}  {:<7}  line {}  {host}",
-                        "rewrite", entry.line
+                        "  {:<40}  {:<7}  line {}  {}",
+                        escape::control_free(&path),
+                        "rewrite",
+                        entry.line,
+                        escape::control_free(&host)
                     ));
                 } else {
                     out.push(format!(
-                        "  {path:<40}  {:<7}  line {}  {host} — {}",
+                        "  {:<40}  {:<7}  line {}  {} — {}",
+                        escape::control_free(&path),
                         "skip",
                         entry.line,
-                        skip_reason(entry)
+                        escape::control_free(&host),
+                        escape::control_free(&skip_reason(entry))
                     ));
                 }
             }
