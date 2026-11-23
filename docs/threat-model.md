@@ -116,15 +116,36 @@ One child does not read the environment, and it does not inherit it either: `/us
 
 | Asset | Why it matters | What the root run would do | State today |
 | --- | --- | --- | --- |
-| `/etc/apt/sources.list` | Every `apt` invocation resolves and installs from these URIs; a hostile edit redirects all package traffic | Back up, then replace atomically with rewritten content | Read-only inventory (`src/sources.rs:580–593`); never written |
-| `/etc/apt/sources.list.d/*.list`, `*.sources` | Same, per-repository; deb822 stanzas carry `Signed-By`, so replacing a URI moves trust to a different host under the same key | Back up, then replace atomically | Read-only inventory (`src/sources.rs:595–661`); never written |
-| `/etc/apt/sources.list.d/system-security.sources` (Pop!_OS only) | Does not exist before the run; created by the rewrite | Create with exclusive create, record in the manifest | Planned content exists as `PlannedFile { create_new: true }` (`src/sources.rs:36–41`); never created |
-| Backup directory `/var/backups/apt-scout/<UTC timestamp>/` | The only recovery path; if an attacker can write it, `--restore` becomes a root file-write primitive | Create 0700, write one copy per changed file, write the manifest, fsync | Does not exist; docs/spec/apply.md defines it |
-| Backup manifest inside that directory | Names the files `--restore` will overwrite; it is an *instruction to root* read back from disk | Written by root, later parsed by root | Undefined format; no code |
-| `/var/log` output or the terminal | Root writes to a terminal that the unprivileged user may share; terminal escape sequences printed as root execute in the user's terminal context, not in root's | Print the diff, confirmation, and result | Plain `println!`/`eprintln!` to the terminal, error text included (`src/main.rs:771–773`, `:2547`, `:3313`, `:3490`), and a `print!` that writes no newline for the prompt (`:553`, a static literal); no TUI; escaping is D89 (`:366`) |
-| The user's environment (`PATH`, `HOME`, `TMPDIR`, `XDG_*`, `http_proxy`) | A root process that resolves a command or a path through the environment executes attacker-chosen code | Must be cleared to a fixed minimum | Three reads, none of them a decision: `TMPDIR` (`src/verify.rs:133`), `NO_COLOR` (`src/main.rs:862`) and `COLORTERM` (`:872`); `PATH`/`HOME` never read. **Cleared for the one child too**: `/usr/bin/dpkg --print-architecture` runs with the environment cleared (`src/main.rs:2741`), so `LD_PRELOAD`/`LD_AUDIT` reach nothing |
-| The user's own apt sources being *read* as root | Whatever root reads becomes what root writes back; a local user who can write a file under `/etc/apt` chooses its content | Re-read and compare against the plan | Read by name with `std::fs::read` (`src/sources.rs:663`) |
-| `/var/cache`/`~/.cache/apt-scout/mirrors.json`, `/usr/bin/gpgv`, the keyring | Cache and verifier inputs decide ranking and verification | Root must not read or write any of them | No cache exists (D81 ruled it out of v1); `gpgv` runs as the invoking uid today (`src/probe.rs:99`) |
+| `/etc/apt/sources.list` | Every `apt` invocation resolves and installs from these URIs; a hostile edit redirects
+  all package traffic | Back up, then replace atomically with rewritten content | Read-only inventory
+  (`src/sources.rs:580–593`); never written |
+| `/etc/apt/sources.list.d/*.list`, `*.sources` | Same, per-repository; deb822 stanzas carry `Signed-By`, so
+  replacing a URI moves trust to a different host under the same key | Back up, then replace atomically |
+  Read-only inventory (`src/sources.rs:595–661`); never written |
+| `/etc/apt/sources.list.d/system-security.sources` (Pop!_OS only) | Does not exist before the run; created by the
+  rewrite | Create with exclusive create, record in the manifest | Planned content exists as `PlannedFile {
+  create_new: true }` (`src/sources.rs:36–41`); never created |
+| Backup directory `/var/backups/apt-scout/<UTC timestamp>/` | The only recovery path; if an attacker can write
+  it, `--restore` becomes a root file-write primitive | Create 0700, write one copy per changed file, write the
+  manifest, fsync | Does not exist; docs/spec/apply.md defines it |
+| Backup manifest inside that directory | Names the files `--restore` will overwrite; it is an *instruction to
+  root* read back from disk | Written by root, later parsed by root | Undefined format; no code |
+| `/var/log` output or the terminal | Root writes to a terminal that the unprivileged user may share; terminal
+  escape sequences printed as root execute in the user's terminal context, not in root's | Print the diff,
+  confirmation, and result | Plain `println!`/`eprintln!` to the terminal, error text included
+  (`:553`, a static literal); no TUI; escaping is D89 (`:366`) |
+| The user's environment (`PATH`, `HOME`, `TMPDIR`, `XDG_*`, `http_proxy`) | A root process that resolves a
+  command or a path through the environment executes attacker-chosen code | Must be cleared to a fixed minimum |
+  Three reads, none of them a decision: `TMPDIR` (`src/verify.rs:133`), `NO_COLOR` (`src/main.rs:862`) and
+  `COLORTERM` (`:872`); `PATH`/`HOME` never read. **Cleared for the one child too**: `/usr/bin/dpkg
+  --print-architecture` runs with the environment cleared (`src/main.rs:2741`), so `LD_PRELOAD`/`LD_AUDIT` reach
+  nothing |
+| The user's own apt sources being *read* as root | Whatever root reads becomes what root writes back; a local
+  user who can write a file under `/etc/apt` chooses its content | Re-read and compare against the plan | Read by
+  name with `std::fs::read` (`src/sources.rs:663`) |
+| `/var/cache`/`~/.cache/apt-scout/mirrors.json`, `/usr/bin/gpgv`, the keyring | Cache and verifier inputs decide
+  ranking and verification | Root must not read or write any of them | No cache exists (D81 ruled it out of v1);
+  `gpgv` runs as the invoking uid today (`src/probe.rs:99`) |
 
 ## 2. Attack surface of the write
 
@@ -134,17 +155,40 @@ Every value below reaches the one process that writes as root, because discovery
 
 | # | Input | Entry point today | Who controls it | Reaches the write? |
 | --- | --- | --- | --- | --- |
-| A1 | CLI arguments | `src/main.rs:56`, parsed `src/main.rs:59–148` | The caller; under `sudo` also any local user who can influence the invoking shell | Yes — selects mode, path, and confirmation |
-| A2 | Environment | `src/verify.rs:133`, and the two display-only reads at `src/main.rs:862` and `src/main.rs:872` — `NO_COLOR` and `COLORTERM` | Any local user who can set the environment of the root process | Yes if `sudo` preserves it (no `env_reset` assumed). The three display reads must not: `NO_COLOR` (set, whatever the value, including empty), `COLORTERM` (which chooses between the truecolor accent and its 256-colour fallback, both fixed strings) and the locale read D30a adds; they select printed text and escape sequences only, and reach no decision, no path, no written byte and no exit code. The fourth path is not a read: the `dpkg` child runs with the environment cleared (`src/main.rs:2740`), so a value the user sets before `sudo` reaches no process the run starts. It reaches the run itself before any of its code does, which no line inside the program can prevent |
-| A3 | apt source file contents | `src/sources.rs:553–676` | Package maintainers; a local user only if a file under `/etc/apt` is writable by them | Yes — becomes the bytes root writes back, minus rewritten URI tokens |
-| A4 | Mirror URLs chosen by the program | `src/mirrors.rs:282`, filtered by `src/mirrors.rs:246` and `src/http.rs:68–92` | Launchpad HTML, `mirrors.ubuntu.com` text, and any host that can answer for them | Yes — the URL becomes the new apt URI |
-| A5 | `InRelease` bytes | `src/probe.rs:88`, `src/probe.rs:111–118`, verified `src/verify.rs:150`, gate `:329–336`, date taken at `src/probe.rs:98–100` | The mirror (an untrusted host by definition) | Yes, as a verification result and a date |
-| A6 | `InRelease` `Date` | `src/fresh.rs:114–154` (strict in-region parse, tolerant display parse), surfaced as `verified_updates` / `updates_date` (`src/fresh.rs:166–184`) | The mirror: a `Date` outside the signed region is display-only; one inside it is covered by the archive key | Yes — decides which mirror is written, and only the in-region value may be used for a write (3.9) |
-| A7 | Backup manifest on disk | `--restore`, through `restore::build` (`src/restore.rs:71`) | Whoever can write inside the backup directory | Yes — drives `--restore` |
-| A8 | File metadata and symlinks under `/etc/apt` | `src/sources.rs:554–644` (symlink refusals), owner/mode never read | A local user who can create entries in `/etc/apt/sources.list.d` (root-owned 0755 by default, so only root, unless the administrator relaxed it) | Yes — decides which paths root opens |
-| A9 | A plan or selection handed in from another process | Does not exist | — | No — removed 2026-11-12: no plan crosses a process boundary (B6, 7.2) |
-| A10 | Terminal input | No TUI (`Cargo.toml`) | The user, and anything that can inject bytes into the TTY | Future (D13) — the confirm keystroke only |
-| A11 | A hostile local user writing where the program reads | `TMPDIR` (`src/verify.rs:133`), pre-created `/var/backups/apt-scout`, pre-created `system-security.sources` | Any local user | Yes |
+| A1 | CLI arguments | `src/main.rs:56`, parsed `src/main.rs:59–148` | The caller; under `sudo` also any local
+  user who can influence the invoking shell | Yes — selects mode, path, and confirmation |
+| A2 | Environment | `src/verify.rs:133`, and the two display-only reads at `src/main.rs:862` and
+  `src/main.rs:872` — `NO_COLOR` and `COLORTERM` | Any local user who can set the environment of the root process
+  | Yes if `sudo` preserves it (no `env_reset` assumed). The three display reads must not: `NO_COLOR` (set,
+  whatever the value, including empty), `COLORTERM` (which chooses between the truecolor accent and its 256-colour
+  fallback, both fixed strings) and the locale read D30a adds; they select printed text and escape sequences only,
+  and reach no decision, no path, no written byte and no exit code. The fourth path is not a read: the `dpkg`
+  child runs with the environment cleared (`src/main.rs:2740`), so a value the user sets before `sudo` reaches no
+  process the run starts. It reaches the run itself before any of its code does, which no line inside the program
+  can prevent |
+| A3 | apt source file contents | `src/sources.rs:553–676` | Package maintainers; a local user only if a file
+  under `/etc/apt` is writable by them | Yes — becomes the bytes root writes back, minus rewritten URI tokens |
+| A4 | Mirror URLs chosen by the program | `src/mirrors.rs:282`, filtered by `src/mirrors.rs:246` and
+  `src/http.rs:68–92` | Launchpad HTML, `mirrors.ubuntu.com` text, and any host that can answer for them | Yes —
+  the URL becomes the new apt URI |
+| A5 | `InRelease` bytes | `src/probe.rs:88`, `src/probe.rs:111–118`, verified `src/verify.rs:150`, gate
+  `:329–336`, date taken at `src/probe.rs:98–100` | The mirror (an untrusted host by definition) | Yes, as a
+  verification result and a date |
+| A6 | `InRelease` `Date` | `src/fresh.rs:114–154` (strict in-region parse, tolerant display parse), surfaced as
+  `verified_updates` / `updates_date` (`src/fresh.rs:166–184`) | The mirror: a `Date` outside the signed region is
+  display-only; one inside it is covered by the archive key | Yes — decides which mirror is written, and only the
+  in-region value may be used for a write (3.9) |
+| A7 | Backup manifest on disk | `--restore`, through `restore::build` (`src/restore.rs:71`) | Whoever can write
+  inside the backup directory | Yes — drives `--restore` |
+| A8 | File metadata and symlinks under `/etc/apt` | `src/sources.rs:554–644` (symlink refusals), owner/mode never
+  read | A local user who can create entries in `/etc/apt/sources.list.d` (root-owned 0755 by default, so only
+  root, unless the administrator relaxed it) | Yes — decides which paths root opens |
+| A9 | A plan or selection handed in from another process | Does not exist | — | No — removed 2026-11-12: no plan
+  crosses a process boundary (B6, 7.2) |
+| A10 | Terminal input | No TUI (`Cargo.toml`) | The user, and anything that can inject bytes into the TTY |
+  Future (D13) — the confirm keystroke only |
+| A11 | A hostile local user writing where the program reads | `TMPDIR` (`src/verify.rs:133`), pre-created
+  `/var/backups/apt-scout`, pre-created `system-security.sources` | Any local user | Yes |
 
 Notes that change what a control must do:
 
@@ -367,12 +411,15 @@ What the design imposes now so D13 does not have to revisit it:
   A mirror's URL, `Origin`, `Label`, or error text can contain `ESC`; printing it as root into a shared terminal is a
   control-sequence injection into the user's terminal.
   The root run must render untrusted strings with control characters replaced.
-  Nothing does this today.
-  A mirror string reaches the terminal raw on four paths: the report (`src/main.rs:771–773`), the closing line of a
-  write, which interpolates the selected URI (`:2547`), a rejected entry echoed in a note (`rejected_note` at `:3283`,
-  printed at `:3313`), and error or warning text that carries a URL (`:2265`, `:3490`).
-  The mitigation belongs to **D89**, a task of its own since D80 ruled the TUI in v1: the exposure is a root CLI
-  run, so it no longer waits for a TUI to exist. The exposure until then covers a read-only run and a run that wrote.
+  Every string on those paths passes through `escape::control_free` before it is printed, including the 8-bit C1
+  range that `char::is_control` covers and a terminal may still honour: the recommendation line's URL, country
+  and AS cell, the report rows, the detail block's country, AS name and redirect host, the closing line, the
+  rejected note and sections, and the error and warning lines.
+  The four paths are the report (`src/main.rs:773–775`), the closing line of a write, which interpolates the
+  selected URI (`:2576`), a rejected entry echoed in a note (`rejected_note` at `:3313`, printed at `:3347`), and
+  error or warning text that carries a URL (`:2292`, `:3525`).
+  The unit tests cover the paths whose text the run builds itself; what is left is the end-to-end proof, and a
+  container case needs an injectable list source that does not exist yet, which is D90.
 
 ### B8 — A hostile local user writing where the program reads
 

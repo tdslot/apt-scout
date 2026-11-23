@@ -3,6 +3,7 @@ mod countries;
 mod cymru;
 mod digest;
 mod distro;
+mod escape;
 mod fresh;
 mod geo;
 #[cfg(apt_scout_write_harness)]
@@ -676,8 +677,9 @@ fn touched_line(touched: &apply::Touched) -> String {
 fn write_closing_block(touched: &[apply::Touched], uri: &str) -> String {
     let paths: Vec<String> = touched.iter().map(touched_path).collect();
     format!(
-        "\nchanged {}: every eligible official archive URI in those files now points at {uri}.\n{}",
+        "\nchanged {}: every eligible official archive URI in those files now points at {}.\n{}",
         paths.join(", "),
+        escape::control_free(uri),
         next_step_hint()
     )
 }
@@ -1509,7 +1511,7 @@ fn as_note(rows: &[Row], reason: Option<&str>, verbose: bool) -> Option<String> 
     }
     Some(format!(
         "note: AS data unavailable ({})",
-        reason.unwrap_or("no AS lookup answered")
+        escape::control_free(reason.unwrap_or("no AS lookup answered"))
     ))
 }
 
@@ -1599,7 +1601,7 @@ fn ranked_rows(rows: &[Row], ink: Painter) -> Vec<String> {
         let mut line = format!(
             "  {:>2}  {:<44.44} {:>6} {:>10} {:>9}",
             i + 1,
-            row.url,
+            escape::control_free(row.url),
             format!("{}m", row.lag_secs / 60),
             format!("{:.1} MB/s", row.throughput_bps as f64 / 1e6),
             format!("{} ms", row.latency_ms)
@@ -1634,8 +1636,12 @@ fn ranked_rows(rows: &[Row], ink: Painter) -> Vec<String> {
 /// `Detail` prints that pocket's date and lag in full, so the default report spends no column on it
 /// (docs/spec/output.md). `None` when the row has no note, so the column can be omitted.
 fn note_cell(row: &Row) -> Option<String> {
-    row.redirect_host
-        .map(|host| format!("redir:{}", host_prefix(host, REDIR_HOST_MAX)))
+    row.redirect_host.map(|host| {
+        format!(
+            "redir:{}",
+            escape::control_free(&host_prefix(host, REDIR_HOST_MAX))
+        )
+    })
 }
 
 /// At most `room` columns of a host, ending in `CUT_MARKER` when the host did not fit: a cell that
@@ -1723,7 +1729,10 @@ fn recommendation(
     ink: Painter,
 ) -> String {
     let as_fact = if verbose {
-        format!(", AS {}", as_cell.unwrap_or("unknown"))
+        format!(
+            ", AS {}",
+            escape::control_free(as_cell.unwrap_or("unknown"))
+        )
     } else {
         String::new()
     };
@@ -1745,8 +1754,9 @@ fn recommendation(
         _ => format!("{freshness}, verified {}", signature_cell(&best.signature)),
     };
     format!(
-        "  {} — {signature}, {country}{as_fact}, {}m behind, {:.1} MB/s, {} ms latency",
-        ink.bold(&best.url),
+        "  {} — {signature}, {}{as_fact}, {}m behind, {:.1} MB/s, {} ms latency",
+        ink.bold(&escape::control_free(&best.url)),
+        escape::control_free(country),
         best.lag_secs / 60,
         best.throughput_bps as f64 / 1e6,
         best.latency_ms
@@ -1819,8 +1829,8 @@ fn rejected_section(rejected: &[Rejected], ink: Painter) -> Vec<String> {
         std::collections::BTreeMap::new();
     for r in rejected {
         let item = match r.kind {
-            Reject::Stale(secs) => format!("{} ({} h)", r.host, secs / 3600),
-            _ => r.host.clone(),
+            Reject::Stale(secs) => format!("{} ({} h)", escape::control_free(&r.host), secs / 3600),
+            _ => escape::control_free(&r.host),
         };
         groups.entry(r.kind.label()).or_default().push(item);
     }
@@ -1841,9 +1851,9 @@ fn rejected_detail(rejected: &[Rejected], ink: Painter) -> Vec<String> {
     for r in rejected {
         out.push(ink.red(&format!(
             "  {:<40} {:<17} {}",
-            r.host,
+            escape::control_free(&r.host),
             r.kind.label(),
-            r.why
+            escape::control_free(&r.why)
         )));
     }
     out
@@ -1879,19 +1889,22 @@ fn detail_section(
 ) -> Vec<String> {
     let mut out = vec![ink.accent_bold("Detail")];
     for (i, row) in rows.iter().enumerate() {
-        out.push(format!("  {}  {}", i + 1, row.url));
+        out.push(format!("  {}  {}", i + 1, escape::control_free(row.url)));
         let detail = details.get(row.url);
         let found = resolved.get(row.url);
-        let country = detail.map_or("unknown", |d| d.country.as_str());
+        let country = escape::control_free(detail.map_or("unknown", |d| d.country.as_str()));
         let ip = found.map_or_else(|| "unknown".to_string(), |f| f.ip.to_string());
         let asn = match found {
             Some(f) => match &f.name {
-                Some(name) => format!("{} ({name})", f.asn),
+                Some(name) => format!("{} ({})", f.asn, escape::control_free(name)),
                 None => f.asn.clone(),
             },
             None => "unknown".to_string(),
         };
-        out.push(format!("     country: {country} · ip: {ip} · as: {asn}"));
+        out.push(format!(
+            "     country: {country} · ip: {ip} · as: {}",
+            escape::control_free(&asn)
+        ));
         let security = match (
             detail.and_then(|d| d.security_date),
             detail.and_then(|d| d.security_lag),
@@ -1911,7 +1924,7 @@ fn detail_section(
             signature_words(row.signature)
         ));
         if let Some(host) = detail.and_then(|d| d.redirected_to.as_ref()) {
-            out.push(format!("     redirects to {host}"));
+            out.push(format!("     redirects to {}", escape::control_free(host)));
         }
     }
     out
@@ -1955,20 +1968,29 @@ fn sources_section(root: &Path, inventory: &sources::Inventory, ink: Painter) ->
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| file.path.display().to_string());
         if let Some(issue) = &file.issue {
-            out.push(format!("  {path:<40}  {:<7}  {issue}", "skip"));
+            out.push(format!(
+                "  {:<40}  {:<7}  {}",
+                escape::control_free(&path),
+                "skip",
+                escape::control_free(issue)
+            ));
             continue;
         }
         if file.entries.is_empty() {
-            out.push(format!("  {path:<40}  no active entries"));
+            out.push(format!(
+                "  {:<40}  no active entries",
+                escape::control_free(&path)
+            ));
             continue;
         }
         for entry in &file.entries {
             if entry.uris.is_empty() {
                 out.push(format!(
-                    "  {path:<40}  {:<7}  line {}  {}",
+                    "  {:<40}  {:<7}  line {}  {}",
+                    escape::control_free(&path),
                     "skip",
                     entry.line,
-                    entry.issue.as_deref().unwrap_or("no URI")
+                    escape::control_free(entry.issue.as_deref().unwrap_or("no URI"))
                 ));
                 continue;
             }
@@ -1976,15 +1998,20 @@ fn sources_section(root: &Path, inventory: &sources::Inventory, ink: Painter) ->
                 let host = mirror_host_port(uri).map_or_else(|| uri.clone(), |(host, _)| host);
                 if entry.rewritable.get(i).copied().unwrap_or(false) {
                     out.push(format!(
-                        "  {path:<40}  {:<7}  line {}  {host}",
-                        "rewrite", entry.line
+                        "  {:<40}  {:<7}  line {}  {}",
+                        escape::control_free(&path),
+                        "rewrite",
+                        entry.line,
+                        escape::control_free(&host)
                     ));
                 } else {
                     out.push(format!(
-                        "  {path:<40}  {:<7}  line {}  {host} — {}",
+                        "  {:<40}  {:<7}  line {}  {} — {}",
+                        escape::control_free(&path),
                         "skip",
                         entry.line,
-                        skip_reason(entry)
+                        escape::control_free(&host),
+                        escape::control_free(&skip_reason(entry))
                     ));
                 }
             }
@@ -2023,7 +2050,7 @@ fn plan_changes(
         if write.effect == plan::Effect::Create {
             out.push(format!("  {relative}  (new file, mode 0600)"));
             for line in String::from_utf8_lossy(&write.new_bytes).lines() {
-                out.push(ink.green(&format!("    + {line}")));
+                out.push(ink.green(&format!("    + {}", escape::control_free(line))));
             }
             continue;
         }
@@ -2034,10 +2061,12 @@ fn plan_changes(
                 for (uri, rewritable) in entry.uris.iter().zip(&entry.rewritable) {
                     if *rewritable {
                         out.push(format!("  {relative}:{}", entry.line));
-                        out.push(ink.red(&format!("    - {uri}")));
+                        out.push(ink.red(&format!("    - {}", escape::control_free(uri))));
                         match plan.authority() {
                             plan::Authority::Mirror { uri, .. } => {
-                                out.push(ink.green(&format!("    + {uri}")));
+                                out.push(
+                                    ink.green(&format!("    + {}", escape::control_free(uri))),
+                                );
                             }
                             // A restore plan carries bytes and no mirror URI: `run_restore` prints
                             // its own block, and a restore never reaches this diff.
@@ -2125,13 +2154,16 @@ fn run() -> Result<u8, (u8, String)> {
     if !args.no_geo {
         let (found, notes) = geo::detect(&net);
         for n in &notes {
-            eprintln!("note: geolocation: {n}");
+            eprintln!("note: geolocation: {}", escape::control_free(n));
         }
         geo = found;
         if let (None, Some(ip)) = (&geo.asn, geo.ip.as_deref().and_then(|i| i.parse().ok())) {
             match cymru::lookup(ip) {
                 Ok(asn) => geo.asn = Some(asn),
-                Err(e) => eprintln!("note: server AS lookup via Team Cymru DNS failed: {e}"),
+                Err(e) => eprintln!(
+                    "note: server AS lookup via Team Cymru DNS failed: {}",
+                    escape::control_free(&e.to_string())
+                ),
             }
         }
     }
@@ -2263,7 +2295,8 @@ fn run() -> Result<u8, (u8, String)> {
             // share one (docs/spec/output.md).
             progress.clear();
             eprintln!(
-                "warning: cannot read the reference release from {REFERENCE}: {e}. Using the newest mirror date as the baseline instead, so lag is relative to the best candidate."
+                "warning: cannot read the reference release from {REFERENCE}: {}. Using the newest mirror date as the baseline instead, so lag is relative to the best candidate.",
+                escape::control_free(&e.to_string())
             );
             None
         }
@@ -2488,7 +2521,7 @@ fn run() -> Result<u8, (u8, String)> {
                 }
                 None => planned.push(format!(
                     "  nothing to change: the apt sources already point at {}",
-                    best.url
+                    escape::control_free(&best.url)
                 )),
             },
             // A refused plan names the entries it refused, so there is nothing left to list; a
@@ -2544,7 +2577,10 @@ fn run() -> Result<u8, (u8, String)> {
             }
             match plan.authority() {
                 plan::Authority::Mirror { uri, .. } => {
-                    println!("{}", write_closing_block(&outcome.touched, uri))
+                    println!(
+                        "{}",
+                        write_closing_block(&outcome.touched, uri)
+                    )
                 }
                 // A restore plan has no mirror URI: `run_restore` prints its own block and never
                 // reaches this match with a restore plan.
@@ -3287,7 +3323,11 @@ fn rejected_note(list: &str, rejected: &[String]) -> Option<String> {
     Some(format!(
         "warning: {list} names {} mirror URL(s) that cannot make an apt source rewritable, so they are left out of that set: {}",
         rejected.len(),
-        rejected.join(", ")
+        rejected
+            .iter()
+            .map(|u| escape::control_free(u))
+            .collect::<Vec<_>>()
+            .join(", ")
     ))
 }
 
@@ -3442,8 +3482,9 @@ fn load_candidates(
             let found: Vec<_> = all.into_iter().filter(keep).collect();
             if !found.is_empty() {
                 notes.push(format!(
-                    "warning: {}. Using {url} instead (its URLs come over plain HTTP, so they are unverified).",
-                    failures.join("; ")
+                    "warning: {}. Using {} instead (its URLs come over plain HTTP, so they are unverified).",
+                    escape::control_free(&failures.join("; ")),
+                    escape::control_free(&url)
                 ));
                 return Ok(LoadedCandidates {
                     found,
@@ -3487,7 +3528,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => ExitCode::from(code),
         Err((code, msg)) => {
-            eprintln!("error: {msg}");
+            eprintln!("error: {}", escape::control_free(&msg));
             ExitCode::from(code)
         }
     }
@@ -8405,5 +8446,172 @@ mod tests {
             done_line(0, 0, Duration::from_millis(40)),
             "done — 0 usable, 0 rejected in 0.0 s"
         );
+    }
+
+    #[test]
+    fn the_closing_line_of_a_write_escapes_the_uri_it_interpolates() {
+        let touched = Vec::new();
+        let line = write_closing_block(&touched, "http://m.example/\u{1b}[31mubuntu");
+        let flat = line.replace('\n', " ");
+        assert!(
+            !flat.chars().any(char::is_control),
+            "raw control character in {line}"
+        );
+        assert!(
+            line.contains("\\x1b"),
+            "the escape is not spelled out: {line}"
+        );
+    }
+
+    #[test]
+    fn the_rejected_note_escapes_every_url_it_lists() {
+        let url = "http://m.example/\u{1b}]8;;http://evil/\u{7}";
+        let note = rejected_note("Launchpad", &[url.to_string()]).expect("a note");
+        assert!(
+            !note.chars().any(char::is_control),
+            "raw control character in {note}"
+        );
+        assert!(note.contains("\\x1b") && note.contains("\\x07"));
+    }
+
+    #[test]
+    fn the_rejected_section_escapes_a_host_taken_from_a_url() {
+        let rejected = vec![Rejected {
+            host: "m.example\u{1b}[2J".to_string(),
+            kind: Reject::Other("bad host".to_string()),
+            why: "no".to_string(),
+        }];
+        let lines = rejected_section(&rejected, Painter::plain());
+        for line in &lines {
+            assert!(
+                !line.chars().any(char::is_control),
+                "raw control character in {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_report_rows_escape_a_url_with_a_control_character() {
+        let status = verify::SignatureStatus::Unavailable("no gpgv".to_string());
+        let row = Row {
+            url: "http://m.example/\u{1b}[31mubuntu",
+            updates_date: 0,
+            lag_secs: 0,
+            throughput_bps: 0,
+            latency_ms: 0,
+            signature: &status,
+            as_cell: None,
+            redirect_host: Some("other.example\u{9b}2J"),
+        };
+        let lines = ranked_rows(std::slice::from_ref(&row), Painter::plain());
+        assert_no_control(&lines);
+        if let Some(cell) = note_cell(&row) {
+            assert_no_control(&[cell]);
+        }
+    }
+
+    #[test]
+    fn the_detail_block_escapes_the_url_the_country_and_the_as_name() {
+        let status = verify::SignatureStatus::Unavailable("no gpgv".to_string());
+        let url = "http://m.example/\u{9b}2J";
+        let row = Row {
+            url,
+            updates_date: 0,
+            lag_secs: 0,
+            throughput_bps: 0,
+            latency_ms: 0,
+            signature: &status,
+            as_cell: None,
+            redirect_host: None,
+        };
+        let mut details = std::collections::HashMap::new();
+        details.insert(
+            url.to_string(),
+            Detail {
+                country: "LT\u{1b}[2J".to_string(),
+                security_date: None,
+                security_lag: None,
+                redirected_to: Some("other.example\u{7}".to_string()),
+            },
+        );
+        let mut resolved = std::collections::HashMap::new();
+        resolved.insert(
+            url.to_string(),
+            ResolvedAs {
+                ip: std::net::IpAddr::from([192, 0, 2, 1]),
+                asn: "64496".to_string(),
+                name: Some("Example\u{1b}]52;c;Zm9v\u{7}".to_string()),
+            },
+        );
+        let lines = detail_section(
+            std::slice::from_ref(&row),
+            &details,
+            &resolved,
+            Painter::plain(),
+        );
+        assert_no_control(&lines);
+    }
+
+    #[test]
+    fn the_verbose_rejection_line_escapes_the_reason_it_quotes() {
+        let rejected = vec![Rejected {
+            host: "m.example\u{1b}[2J".to_string(),
+            kind: Reject::Other("no".to_string()),
+            why: "unsupported relative redirect '\u{9b}2Jfoo'".to_string(),
+        }];
+        let lines = rejected_detail(&rejected, Painter::plain());
+        assert_no_control(&lines);
+    }
+
+    fn assert_no_control(lines: &[String]) {
+        for line in lines {
+            let flat = line.replace('\n', " ");
+            assert!(
+                !flat.chars().any(char::is_control),
+                "raw control character in {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_recommendation_line_escapes_the_mirror_url_country_and_as_name() {
+        let best = probed(
+            "https://mirror.example/\u{9b}2Jubuntu/",
+            verify::SignatureStatus::Unavailable("no gpgv".to_string()),
+        );
+        let line = recommendation(
+            &best,
+            "Lithuania\u{1b}[2J",
+            Some("64496 Example\u{1b}]52;c;Zm9v"),
+            true,
+            Painter::plain(),
+        );
+        assert_no_control(&[line]);
+    }
+    #[test]
+    fn the_rejected_section_escapes_a_stale_host_as_well() {
+        let rejected = vec![Rejected {
+            host: "m.example\u{1b}[2J".to_string(),
+            kind: Reject::Stale(7200),
+            why: "old".to_string(),
+        }];
+        assert_no_control(&rejected_section(&rejected, Painter::plain()));
+    }
+
+    #[test]
+    fn the_as_note_escapes_the_reason_it_quotes() {
+        let row = Row {
+            url: "https://m.example/ubuntu/",
+            updates_date: 0,
+            lag_secs: 0,
+            throughput_bps: 0,
+            latency_ms: 0,
+            signature: &verify::SignatureStatus::Unavailable("no gpgv".to_string()),
+            as_cell: None,
+            redirect_host: None,
+        };
+        let reason = "cannot resolve m.example\u{1b}[2J";
+        let note = as_note(&[row], Some(reason), true).expect("a note");
+        assert_no_control(&[note]);
     }
 }
