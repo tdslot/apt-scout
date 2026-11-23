@@ -8,18 +8,18 @@
 
 /// Rewrite every control character as `\\x` plus two lowercase hex digits.
 ///
-/// Only ASCII control characters are rewritten: `0x00..=0x1f` and `0x7f`. Text without them is returned
-/// unchanged, so a URL with nothing to rewrite is not rebuilt.
+/// Every control character is rewritten, Unicode `Cc` included: `ESC` and the 8-bit C1 range a terminal
+/// may still honour. Text with nothing to rewrite is returned unchanged.
 pub fn control_free(text: &str) -> String {
-    if !text.bytes().any(|b| b.is_ascii_control()) {
+    if !text.chars().any(char::is_control) {
         return text.to_string();
     }
     let mut out = String::with_capacity(text.len() + 8);
     for ch in text.chars() {
-        if ch.is_ascii_control() {
+        if ch.is_control() {
             out.push_str("\\x");
-            out.push(hex(ch as u8 >> 4));
-            out.push(hex(ch as u8 & 0x0f));
+            out.push(hex(((ch as u32) >> 4) as u8));
+            out.push(hex(((ch as u32) & 0x0f) as u8));
         } else {
             out.push(ch);
         }

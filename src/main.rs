@@ -1636,8 +1636,12 @@ fn ranked_rows(rows: &[Row], ink: Painter) -> Vec<String> {
 /// `Detail` prints that pocket's date and lag in full, so the default report spends no column on it
 /// (docs/spec/output.md). `None` when the row has no note, so the column can be omitted.
 fn note_cell(row: &Row) -> Option<String> {
-    row.redirect_host
-        .map(|host| format!("redir:{}", host_prefix(host, REDIR_HOST_MAX)))
+    row.redirect_host.map(|host| {
+        format!(
+            "redir:{}",
+            escape::control_free(&host_prefix(host, REDIR_HOST_MAX))
+        )
+    })
 }
 
 /// At most `room` columns of a host, ending in `CUT_MARKER` when the host did not fit: a cell that
@@ -1748,7 +1752,7 @@ fn recommendation(
     };
     format!(
         "  {} — {signature}, {country}{as_fact}, {}m behind, {:.1} MB/s, {} ms latency",
-        ink.bold(&best.url),
+        ink.bold(&escape::control_free(&best.url)),
         best.lag_secs / 60,
         best.throughput_bps as f64 / 1e6,
         best.latency_ms
@@ -1884,16 +1888,19 @@ fn detail_section(
         out.push(format!("  {}  {}", i + 1, escape::control_free(row.url)));
         let detail = details.get(row.url);
         let found = resolved.get(row.url);
-        let country = detail.map_or("unknown", |d| d.country.as_str());
+        let country = escape::control_free(detail.map_or("unknown", |d| d.country.as_str()));
         let ip = found.map_or_else(|| "unknown".to_string(), |f| f.ip.to_string());
         let asn = match found {
             Some(f) => match &f.name {
-                Some(name) => format!("{} ({name})", f.asn),
+                Some(name) => format!("{} ({})", f.asn, escape::control_free(name)),
                 None => f.asn.clone(),
             },
             None => "unknown".to_string(),
         };
-        out.push(format!("     country: {country} · ip: {ip} · as: {asn}"));
+        out.push(format!(
+            "     country: {country} · ip: {ip} · as: {}",
+            escape::control_free(&asn)
+        ));
         let security = match (
             detail.and_then(|d| d.security_date),
             detail.and_then(|d| d.security_lag),
@@ -1913,7 +1920,7 @@ fn detail_section(
             signature_words(row.signature)
         ));
         if let Some(host) = detail.and_then(|d| d.redirected_to.as_ref()) {
-            out.push(format!("     redirects to {host}"));
+            out.push(format!("     redirects to {}", escape::control_free(host)));
         }
     }
     out
@@ -2491,7 +2498,7 @@ fn run() -> Result<u8, (u8, String)> {
                 }
                 None => planned.push(format!(
                     "  nothing to change: the apt sources already point at {}",
-                    best.url
+                    escape::control_free(&best.url)
                 )),
             },
             // A refused plan names the entries it refused, so there is nothing left to list; a
@@ -8454,6 +8461,89 @@ mod tests {
         for line in &lines {
             assert!(
                 !line.chars().any(char::is_control),
+                "raw control character in {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_report_rows_escape_a_url_with_a_control_character() {
+        let status = verify::SignatureStatus::Unavailable("no gpgv".to_string());
+        let row = Row {
+            url: "http://m.example/\u{1b}[31mubuntu",
+            updates_date: 0,
+            lag_secs: 0,
+            throughput_bps: 0,
+            latency_ms: 0,
+            signature: &status,
+            as_cell: None,
+            redirect_host: Some("other.example\u{9b}2J"),
+        };
+        let lines = ranked_rows(std::slice::from_ref(&row), Painter::plain());
+        assert_no_control(&lines);
+        if let Some(cell) = note_cell(&row) {
+            assert_no_control(&[cell]);
+        }
+    }
+
+    #[test]
+    fn the_detail_block_escapes_the_url_the_country_and_the_as_name() {
+        let status = verify::SignatureStatus::Unavailable("no gpgv".to_string());
+        let url = "http://m.example/\u{9b}2J";
+        let row = Row {
+            url,
+            updates_date: 0,
+            lag_secs: 0,
+            throughput_bps: 0,
+            latency_ms: 0,
+            signature: &status,
+            as_cell: None,
+            redirect_host: None,
+        };
+        let mut details = std::collections::HashMap::new();
+        details.insert(
+            url.to_string(),
+            Detail {
+                country: "LT\u{1b}[2J".to_string(),
+                security_date: None,
+                security_lag: None,
+                redirected_to: Some("other.example\u{7}".to_string()),
+            },
+        );
+        let mut resolved = std::collections::HashMap::new();
+        resolved.insert(
+            url.to_string(),
+            ResolvedAs {
+                ip: std::net::IpAddr::from([192, 0, 2, 1]),
+                asn: "64496".to_string(),
+                name: Some("Example\u{1b}]52;c;Zm9v\u{7}".to_string()),
+            },
+        );
+        let lines = detail_section(
+            std::slice::from_ref(&row),
+            &details,
+            &resolved,
+            Painter::plain(),
+        );
+        assert_no_control(&lines);
+    }
+
+    #[test]
+    fn the_verbose_rejection_line_escapes_the_reason_it_quotes() {
+        let rejected = vec![Rejected {
+            host: "m.example".to_string(),
+            kind: Reject::Other("no".to_string()),
+            why: "unsupported relative redirect '\u{9b}2Jfoo'".to_string(),
+        }];
+        let lines = rejected_detail(&rejected, Painter::plain());
+        assert_no_control(&lines);
+    }
+
+    fn assert_no_control(lines: &[String]) {
+        for line in lines {
+            let flat = line.replace('\n', " ");
+            assert!(
+                !flat.chars().any(char::is_control),
                 "raw control character in {line}"
             );
         }

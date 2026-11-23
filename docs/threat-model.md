@@ -133,7 +133,6 @@ One child does not read the environment, and it does not inherit it either: `/us
 | `/var/log` output or the terminal | Root writes to a terminal that the unprivileged user may share; terminal
   escape sequences printed as root execute in the user's terminal context, not in root's | Print the diff,
   confirmation, and result | Plain `println!`/`eprintln!` to the terminal, error text included
-  (`src/main.rs:771–773`, `:2547`, `:3313`, `:3490`), and a `print!` that writes no newline for the prompt
   (`:553`, a static literal); no TUI; escaping is D89 (`:366`) |
 | The user's environment (`PATH`, `HOME`, `TMPDIR`, `XDG_*`, `http_proxy`) | A root process that resolves a
   command or a path through the environment executes attacker-chosen code | Must be cleared to a fixed minimum |
@@ -412,15 +411,15 @@ What the design imposes now so D13 does not have to revisit it:
   A mirror's URL, `Origin`, `Label`, or error text can contain `ESC`; printing it as root into a shared terminal is a
   control-sequence injection into the user's terminal.
   The root run must render untrusted strings with control characters replaced.
-  Every one of those strings now passes through `escape::control_free` before it is printed, so a control
-  character reaches the terminal as its visible spelling (a backslash, `x` and two hex digits), never as itself.
-  It reached the terminal raw on four paths before this, and each is now escaped at its own boundary: the report
-  (`src/main.rs:771–773`), the closing line of a
-  write, which interpolates the selected URI (`:2547`), a rejected entry echoed in a note (`rejected_note` at
-  `:3283`, printed at `:3313`), and error or
+  Every string on those paths passes through `escape::control_free` before it is printed, including the 8-bit C1
+  range that `char::is_control` covers and a terminal may still honour: the report rows, the detail block's country,
+  AS name and redirect host, the closing line, the rejected note and sections, and the error and warning lines.
+  The four paths are the report (`src/main.rs:771–773`), the closing line of a write, which interpolates the
+  selected URI
+  (`:2547`), a rejected entry echoed in a note (`rejected_note` at `:3283`, printed at `:3313`), and error or
   warning text that carries a URL (`:2265`, `:3490`).
-  What is left is the end-to-end proof: the unit tests cover the four paths, and a container case needs an
-  injectable list source that does not exist yet, which is D90.
+  The unit tests cover the paths whose text the run builds itself; what is left is the end-to-end proof, and a
+  container case needs an injectable list source that does not exist yet, which is D90.
 
 ### B8 — A hostile local user writing where the program reads
 
