@@ -59,3 +59,27 @@ The brief, kept from `docs/tasks/D91.md` before D85's rule deleted it, and what 
 
 PR #123. Gates at the head: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test --locked` 325 + 3,
 `cargo deny check`.
+
+### D90
+
+The brief, kept from `docs/tasks/D90.md` before D85's rule deleted it, and what building it settled.
+
+- The seam is a second `#[cfg(apt_scout_write_harness)]` case, `__write-harness escaped-list`. It serves a
+  Launchpad page from a constant compiled into the binary, runs the real `load_candidates` against it, and prints
+  what the run says about it. No environment read, no path argument: the harness doctrine in `src/harness.rs` and
+  S16 of the record already required exactly that, so the fourth environment read the brief warned about never
+  became necessary.
+- What made it possible was noticing that `load_candidates` already takes `&dyn Fetch`, so the harness needed a
+  `Fetch` implementation and nothing else; `LAUNCHPAD` and `load_candidates` became `pub(crate)`, which is the whole
+  of the production change. `http::Canned` stayed test-only.
+- The list carries `http://m.example/ubuntu/\x1b[2J`. `mirrors::validate_url` rejects that URL, so it is never
+  probed and never written; it reaches the rejection note, which is a print site, and the case asserts the note
+  prints `\x1b[2J` as text. This is why the case proves the escaping rather than the rejection, and the spec now
+  says so.
+- Case 17 of `scripts/docker-test.sh` runs it in `ubuntu:24.04` with `--network none` and fails on a single raw
+  control byte. Mutating `rejected_note` to return each URL unmapped made the case find exactly one, which is the
+  half a unit test cannot show: that a real terminal-less container receives no escape sequence.
+- D89 moved from PARTIAL to DONE with this, because its missing acceptance was exactly this case.
+
+PR #125. Gates at the head: `cargo fmt --check`, `cargo clippy -D warnings` in both the plain and the cfg build,
+`cargo test --locked` 325 + 3, `cargo deny check`, and `scripts/docker-test.sh --build-only` plus the case itself.

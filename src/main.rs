@@ -27,7 +27,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use http::{Fetch, Net};
 
-const LAUNCHPAD: &str = "https://launchpad.net/ubuntu/+archivemirrors";
+/// The Launchpad archive-mirrors page the run reads; the escaping case serves its own body from here.
+pub(crate) const LAUNCHPAD: &str = "https://launchpad.net/ubuntu/+archivemirrors";
 const REFERENCE: &str = "http://archive.ubuntu.com/ubuntu";
 const TEXT_LIST: &str = "http://mirrors.ubuntu.com";
 /// Candidates probed per run (`docs/spec/pipeline.md` step 4).
@@ -3398,7 +3399,9 @@ fn load_with_progress<S: Sink + Send + 'static>(
 /// after the operator changes country and `--https-only` does not narrow what is recognized (SPEC:
 /// Apply). When the run falls back to `<CC>.txt`, the set is that file's validated entries, because
 /// that list arrives over plain HTTP: the set fails closed rather than widening on an unverified list.
-fn load_candidates(
+/// Load the candidate mirrors. `crate`-visible so the write-harness build can drive it with a
+/// served list instead of the network (the escaping case).
+pub(crate) fn load_candidates(
     net: &dyn Fetch,
     country: Option<Country<'_>>,
     narrow: bool,

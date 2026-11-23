@@ -109,3 +109,7 @@ Network answers in automated tests are otherwise injected from fixtures.
 - `TEST-9` Every call site that rewrites a control character MUST be pinned by a test, and the count of
   those sites MUST be asserted by a test rather than stated in prose, so a new site fails the suite until it is
   either covered or recorded as carrying no text the run did not author.
+- `TEST-10` A container case MUST prove that a control character in a mirror URL reaches the terminal as
+  visible text: a `--cfg apt_scout_write_harness` build MUST serve a list whose URL carries one, print what the run
+  says about it, and the case MUST fail on a raw control byte in that output. `mirrors::validate_url` rejects such
+  a URL before it is probed, so the case proves the escaping at the print site and not the rejection.

@@ -123,7 +123,7 @@ and `partial:` with what is missing where it implements only part of it.
 | `OUT-9` | `docs/spec/output.md` | The animation MUST be testable without a terminal, and it MUST add no dependency. | implemented |
 | `OUT-10` | `docs/spec/output.md` | Progress MUST end with one summary line. | implemented |
 | `OUT-11` | `docs/spec/output.md` | `NO_COLOR`, `COLORTERM` and, later, the locale MUST be the only environment reads that may change printed text. | implemented |
-| `OUT-12` | `docs/spec/output.md` | Text the run did not author MUST reach a terminal with every control character replaced, so a mirror cannot write an escape sequence into it. | partial: no end-to-end container proof; D90 |
+| `OUT-12` | `docs/spec/output.md` | Text the run did not author MUST reach a terminal with every control character replaced, so a mirror cannot write an escape sequence into it. | partial: six call sites are escaped and unpinned; D92 |
 | `PIPE-1` | `docs/spec/pipeline.md` | The run MUST detect the distro from `/etc/os-release`. | implemented |
 | `PIPE-2` | `docs/spec/pipeline.md` | The run MUST detect the location of the server (country, then AS), skipped with `--no-geo`. | partial: RIPEstat is not implemented |
 | `PIPE-3` | `docs/spec/pipeline.md` | The run MUST load the mirror list, the first success wins, and the source it used MUST be shown in the output. | partial: the 24 h cache and the compiled snapshot are not implemented |
@@ -146,6 +146,7 @@ and `partial:` with what is missing where it implements only part of it.
 | `TEST-7` | `docs/spec/testing.md` | Live-network smoke tests (real Launchpad, geo sources) MUST be manual and MUST never be part of CI, because they are rate limited and flaky. | implemented |
 | `TEST-8` | `docs/spec/testing.md` | Man-page verification MUST check `man/apt-scout.1` formatting (for example with `mandoc -Tlint`) and MUST confirm `man apt-scout` renders in a disposable Ubuntu container. | planned |
 | `TEST-9` | `docs/spec/testing.md` | Every call site that rewrites a control character MUST be pinned by a test, and the count of those sites MUST be asserted by a test rather than stated in prose. | partial: six call sites are escaped and unpinned; D92 |
+| `TEST-10` | `docs/spec/testing.md` | A container case MUST prove that a control character in a mirror URL reaches the terminal as visible text, and MUST fail on a raw control byte. | implemented |
 | `TUI-1` | `docs/spec/tui.md` | The TUI MUST show a ranked mirror table (left/top), a detail panel for the highlighted mirror, and a footer with the active keys. | planned |
 | `TUI-2` | `docs/spec/tui.md` | The table MUST carry these columns: checkbox, rank, host, country, scheme, latency, throughput, lag (updates), AS match, signature, `Recommended` badge. | planned |
 | `TUI-3` | `docs/spec/tui.md` | The detail panel MUST show the full URL, country, AS number and name, resolved IP, scheme, time to first byte, throughput, `Date` and lag for `-updates` (decides) and `-security` (informational), AS match, signature status of the `-updates` `InRelease`, mirror list source, status or rejection reason. | planned |

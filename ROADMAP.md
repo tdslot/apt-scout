@@ -308,21 +308,19 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
 - [x] **D53 — DONE.** The rule is `TEST-1`: an assertion compares a value with an expectation that does not
   derive from the same expression, and a changed test is shown to fail. What was missing was enforcement, and
   the reviewer now demands the mutation named — [evidence](docs/history/m2.md#d53)
-- [ ] **D89 — PARTIAL; the escaping ships, its end-to-end case does not.** `escape::control_free` rewrites
-  every control character on the four paths B7 names (`docs/threat-model.md:418`) and on the sites the security
-  audit found beyond them, and covers every Unicode `Cc` character, not ASCII alone. Fourteen tests pin the
-  escaping: five on the helper in `src/escape.rs`, nine in `src/main.rs` for the report rows, the detail
-  block, the recommendation, the closing line, the rejected note and both section cases, the verbose rejection
-  line and the AS note.
-  What is missing is the container half of the acceptance: reaching a mirror string end to end needs a list source
-  that can be injected, and none exists, so that seam is **D90** and the escaping is proven by unit tests, not by a
-  container run. Merged as #121 (`e55a426`). — [evidence](docs/history/backlog.md#d89)
-- [ ] **D90 — READY; the seam D89's container case needs.** Let a test choose the mirror list the run reads, without
-  adding a product flag: an injected `Fetch` in unit tests already exists, so the container case needs the binary to
-  accept one source at run time. Decide whether that is a `#[cfg(apt_scout_write_harness)]` subcommand beside the
-  write harness or a test-only environment read, and rule it in `docs/spec/` first, because a fourth environment read
-  contradicts the record's inventory.
-  [SPEC: docs/spec/testing.md, docs/spec/non-functional.md] — [brief](docs/tasks/D90.md)
+- [x] **D89 — DONE.** `escape::control_free` rewrites every control character on the four paths B7 names
+  (`docs/threat-model.md:418`) and on the sites the audit found beyond them, and covers every Unicode `Cc`
+  character, not ASCII alone. Tests pin the helper, the four paths and the sites D91 added; six other call sites are
+  escaped and unpinned, which is **D92**. The escaping case proves it end to end: a served list whose URL carries
+  `ESC` reaches the rejection note as text, with zero raw control bytes in the output. Merged as #121 (`e55a426`)
+  and #125 (#TBD). — [evidence](docs/history/backlog.md#d89)
+- [x] **D90 — DONE.** The seam is a second `#[cfg(apt_scout_write_harness)]` case, `__write-harness escaped-list`:
+  it serves a Launchpad page from a constant compiled into the binary, runs the real `load_candidates` against
+  it and prints what the run says. No environment read and no path, which is the harness doctrine already in
+  `src/harness.rs` and S16 of the record, so no fourth environment read was needed. Case 17 of
+  `scripts/docker-test.sh` runs it in `ubuntu:24.04` offline and fails on a raw control byte or on the
+  character being absent; two mutations were run to prove both halves. `TEST-10` states it. Merged as #125 (#TBD).
+  — [evidence](docs/history/backlog.md#d90)
 - [x] **D91 — DONE.** Five tests pin the four sites the reviewer named on #121: the geolocation note, the
   fallback list warning, the `error:` line, and every sources-section row that interpolates a path, a host or a
   reason. The sixth row kind, an empty inventory, interpolates nothing and so carries nothing to pin. Three builders
