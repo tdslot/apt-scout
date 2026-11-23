@@ -1729,7 +1729,10 @@ fn recommendation(
     ink: Painter,
 ) -> String {
     let as_fact = if verbose {
-        format!(", AS {}", as_cell.unwrap_or("unknown"))
+        format!(
+            ", AS {}",
+            escape::control_free(as_cell.unwrap_or("unknown"))
+        )
     } else {
         String::new()
     };
@@ -1751,8 +1754,9 @@ fn recommendation(
         _ => format!("{freshness}, verified {}", signature_cell(&best.signature)),
     };
     format!(
-        "  {} — {signature}, {country}{as_fact}, {}m behind, {:.1} MB/s, {} ms latency",
+        "  {} — {signature}, {}{as_fact}, {}m behind, {:.1} MB/s, {} ms latency",
         ink.bold(&escape::control_free(&best.url)),
+        escape::control_free(country),
         best.lag_secs / 60,
         best.throughput_bps as f64 / 1e6,
         best.latency_ms
@@ -8531,7 +8535,7 @@ mod tests {
     #[test]
     fn the_verbose_rejection_line_escapes_the_reason_it_quotes() {
         let rejected = vec![Rejected {
-            host: "m.example".to_string(),
+            host: "m.example\u{1b}[2J".to_string(),
             kind: Reject::Other("no".to_string()),
             why: "unsupported relative redirect '\u{9b}2Jfoo'".to_string(),
         }];
@@ -8547,5 +8551,25 @@ mod tests {
                 "raw control character in {line}"
             );
         }
+    }
+
+    #[test]
+    fn the_recommendation_line_escapes_the_mirror_url_country_and_as_name() {
+        let best = probed(
+            "https://mirror.example/\u{9b}2Jubuntu/",
+            verify::SignatureStatus::Unavailable("no gpgv".to_string()),
+        );
+        let line = recommendation(
+            &best,
+            "Lithuania\u{1b}[2J",
+            Some("64496 Example\u{1b}]52;c;Zm9v"),
+            true,
+            Painter::plain(),
+        );
+        let flat = line.replace('\n', " ");
+        assert!(
+            !flat.chars().any(char::is_control),
+            "raw control character in {line}"
+        );
     }
 }

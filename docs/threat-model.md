@@ -412,9 +412,9 @@ What the design imposes now so D13 does not have to revisit it:
   control-sequence injection into the user's terminal.
   The root run must render untrusted strings with control characters replaced.
   Every string on those paths passes through `escape::control_free` before it is printed, including the 8-bit C1
-  range that `char::is_control` covers and a terminal may still honour: the report rows, the detail block's country,
-  AS name and redirect host, the closing line, the rejected note and sections, and the error and warning lines.
-  The four paths are the report (`src/main.rs:771–773`), the closing line of a write, which interpolates the
+  range that `char::is_control` covers and a terminal may still honour: the recommendation line's URL, country
+  and AS cell, the report rows, the detail block's country, AS name and redirect host, the closing line, the
+  rejected note and sections, and the error and warning lines.
   selected URI
   (`:2547`), a rejected entry echoed in a note (`rejected_note` at `:3283`, printed at `:3313`), and error or
   warning text that carries a URL (`:2265`, `:3490`).
