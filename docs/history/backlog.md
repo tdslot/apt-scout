@@ -83,3 +83,27 @@ The brief, kept from `docs/tasks/D90.md` before D85's rule deleted it, and what 
 
 PR #125. Gates at the head: `cargo fmt --check`, `cargo clippy -D warnings` in both the plain and the cfg build,
 `cargo test --locked` 325 + 3, `cargo deny check`, and `scripts/docker-test.sh --build-only` plus the case itself.
+
+### D92
+
+The brief, kept from `docs/tasks/D92.md` before D85's rule deleted it, and what the work found.
+
+- Six sites were escaped and unpinned: `plan_changes` printed the new file's bytes and both of its URI lines, and
+  `run` printed the Team Cymru failure, the reference-read warning and the `nothing to change` line with the best URL.
+  The counting test in D91 cannot see any of them, because a call that stays in place with its escape undone keeps the
+  count.
+- The same move as D91 was needed first: five builders, `as_lookup_note`, `reference_warning`, `nothing_to_change_line`,
+  `added_line` and `removed_line`. Until the print text lives in a function, no test can reach a print that happens
+  inside `run`.
+- Five mutations were run and each failed the test that covers it. The first attempt filtered on test names containing
+  `escapes`, which excluded the new test — three mutations looked green until the filter was fixed. A mutation that
+  passes with the wrong filter is the same false confidence the task exists to remove.
+- `ESCAPE_SITES` moved from 37 to 36, not up: two call sites in `plan_changes` became one builder each.
+- The review found a regression the gates could not: `reference_warning` split its literal across two source lines
+  without a continuation, so the compiled string gained a newline and the warning printed as two stderr lines.
+  `cargo fmt`, clippy and the tests all passed, because `assert_no_control` flattens newlines before checking.
+  The literal is one line again and the test now asserts the warning holds no newline, a mutation of which fails it.
+- `TEST-9` and `OUT-12` are `implemented` now, and no `partial:` row in `SPEC.md` mentions the escaping any more.
+
+PR #127. Gates at the head: `cargo fmt --check`, `cargo clippy -D warnings` in both builds, `cargo test --locked`
+327 + 3, `cargo deny check`.
