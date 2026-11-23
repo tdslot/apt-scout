@@ -301,8 +301,9 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
   `Next: run 'apt update' to refresh the package lists.` is printed by a root run started as `sudo apt-scout …`, and
   that process has exited by the time the line is read, so the person is back in their own unprivileged shell where
   `apt update` fails with permission denied. — [evidence](docs/history/m2.md#d52)
-- [ ] **D53 — READY; the rule three tests broke on 2026-11-14, carried by the next test that is written or reviewed.**
-  The brief carries the rule, the three tests and the acceptance for carrying it forward — [brief](docs/tasks/D53.md)
+- [x] **D53 — DONE.** The rule is `TEST-1`: an assertion compares a value with an expectation that does not
+  derive from the same expression, and a changed test is shown to fail. What was missing was enforcement, and
+  the reviewer now demands the mutation named — [evidence](docs/history/m2.md#d53)
 - [x] **D12 — DONE.** — [evidence](docs/history/m2.md#d12)
 
 - [x] **D57 — DONE.** — [evidence](docs/history/m2.md#d57)
