@@ -415,12 +415,13 @@ What the design imposes now so D13 does not have to revisit it:
   range that `char::is_control` covers and a terminal may still honour: the recommendation line's URL, country
   and AS cell, the report rows, the detail block's country, AS name and redirect host, the closing line, the
   rejected note and sections, and the error and warning lines.
-  The four paths are the report (`src/main.rs:773–775`), the closing line of a write, which interpolates the
-  selected URI (`:2576`), a rejected entry echoed in a note (`rejected_note` at `:3313`, printed at `:3347`), and
-  error or warning text that carries a URL (`:2292`, `:3525`).
-  The unit tests cover the paths whose text the run builds itself, and case 17 of `scripts/docker-test.sh` is the
-  end-to-end proof: the write-harness build serves a list whose URL carries `ESC`, and the case fails on a
-  raw control byte or on the character being absent from the output.
+  The four paths are the report (`src/main.rs:774–776`), the closing line of a write, which interpolates the
+  selected URI (`:2602`), a rejected entry echoed in a note (`rejected_note` at `:3339`, printed at `:3373`), and
+  error or warning text that carries a URL (`:2318`, `:3549`).
+  The unit tests cover the paths whose text the run builds itself. Case 17 of `scripts/docker-test.sh` is the
+  end-to-end proof for the path a served list reaches: the write-harness build serves a list whose URL carries
+  `ESC`, the rejected note prints it, and the case fails on a raw control byte or on the character being
+  absent. The other three paths need a probed mirror or a failed write and are proven by their unit tests only.
 
 ### B8 — A hostile local user writing where the program reads
 
