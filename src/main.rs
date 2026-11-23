@@ -8761,6 +8761,12 @@ mod tests {
         let note = geolocation_note("ipinfo said\u{1b}[2J");
         assert_no_control(std::slice::from_ref(&note));
         assert!(note.starts_with("note: geolocation: "), "{note}");
+        for value in [&note] {
+            assert!(
+                !value.contains("\n"),
+                "one line: a reflowed literal would print two ({value})",
+            );
+        }
     }
 
     #[test]
@@ -8769,6 +8775,12 @@ mod tests {
         let warning = fallback_warning(&failures, "http://mirrors.ubuntu.com/LT.txt\u{7}");
         assert_no_control(std::slice::from_ref(&warning));
         assert!(warning.starts_with("warning: "), "{warning}");
+        for value in [&warning] {
+            assert!(
+                !value.contains("\n"),
+                "one line: a reflowed literal would print two ({value})",
+            );
+        }
     }
 
     #[test]
@@ -8776,6 +8788,12 @@ mod tests {
         let line = error_line("cannot reach https://m.example/\u{9b}2J");
         assert_no_control(std::slice::from_ref(&line));
         assert!(line.starts_with("error: "), "{line}");
+        for value in [&line] {
+            assert!(
+                !value.contains("\n"),
+                "one line: a reflowed literal would print two ({value})",
+            );
+        }
     }
     #[test]
     fn the_planned_diff_escapes_the_bytes_and_both_uris_it_prints() {
@@ -8823,6 +8841,12 @@ mod tests {
         };
         let reason = "cannot resolve m.example\u{1b}[2J";
         let note = as_note(&[row], Some(reason), true).expect("a note");
-        assert_no_control(&[note]);
+        assert_no_control(std::slice::from_ref(&note));
+        for value in [&note] {
+            assert!(
+                !value.contains("\n"),
+                "one line: a reflowed literal would print two ({value})",
+            );
+        }
     }
 }
