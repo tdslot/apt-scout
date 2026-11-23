@@ -51,8 +51,10 @@ The brief, kept from `docs/tasks/D91.md` before D85's rule deleted it, and what 
 - `TEST-9` states the guard: a test counts the `escape::control_free` call sites in `src/main.rs` and fails when the
   count moves, so a new site is red until someone covers it or records why it carries no foreign text. The needle is
   built with `concat!` so the test does not count its own source line.
-- Eight mutations were run and each failed the suite: the four builders' escapes, the file-level issue row, the
-  empty-uri row, the rewrite row's path and host, and the skip row's reason.
+- Nine mutations were run and each failed the suite: the four builders' escapes, the file-level issue row, the
+  no-active-entries row, the empty-uri row, the rewrite row's path and host, and the skip row's reason.
+  The no-active-entries row was missed by the first fixture and caught by the review, which proved it with a
+  count-preserving mutation: the call stays and the escape is undone, so the counting test cannot see it.
 
 PR #123. Gates at the head: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test --locked` 325 + 3,
 `cargo deny check`.

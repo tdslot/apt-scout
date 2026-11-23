@@ -327,7 +327,7 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
   fallback list warning, the `error:` line and every row kind in the sources section. Three builders were
   extracted (`geolocation_note`, `fallback_warning`, `error_line`) so each prints through a function a test
   can call. `TEST-9` states the rule that keeps it: the count of `escape::control_free` sites is asserted by a
-  test, so a new site fails the suite until it is covered. Every one of the eight sites was shown to fail with
+  test, so a new site fails the suite until it is covered. Every one of the nine sites was shown to fail with
   its escape removed. Merged as #123 (`PLACEHOLDER`). — [evidence](docs/history/backlog.md#d91)
 - [x] **D12 — DONE.** — [evidence](docs/history/m2.md#d12)
 

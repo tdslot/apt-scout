@@ -6919,6 +6919,12 @@ mod tests {
                 },
             ],
         });
+        let fourth = Path::new("/etc/apt/sources.list.d").join(format!("four{}.list", esc));
+        inventory.files.push(sources::FileReport {
+            path: fourth,
+            issue: None,
+            entries: vec![],
+        });
         let lines = sources_section(root, &inventory, Painter::plain());
         assert_no_control(&lines);
     }
