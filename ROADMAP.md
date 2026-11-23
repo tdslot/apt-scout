@@ -330,7 +330,7 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
   function a test can call. `TEST-9` states the rule that keeps it: the count of `escape::control_free` sites
   is asserted by a test, so a new site fails the suite until it is covered. Nine mutations were run, each failing the
   suite, including the count-preserving one the review used to find the row this fixture had missed. Six sites
-  elsewhere in `src/main.rs` are escaped and still unpinned, which is **D92**. Merged as #123 (PLACEHOLDER).
+  elsewhere in `src/main.rs` are escaped and still unpinned, which is **D92**. Merged as #123 (`1f02289`).
   — [evidence](docs/history/backlog.md#d91)
 - [ ] **D92 — READY; six escapes no test pins.** `plan_changes` prints the new file bytes and both
   URIs, `run` prints the Team Cymru failure, the reference-read warning and the `nothing to change` line

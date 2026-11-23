@@ -57,5 +57,5 @@ The brief, kept from `docs/tasks/D91.md` before D85's rule deleted it, and what 
   The no-active-entries row was missed by the first fixture and caught by the review, which proved it with a
   count-preserving mutation: the call stays and the escape is undone, so the counting test cannot see it.
 
-PR #123. Gates at the head: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test --locked` 325 + 3,
+PR #123, squash `1f02289`. Gates at the head: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test --locked` 325 + 3,
 `cargo deny check`.
