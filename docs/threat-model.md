@@ -121,10 +121,10 @@ One child does not read the environment, and it does not inherit it either: `/us
 | `/etc/apt/sources.list.d/system-security.sources` (Pop!_OS only) | Does not exist before the run; created by the rewrite | Create with exclusive create, record in the manifest | Planned content exists as `PlannedFile { create_new: true }` (`src/sources.rs:36–41`); never created |
 | Backup directory `/var/backups/apt-scout/<UTC timestamp>/` | The only recovery path; if an attacker can write it, `--restore` becomes a root file-write primitive | Create 0700, write one copy per changed file, write the manifest, fsync | Does not exist; docs/spec/apply.md defines it |
 | Backup manifest inside that directory | Names the files `--restore` will overwrite; it is an *instruction to root* read back from disk | Written by root, later parsed by root | Undefined format; no code |
-| `/var/log` output or the terminal | Root writes to a terminal that the unprivileged user may share; terminal escape sequences printed as root execute in the user's terminal context, not in root's | Print the diff, confirmation, and result | Plain `println!`/`eprintln!` to the terminal, error text included (`src/main.rs:771–773`, `:2547`, `:3275`, `:3452`), and a `print!` that writes no newline for the prompt (`:553`, a static literal); no TUI; escaping is D13 (`:366`) |
+| `/var/log` output or the terminal | Root writes to a terminal that the unprivileged user may share; terminal escape sequences printed as root execute in the user's terminal context, not in root's | Print the diff, confirmation, and result | Plain `println!`/`eprintln!` to the terminal, error text included (`src/main.rs:771–773`, `:2547`, `:3275`, `:3452`), and a `print!` that writes no newline for the prompt (`:553`, a static literal); no TUI; escaping is D89 (`:366`) |
 | The user's environment (`PATH`, `HOME`, `TMPDIR`, `XDG_*`, `http_proxy`) | A root process that resolves a command or a path through the environment executes attacker-chosen code | Must be cleared to a fixed minimum | Three reads, none of them a decision: `TMPDIR` (`src/verify.rs:133`), `NO_COLOR` (`src/main.rs:862`) and `COLORTERM` (`:872`); `PATH`/`HOME` never read. **Cleared for the one child too**: `/usr/bin/dpkg --print-architecture` runs with the environment cleared (`src/main.rs:2741`), so `LD_PRELOAD`/`LD_AUDIT` reach nothing |
 | The user's own apt sources being *read* as root | Whatever root reads becomes what root writes back; a local user who can write a file under `/etc/apt` chooses its content | Re-read and compare against the plan | Read by name with `std::fs::read` (`src/sources.rs:663`) |
-| `/var/cache`/`~/.cache/apt-scout/mirrors.json`, `/usr/bin/gpgv`, the keyring | Cache and verifier inputs decide ranking and verification | Root must not read or write any of them | Cache unimplemented; `gpgv` runs as the invoking uid today (`src/probe.rs:99`) |
+| `/var/cache`/`~/.cache/apt-scout/mirrors.json`, `/usr/bin/gpgv`, the keyring | Cache and verifier inputs decide ranking and verification | Root must not read or write any of them | No cache exists (D81 ruled it out of v1); `gpgv` runs as the invoking uid today (`src/probe.rs:99`) |
 
 ## 2. Attack surface of the write
 
@@ -172,8 +172,8 @@ Notes that change what a control must do:
   `NO_COLOR`; it will name the locale only when that read exists.
 - A11 matters most where a directory is created on first use.
   The old docs/spec/errors.md rule created missing own directories with `create_dir_all`, which succeeds on a
-  directory another user already created; the rule now covers the cache directory only, and the backup root fails
-  closed instead (7.6).
+  directory another user already created; the backup root fails closed instead (7.6). The cache directory that
+  sentence also covered does not exist in v1 (D81), so the rule has one path left and it is the closed one.
 
 ## 3. Trust boundaries and controls
 
@@ -369,8 +369,8 @@ What the design imposes now so D13 does not have to revisit it:
   The root run must render untrusted strings with control characters replaced.
   Nothing does this today.
   A mirror string reaches the terminal raw on four paths: the report (`src/main.rs:771–773`), the closing line of a
-  write, which interpolates the selected URI (`:2547`), a rejected entry echoed in a note (`rejected_note` at `:3245`,
-  printed at `:3275`), and error or warning text that carries a URL (`:2265`, `:3452`).
+  write, which interpolates the selected URI (`:2547`), a rejected entry echoed in a note (`rejected_note` at `:3283`,
+  printed at `:3313`), and error or warning text that carries a URL (`:2265`, `:3490`).
   The mitigation belongs to **D89**, a task of its own since D80 ruled the TUI in v1: the exposure is a root CLI
   run, so it no longer waits for a TUI to exist. The exposure until then covers a read-only run and a run that wrote.
 

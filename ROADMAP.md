@@ -305,6 +305,13 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
 - [x] **D53 — DONE.** The rule is `TEST-1`: an assertion compares a value with an expectation that does not
   derive from the same expression, and a changed test is shown to fail. What was missing was enforcement, and
   the reviewer now demands the mutation named — [evidence](docs/history/m2.md#d53)
+- [ ] **D89 — READY; v1 security work, independent of the TUI.** Escape what a root run prints: replace control
+  characters in every mirror-derived string on the four paths B7 names (`docs/threat-model.md:370`), so a mirror
+  cannot write an escape sequence into a terminal root prints to. Acceptance: a unit test per path feeds a string
+  containing `ESC` and asserts the printed line carries no control character; the container matrix gains one case
+  that prints a rejected entry built from a URL with an escape in it and greps the output for the raw byte; the PR
+  states the mutation each test survives (TEST-1). No new dependency is expected: the escape table is a small map.
+  [SPEC: docs/spec/output.md, docs/threat-model.md] — [brief](docs/tasks/D89.md)
 - [x] **D12 — DONE.** — [evidence](docs/history/m2.md#d12)
 
 - [x] **D57 — DONE.** — [evidence](docs/history/m2.md#d57)
@@ -359,9 +366,8 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
 
 ## Milestone 5 — Localization and localized manuals
 
-**Status: PENDING** — no entry here waits for a milestone as a whole: D30a waited for the CLI write path, which
-  merged as D11a in PR #43, and D33 waited for D20 until that page landed, so the catalog work can start before
-  Milestones 3 and 4 close.
+**Status: DEFERRED** — D79 ruled v1 English only, so every entry in this section is post-v1 and none of them
+  blocks a release. Their dependencies are unchanged and they stay ordered as written, when the question comes back.
   The rules are docs/spec/localization.md and they bind every entry below.
   The mechanism is Fluent: one `locales/<tag>/main.ftl` per locale, compiled into the binary at build time by
   `fluent-templates`' `static_loader!` with English as the fallback language.
@@ -384,7 +390,8 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   is outside that glob list, which is why a catalog-only diff does not turn the guard red.
   No dependency change after D30a.
 
-- [ ] **D30a — READY.** The Fluent mechanism, the dependency, and the English catalog for the CLI surface. —
+- [ ] **D30a — DEFERRED by D79, not v1.** The Fluent mechanism, the dependency, and the English catalog
+  for the CLI surface. — [brief](docs/tasks/D30a.md)
   [evidence](docs/history/m5.md#d30a)
 
 - [ ] **D30b — BLOCKED by D30a.** the read-only path's messages — [brief](docs/tasks/D30b.md)
@@ -424,7 +431,7 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
 - [ ] **D33 — BLOCKED by D31a and D32.** the localized manuals, and the answer to who owns `--help` —
   [brief](docs/tasks/D33.md)
 
-- [ ] **D34 — READY, human `chore:` PR; no delivery agent may make it.** three contracts contradict
+- [ ] **D34 — DEFERRED by D79; human `chore:` PR; no delivery agent may make it.** three contracts contradict
   docs/spec/localization.md once D30a lands, and every delivery agent is closed to them — [brief](docs/tasks/D34.md)
 
 ## Backlog — opened by the SPEC restructure
@@ -484,11 +491,6 @@ the terminal row said escaping is D13 (`:152`), which is `:366` now.
   TUI involved. It becomes **D89**, unblocked and independent: the four live paths are in `docs/threat-model.md`
   and the record now points the mitigation at D89 rather than at the TUI.
   [SPEC: docs/spec/tui.md, docs/spec/cli.md]
-- [ ] D89. Escape what a root run prints, now that it is nobody's follow-on: replace control characters in every
-  mirror-derived string on the four paths B7 names (`docs/threat-model.md:366`), so a mirror cannot write an
-  escape sequence into a terminal root prints to. Independent of D13 by construction: the report, the closing line
-  of a write, the rejected-entry note and the error line all exist today.
-  [SPEC: docs/spec/output.md, docs/threat-model.md]
 - [x] D81. Rule the mirror-list cache (D28): **out of v1**. D28 closes as not planned, `pipeline.md` keeps its
   `(planned)` row, and `--refresh` stays an unknown option exactly as `CLI-3` and `CLI-7` require.
   Evidence: the cache buys nothing measurable today — one list page and one `InRelease` per run — while it would
