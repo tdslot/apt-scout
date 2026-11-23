@@ -2138,7 +2138,7 @@ fn run() -> Result<u8, (u8, String)> {
     if !args.no_geo {
         let (found, notes) = geo::detect(&net);
         for n in &notes {
-            eprintln!("note: geolocation: {n}");
+            eprintln!("note: geolocation: {}", escape::control_free(n));
         }
         geo = found;
         if let (None, Some(ip)) = (&geo.asn, geo.ip.as_deref().and_then(|i| i.parse().ok())) {
@@ -8567,5 +8567,14 @@ mod tests {
             Painter::plain(),
         );
         assert_no_control(&[line]);
+    }
+    #[test]
+    fn the_rejected_section_escapes_a_stale_host_as_well() {
+        let rejected = vec![Rejected {
+            host: "m.example\u{1b}[2J".to_string(),
+            kind: Reject::Stale(7200),
+            why: "old".to_string(),
+        }];
+        assert_no_control(&rejected_section(&rejected, Painter::plain()));
     }
 }
