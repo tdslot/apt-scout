@@ -123,7 +123,7 @@ and `partial:` with what is missing where it implements only part of it.
 | `OUT-9` | `docs/spec/output.md` | The animation MUST be testable without a terminal, and it MUST add no dependency. | implemented |
 | `OUT-10` | `docs/spec/output.md` | Progress MUST end with one summary line. | implemented |
 | `OUT-11` | `docs/spec/output.md` | `NO_COLOR`, `COLORTERM` and, later, the locale MUST be the only environment reads that may change printed text. | implemented |
-| `OUT-12` | `docs/spec/output.md` | Text the run did not author MUST reach a terminal with every control character replaced, so a mirror cannot write an escape sequence into it. | planned |
+| `OUT-12` | `docs/spec/output.md` | Text the run did not author MUST reach a terminal with every control character replaced, so a mirror cannot write an escape sequence into it. | planned | partial: no end-to-end container proof; D90 |
 | `PIPE-1` | `docs/spec/pipeline.md` | The run MUST detect the distro from `/etc/os-release`. | implemented |
 | `PIPE-2` | `docs/spec/pipeline.md` | The run MUST detect the location of the server (country, then AS), skipped with `--no-geo`. | partial: RIPEstat is not implemented |
 | `PIPE-3` | `docs/spec/pipeline.md` | The run MUST load the mirror list, the first success wins, and the source it used MUST be shown in the output. | partial: the 24 h cache and the compiled snapshot are not implemented |

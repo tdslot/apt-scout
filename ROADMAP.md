@@ -309,7 +309,7 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
   derive from the same expression, and a changed test is shown to fail. What was missing was enforcement, and
   the reviewer now demands the mutation named — [evidence](docs/history/m2.md#d53)
 - [ ] **D89 — PARTIAL; the escaping ships, its end-to-end case does not.** `escape::control_free` rewrites every
-  control character on the four paths B7 names (`docs/threat-model.md:415`), and four unit tests cover them: the
+  control character on the four paths B7 names (`docs/threat-model.md:418`), and four unit tests cover them: the
   helper, the closing line, the rejected note and the rejected section.
   What is missing is the container half of the acceptance: reaching a mirror string end to end needs a list source
   that can be injected, and none exists — the tool fetches Launchpad and `mirrors.ubuntu.com` and nothing else. That

@@ -143,7 +143,6 @@
   mirror cannot write an escape sequence into it.
   The text that is not the run's own is a mirror URL, its `Origin`, `Label` or error text, the country and the AS
   name a list or a lookup returns, a rejected entry, and any error or warning that quotes one of them.
-  error or warning that quotes one of them.
   A control character is written as the two characters `\\x` and two lowercase hex digits, so `ESC` prints as
   `\\x1b` and the reader can see what the mirror tried.
   The run's own escapes stay: the colour and the progress line are the run's, and this rule is about the bytes that
