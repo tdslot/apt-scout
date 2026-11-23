@@ -64,4 +64,10 @@ mod tests {
     fn a_non_ascii_character_is_not_a_control_one() {
         assert_eq!(control_free("m\u{fc}nchen"), "m\u{fc}nchen");
     }
+    #[test]
+    fn a_c1_control_is_rewritten_too() {
+        // A terminal may still honour 8-bit C1, and a mirror can put one in a Location header.
+        assert_eq!(control_free("\u{9b}2Jfoo"), "\\x9b2Jfoo");
+        assert_eq!(control_free("\u{85}"), "\\x85");
+    }
 }
