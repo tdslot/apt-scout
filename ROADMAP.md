@@ -335,7 +335,7 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
   `nothing_to_change_line`; and two for the planned diff, `added_line` and `removed_line`, which carry
   the new file bytes and both URIs. Five mutations were run, each failing the test that covers it, and `ESCAPE_SITES`
   moved from 37 to 36 because two call sites became one builder each. `TEST-9` and `OUT-12` are implemented now
-  that nothing is escaped and unpinned. Merged as #127 (PLACEHOLDER). — [evidence](docs/history/backlog.md#d92)
+  that nothing is escaped and unpinned. Merged as #127 (`e17e7f1`). — [evidence](docs/history/backlog.md#d92)
 - [x] **D12 — DONE.** — [evidence](docs/history/m2.md#d12)
 
 - [x] **D57 — DONE.** — [evidence](docs/history/m2.md#d57)
