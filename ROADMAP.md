@@ -308,11 +308,12 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
 - [x] **D53 — DONE.** The rule is `TEST-1`: an assertion compares a value with an expectation that does not
   derive from the same expression, and a changed test is shown to fail. What was missing was enforcement, and
   the reviewer now demands the mutation named — [evidence](docs/history/m2.md#d53)
-- [ ] **D89 — PARTIAL; the escaping ships, its end-to-end case does not.** `escape::control_free` rewrites every
-  control character on the four paths B7 names (`docs/threat-model.md:418`), on seven further sites the audit found, and
-  covers every Unicode `Cc` character, not ASCII alone. Thirteen tests pin the escaping: four on the helper in
-  `src/escape.rs`, nine in `src/main.rs` for the report rows, the detail block, the recommendation,
-  the closing line, the rejected note and both section cases, the verbose rejection line and the AS note.
+- [ ] **D89 — PARTIAL; the escaping ships, its end-to-end case does not.** `escape::control_free` rewrites
+  every control character on the four paths B7 names (`docs/threat-model.md:418`) and on the sites the security
+  audit found beyond them, and covers every Unicode `Cc` character, not ASCII alone. Fourteen tests pin the
+  escaping: five on the helper in `src/escape.rs`, nine in `src/main.rs` for the report rows, the detail
+  block, the recommendation, the closing line, the rejected note and both section cases, the verbose rejection
+  line and the AS note.
   What is missing is the container half of the acceptance: reaching a mirror string end to end needs a list source
   that can be injected, and none exists, so that seam is **D90** and the escaping is proven by unit tests, not by a
   container run. Merged as #121 (`e55a426`). — [evidence](docs/history/backlog.md#d89)
@@ -321,7 +322,7 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
   accept one source at run time. Decide whether that is a `#[cfg(apt_scout_write_harness)]` subcommand beside the
   write harness or a test-only environment read, and rule it in `docs/spec/` first, because a fourth environment read
   contradicts the record's inventory.
-  [SPEC: docs/spec/testing.md, docs/spec/non-functional.md]
+  [SPEC: docs/spec/testing.md, docs/spec/non-functional.md] — [brief](docs/tasks/D90.md)
 - [ ] **D91 — READY; the escapes that no test pins.** Four sites escape correctly and would stay correct only
   while nobody edited them: the inventory section, the geolocation note, the fallback list warning and the `error:`
   line. Deleting the `control_free` call at any of them leaves the suite green, which is what `TEST-1` exists

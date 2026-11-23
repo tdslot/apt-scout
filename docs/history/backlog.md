@@ -14,7 +14,7 @@ The brief, kept from `docs/tasks/D89.md` before D85's rule deleted it, and what 
 - The four paths B7 names are escaped at the boundary that owns each string, not at the print line, so the run's own
   colour escapes are not rewritten: the report (`Report::print`), the closing line inside `write_closing_block`,
   `rejected_note` plus the note that prints it, and the `error:` line beside the two warnings that quote a URL.
-- A seventh path the audit found: strings built from a URI that the tool formats itself — the AS note, the planned
+- Paths beyond the four the audit found: strings built from a URI that the tool formats itself — the AS note, the planned
   change diff, the fallback warning, the inventory rows, the AS-lookup note. All escaped at `58a6d02` and `4ad5413`.
 - The escape covers every Unicode `Cc` character, not ASCII alone: `\u{9b}` and `\u{85}` are control characters that
   a UTF-8 terminal decodes, and the review caught the first version rewriting only `0x00-0x1f`.
