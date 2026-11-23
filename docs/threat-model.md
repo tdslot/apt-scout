@@ -68,7 +68,7 @@ Facts that constrain the write. Each is the current code at this base, not a pla
    A restore may not carry a mirror flag: `--country`, `--any`, `--top`, `--https-only`, `--list` and `--no-geo` with
    it are a usage error (exit 2) that names the typed flag and is refused in the parser, before any backup is opened
    (`src/main.rs:158`).
-   D28 builds the cache `--refresh` needs, and D13 owns `--tui`.
+   D13 owns `--tui`, and D81 ruled the mirror-list cache out of v1, so no task builds one.
 4. **No TUI exists.** `Cargo.toml` dependencies are `ureq` only; `ratatui`/`crossterm` arrive in D13.
    Terminal input is not an input today.
    Terminal *status* is read, through `std::io::IsTerminal`: whether stdout is a terminal decides whether the report
@@ -355,7 +355,7 @@ The plan handed from one process to a root process, which this entry used to des
   The checks that remain are listed in section 5.
   See 7.2.
 
-### B7 — Terminal input (TUI, D13+)
+### B7 — Terminal input (TUI from D13, escaping from D89)
 
 Existing: no TUI, no `ratatui` dependency (`Cargo.toml`), so the surface does not exist yet.
 
@@ -371,7 +371,8 @@ What the design imposes now so D13 does not have to revisit it:
   A mirror string reaches the terminal raw on four paths: the report (`src/main.rs:771–773`), the closing line of a
   write, which interpolates the selected URI (`:2547`), a rejected entry echoed in a note (`rejected_note` at `:3245`,
   printed at `:3275`), and error or warning text that carries a URL (`:2265`, `:3452`).
-  The mitigation belongs to D13, and the exposure until then covers a read-only run and a run that wrote.
+  The mitigation belongs to **D89**, a task of its own since D80 ruled the TUI in v1: the exposure is a root CLI
+  run, so it no longer waits for a TUI to exist. The exposure until then covers a read-only run and a run that wrote.
 
 ### B8 — A hostile local user writing where the program reads
 
@@ -1223,7 +1224,7 @@ Recorded so nothing here is dropped silently; none of these is an open decision.
   Owner: D9, with no SPEC delta.
 - Root printing an unescaped mirror URL or error string into a terminal (B7) is only a hazard once root prints
   anything.
-  The mitigation belongs to D13, not D9.
+The mitigation belongs to D89, not D9.
 - `reader.join()` is unbounded after the timeout kill in the verifier (`src/verify.rs:294–313`), and the
   oversized-body case reports `Unavailable` rather than `Invalid`.
   Both stay in D6f's P2 list; neither changes what a write may trust.
