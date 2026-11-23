@@ -84,7 +84,7 @@ echo "HARNESS $(sha256sum target/docker/apt-scout-harness | cut -d' ' -f1)"
 if [ "$mode" = build ]; then exit 0; fi
 # The cfg build leaves its own artifact in the build directory, so the plain copy is what every
 # read-only case below mounts: pointing `bin` at the build directory would silently run the harness
-# in all seventeen of them.
+# in the other sixteen.
 bin=target/docker/apt-scout-plain
 
 # Pull every image first so `docker run` prints only the program's output (a fresh runner would
@@ -343,7 +343,6 @@ elif [ -z "$missing" ] && [ -z "$unplanned" ]; then
 else
   fail "man page -> missing from the page: $(echo $missing); documented but unplanned: $(echo $unplanned)"
 fi
-
 
 # 17. The escaping case (docs/spec/testing.md TEST-10, docs/threat-model.md B7): a mirror URL carrying a
 # control character, served from the list source the harness build compiles in, must reach the rejection
