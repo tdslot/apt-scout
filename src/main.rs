@@ -6893,7 +6893,6 @@ mod tests {
             }],
         });
         let second = Path::new("/etc/apt/sources.list.d").join(format!("two{}.list", esc));
-        let mut inventory = inventory;
         inventory.files.push(sources::FileReport {
             path: second.to_path_buf(),
             issue: None,
@@ -8724,10 +8723,9 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn the_geolocation_note_escapes_what_the_source_answered() {
         let note = geolocation_note("ipinfo said\u{1b}[2J");
-        assert_no_control(&[note.clone()]);
+        assert_no_control(std::slice::from_ref(&note));
         assert!(note.starts_with("note: geolocation: "), "{note}");
     }
 
@@ -8735,17 +8733,17 @@ mod tests {
     fn the_fallback_warning_escapes_both_of_its_arguments() {
         let failures = vec!["cannot load https://m.example/\u{1b}[2J".to_string()];
         let warning = fallback_warning(&failures, "http://mirrors.ubuntu.com/LT.txt\u{7}");
-        assert_no_control(&[warning.clone()]);
+        assert_no_control(std::slice::from_ref(&warning));
         assert!(warning.starts_with("warning: "), "{warning}");
     }
 
     #[test]
     fn the_error_line_escapes_the_message_it_prints() {
         let line = error_line("cannot reach https://m.example/\u{9b}2J");
-        assert_no_control(&[line.clone()]);
+        assert_no_control(std::slice::from_ref(&line));
         assert!(line.starts_with("error: "), "{line}");
     }
-
+    #[test]
     fn the_as_note_escapes_the_reason_it_quotes() {
         let row = Row {
             url: "https://m.example/ubuntu/",
