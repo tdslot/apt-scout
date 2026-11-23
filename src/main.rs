@@ -1511,7 +1511,7 @@ fn as_note(rows: &[Row], reason: Option<&str>, verbose: bool) -> Option<String> 
     }
     Some(format!(
         "note: AS data unavailable ({})",
-        reason.unwrap_or("no AS lookup answered")
+        escape::control_free(reason.unwrap_or("no AS lookup answered"))
     ))
 }
 
@@ -2036,7 +2036,7 @@ fn plan_changes(
         if write.effect == plan::Effect::Create {
             out.push(format!("  {relative}  (new file, mode 0600)"));
             for line in String::from_utf8_lossy(&write.new_bytes).lines() {
-                out.push(ink.green(&format!("    + {line}")));
+                out.push(ink.green(&format!("    + {}", escape::control_free(line))));
             }
             continue;
         }
@@ -2047,10 +2047,12 @@ fn plan_changes(
                 for (uri, rewritable) in entry.uris.iter().zip(&entry.rewritable) {
                     if *rewritable {
                         out.push(format!("  {relative}:{}", entry.line));
-                        out.push(ink.red(&format!("    - {uri}")));
+                        out.push(ink.red(&format!("    - {}", escape::control_free(uri))));
                         match plan.authority() {
                             plan::Authority::Mirror { uri, .. } => {
-                                out.push(ink.green(&format!("    + {uri}")));
+                                out.push(
+                                    ink.green(&format!("    + {}", escape::control_free(uri))),
+                                );
                             }
                             // A restore plan carries bytes and no mirror URI: `run_restore` prints
                             // its own block, and a restore never reaches this diff.
@@ -3463,8 +3465,9 @@ fn load_candidates(
             let found: Vec<_> = all.into_iter().filter(keep).collect();
             if !found.is_empty() {
                 notes.push(format!(
-                    "warning: {}. Using {url} instead (its URLs come over plain HTTP, so they are unverified).",
-                    escape::control_free(&failures.join("; "))
+                    "warning: {}. Using {} instead (its URLs come over plain HTTP, so they are unverified).",
+                    escape::control_free(&failures.join("; ")),
+                    escape::control_free(&url)
                 ));
                 return Ok(LoadedCandidates {
                     found,
@@ -8576,5 +8579,22 @@ mod tests {
             why: "old".to_string(),
         }];
         assert_no_control(&rejected_section(&rejected, Painter::plain()));
+    }
+
+    #[test]
+    fn the_as_note_escapes_the_reason_it_quotes() {
+        let row = Row {
+            url: "https://m.example/ubuntu/",
+            updates_date: 0,
+            lag_secs: 0,
+            throughput_bps: 0,
+            latency_ms: 0,
+            signature: &verify::SignatureStatus::Unavailable("no gpgv".to_string()),
+            as_cell: None,
+            redirect_host: None,
+        };
+        let reason = "cannot resolve m.example\u{1b}[2J";
+        let note = as_note(&[row], Some(reason), true).expect("a note");
+        assert_no_control(&[note]);
     }
 }
