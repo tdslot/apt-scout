@@ -32,7 +32,10 @@ For each task, in order:
    Oracle may propose missing requirements; add accepted requirements to `SPEC.md`, then update this roadmap before
    implementation resumes.
 
-Use task states `DONE`, `READY`, `BLOCKED`, and `PENDING`.
+Use task states `DONE`, `READY`, `BLOCKED`, `PENDING`, and the two the scope rulings
+  added: `DEFERRED by Dn` when a ruling moves a task out of v1, and `CLOSED by Dn, not planned` when it is
+  dropped. A box is `[x]` when no further work is expected —
+  landed or closed — and `[ ]` when work remains, a deferral included.
   `DONE` requires merged PR and passing verification.
   Keep task records concise and link them to `SPEC.md` sections.
   A task discovered during implementation becomes a new roadmap entry before it is forgotten.
@@ -326,9 +329,11 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
 - [ ] **D13 — BLOCKED by D12.** Implement the `--tui` core with ranked mirror table, details, selection, confirmation,
   cancellation, write result, and terminal restoration.
   As root, confirm validates and writes; as non-root, confirm prints `sudo apt-scout --tui`.
-  Every user-facing string the TUI adds goes through the message catalog of D30a, not a literal at the call site:
-  D30c's whole-tree literal test is what makes that mandatory, so a TUI string left in English is a failing test
-  rather than a follow-up. [SPEC: docs/spec/cli.md, docs/spec/tui.md, docs/spec/localization.md]
+  Every user-facing string the TUI adds goes through the message catalog of D30a **once localization returns**; with D79
+  ruling v1 English only, D13 writes English strings at the call site and D30c's whole-tree literal test moves with the
+  catalog work, and the TUI's modules join D30b's module split when the catalog work starts, so no string is
+  unowned. A TUI that ships before the catalog is not a localization defect, it is the v1 scope D79 ruled.
+  [SPEC: docs/spec/cli.md, docs/spec/tui.md, docs/spec/localization.md]
 - [ ] **D14 — BLOCKED by D13.** Add `ratatui::TestBackend` snapshots and coverage of `--tui` as an opt-in mode: no TUI
   without the flag, non-TTY behavior, `--list` and the non-root `sudo` line. [SPEC: docs/spec/cli.md,
   docs/spec/tui.md, docs/spec/testing.md]
@@ -391,15 +396,15 @@ Shared acceptance, inherited by every entry here and not restated: docs/spec/loc
   No dependency change after D30a.
 
 - [ ] **D30a — DEFERRED by D79, not v1.** The Fluent mechanism, the dependency, and the English catalog
-  for the CLI surface. — [brief](docs/tasks/D30a.md)
-  [evidence](docs/history/m5.md#d30a)
+  for the CLI surface. — [evidence](docs/history/m5.md#d30a)
 
 - [ ] **D30b — BLOCKED by D30a.** the read-only path's messages — [brief](docs/tasks/D30b.md)
 
 - [ ] **D30c — BLOCKED by D30b.** the write path's messages, the harness, the closing whole-tree gate, and the write
   path's locale evidence — [brief](docs/tasks/D30c.md)
 
-- [ ] **D31 — the translations, in ordered groups.** One group is one PR. — [evidence](docs/history/m5.md#d31)
+- [ ] **D31 — DEFERRED by D79; the translations, in ordered groups.** One group is one PR. —
+  [evidence](docs/history/m5.md#d31)
 
 - [ ] **D31a — BLOCKED by D30c.** Lithuanian, the first translated catalog, as group 1 of D31; no group starts before
   D30c.
