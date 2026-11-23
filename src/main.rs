@@ -8566,10 +8566,6 @@ mod tests {
             true,
             Painter::plain(),
         );
-        let flat = line.replace('\n', " ");
-        assert!(
-            !flat.chars().any(char::is_control),
-            "raw control character in {line}"
-        );
+        assert_no_control(&[line]);
     }
 }

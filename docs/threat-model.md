@@ -415,9 +415,9 @@ What the design imposes now so D13 does not have to revisit it:
   range that `char::is_control` covers and a terminal may still honour: the recommendation line's URL, country
   and AS cell, the report rows, the detail block's country, AS name and redirect host, the closing line, the
   rejected note and sections, and the error and warning lines.
-  selected URI
-  (`:2547`), a rejected entry echoed in a note (`rejected_note` at `:3283`, printed at `:3313`), and error or
-  warning text that carries a URL (`:2265`, `:3490`).
+  The four paths are the report (`src/main.rs:771–773`), the closing line of a write, which interpolates the
+  selected URI (`:2547`), a rejected entry echoed in a note (`rejected_note` at `:3283`, printed at `:3313`), and
+  error or warning text that carries a URL (`:2265`, `:3490`).
   The unit tests cover the paths whose text the run builds itself; what is left is the end-to-end proof, and a
   container case needs an injectable list source that does not exist yet, which is D90.
 
