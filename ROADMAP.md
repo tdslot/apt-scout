@@ -310,8 +310,8 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
   the reviewer now demands the mutation named — [evidence](docs/history/m2.md#d53)
 - [x] **D89 — DONE.** `escape::control_free` rewrites every control character on the four paths B7 names
   (`docs/threat-model.md:418`) and on the sites the audit found beyond them, and covers every Unicode 
-  `Cc` character, not ASCII alone. Fourteen tests cover it, five on the helper and nine on the print sites, and a
-  container case proves it end to end: a served list whose URL carries `ESC` reaches the rejection note as text,
+  `Cc` character, not ASCII alone. Tests pin the helper and every print site, and the escaping case proves it
+  end to end: a served list whose URL carries `ESC` reaches the rejection note as text,
   with zero raw control bytes in the output. Merged as #121 (`e55a426`) and #125 (PLACEHOLDER).
   — [evidence](docs/history/backlog.md#d89)
 - [x] **D90 — DONE.** The seam is a second `#[cfg(apt_scout_write_harness)]` case, `__write-harness escaped-list`:
@@ -320,6 +320,15 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
   S16 of the record, so no fourth environment read was needed. Case 17 of `scripts/docker-test.sh` runs it in
   `ubuntu:24.04` offline and fails on one raw control byte; with the escape removed it finds exactly one.
   `TEST-10` states it. Merged as #125 (PLACEHOLDER). — [evidence](docs/history/backlog.md#d90)
+- [x] **D91 — DONE.** Five tests pin the four sites the reviewer named on #121: the geolocation note, the
+  fallback list warning, the `error:` line, and every sources-section row that interpolates a path, a host or a
+  reason. The sixth row kind, an empty inventory, interpolates nothing and so carries nothing to pin. Three builders
+  were extracted (`geolocation_note`, `fallback_warning`, `error_line`) so each prints through a
+  function a test can call. `TEST-9` states the rule that keeps it: the count of `escape::control_free` sites
+  is asserted by a test, so a new site fails the suite until it is covered. Nine mutations were run, each failing the
+  suite, including the count-preserving one the review used to find the row this fixture had missed. Six sites
+  elsewhere in `src/main.rs` are escaped and still unpinned, which is **D92**. Merged as #123 (`1f02289`).
+  — [evidence](docs/history/backlog.md#d91)
 - [ ] **D92 — READY; six escapes no test pins.** `plan_changes` prints the new file bytes and both
   URIs, `run` prints the Team Cymru failure, the reference-read warning and the `nothing to change` line
   with the best URL. Each escape is correct and each can be undone with the suite green, which is the half of
