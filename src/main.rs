@@ -3,6 +3,7 @@ mod countries;
 mod cymru;
 mod digest;
 mod distro;
+mod escape;
 mod fresh;
 mod geo;
 #[cfg(apt_scout_write_harness)]
@@ -676,8 +677,9 @@ fn touched_line(touched: &apply::Touched) -> String {
 fn write_closing_block(touched: &[apply::Touched], uri: &str) -> String {
     let paths: Vec<String> = touched.iter().map(touched_path).collect();
     format!(
-        "\nchanged {}: every eligible official archive URI in those files now points at {uri}.\n{}",
+        "\nchanged {}: every eligible official archive URI in those files now points at {}.\n{}",
         paths.join(", "),
+        escape::control_free(uri),
         next_step_hint()
     )
 }
@@ -1599,7 +1601,7 @@ fn ranked_rows(rows: &[Row], ink: Painter) -> Vec<String> {
         let mut line = format!(
             "  {:>2}  {:<44.44} {:>6} {:>10} {:>9}",
             i + 1,
-            row.url,
+            escape::control_free(row.url),
             format!("{}m", row.lag_secs / 60),
             format!("{:.1} MB/s", row.throughput_bps as f64 / 1e6),
             format!("{} ms", row.latency_ms)
@@ -1819,8 +1821,8 @@ fn rejected_section(rejected: &[Rejected], ink: Painter) -> Vec<String> {
         std::collections::BTreeMap::new();
     for r in rejected {
         let item = match r.kind {
-            Reject::Stale(secs) => format!("{} ({} h)", r.host, secs / 3600),
-            _ => r.host.clone(),
+            Reject::Stale(secs) => format!("{} ({} h)", escape::control_free(&r.host), secs / 3600),
+            _ => escape::control_free(&r.host),
         };
         groups.entry(r.kind.label()).or_default().push(item);
     }
@@ -1841,9 +1843,9 @@ fn rejected_detail(rejected: &[Rejected], ink: Painter) -> Vec<String> {
     for r in rejected {
         out.push(ink.red(&format!(
             "  {:<40} {:<17} {}",
-            r.host,
+            escape::control_free(&r.host),
             r.kind.label(),
-            r.why
+            escape::control_free(&r.why)
         )));
     }
     out
@@ -1879,7 +1881,7 @@ fn detail_section(
 ) -> Vec<String> {
     let mut out = vec![ink.accent_bold("Detail")];
     for (i, row) in rows.iter().enumerate() {
-        out.push(format!("  {}  {}", i + 1, row.url));
+        out.push(format!("  {}  {}", i + 1, escape::control_free(row.url)));
         let detail = details.get(row.url);
         let found = resolved.get(row.url);
         let country = detail.map_or("unknown", |d| d.country.as_str());
@@ -2263,7 +2265,8 @@ fn run() -> Result<u8, (u8, String)> {
             // share one (docs/spec/output.md).
             progress.clear();
             eprintln!(
-                "warning: cannot read the reference release from {REFERENCE}: {e}. Using the newest mirror date as the baseline instead, so lag is relative to the best candidate."
+                "warning: cannot read the reference release from {REFERENCE}: {}. Using the newest mirror date as the baseline instead, so lag is relative to the best candidate.",
+                escape::control_free(&e.to_string())
             );
             None
         }
@@ -2544,7 +2547,10 @@ fn run() -> Result<u8, (u8, String)> {
             }
             match plan.authority() {
                 plan::Authority::Mirror { uri, .. } => {
-                    println!("{}", write_closing_block(&outcome.touched, uri))
+                    println!(
+                        "{}",
+                        write_closing_block(&outcome.touched, uri)
+                    )
                 }
                 // A restore plan has no mirror URI: `run_restore` prints its own block and never
                 // reaches this match with a restore plan.
@@ -3287,7 +3293,11 @@ fn rejected_note(list: &str, rejected: &[String]) -> Option<String> {
     Some(format!(
         "warning: {list} names {} mirror URL(s) that cannot make an apt source rewritable, so they are left out of that set: {}",
         rejected.len(),
-        rejected.join(", ")
+        rejected
+            .iter()
+            .map(|u| escape::control_free(u))
+            .collect::<Vec<_>>()
+            .join(", ")
     ))
 }
 
@@ -3443,7 +3453,7 @@ fn load_candidates(
             if !found.is_empty() {
                 notes.push(format!(
                     "warning: {}. Using {url} instead (its URLs come over plain HTTP, so they are unverified).",
-                    failures.join("; ")
+                    escape::control_free(&failures.join("; "))
                 ));
                 return Ok(LoadedCandidates {
                     found,
@@ -3487,7 +3497,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => ExitCode::from(code),
         Err((code, msg)) => {
-            eprintln!("error: {msg}");
+            eprintln!("error: {}", escape::control_free(&msg));
             ExitCode::from(code)
         }
     }
@@ -8405,5 +8415,47 @@ mod tests {
             done_line(0, 0, Duration::from_millis(40)),
             "done — 0 usable, 0 rejected in 0.0 s"
         );
+    }
+
+    #[test]
+    fn the_closing_line_of_a_write_escapes_the_uri_it_interpolates() {
+        let touched = Vec::new();
+        let line = write_closing_block(&touched, "http://m.example/\u{1b}[31mubuntu");
+        let flat = line.replace('\n', " ");
+        assert!(
+            !flat.chars().any(char::is_control),
+            "raw control character in {line}"
+        );
+        assert!(
+            line.contains("\\x1b"),
+            "the escape is not spelled out: {line}"
+        );
+    }
+
+    #[test]
+    fn the_rejected_note_escapes_every_url_it_lists() {
+        let url = "http://m.example/\u{1b}]8;;http://evil/\u{7}";
+        let note = rejected_note("Launchpad", &[url.to_string()]).expect("a note");
+        assert!(
+            !note.chars().any(char::is_control),
+            "raw control character in {note}"
+        );
+        assert!(note.contains("\\x1b") && note.contains("\\x07"));
+    }
+
+    #[test]
+    fn the_rejected_section_escapes_a_host_taken_from_a_url() {
+        let rejected = vec![Rejected {
+            host: "m.example\u{1b}[2J".to_string(),
+            kind: Reject::Other("bad host".to_string()),
+            why: "no".to_string(),
+        }];
+        let lines = rejected_section(&rejected, Painter::plain());
+        for line in &lines {
+            assert!(
+                !line.chars().any(char::is_control),
+                "raw control character in {line}"
+            );
+        }
     }
 }

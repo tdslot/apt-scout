@@ -308,13 +308,19 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
 - [x] **D53 — DONE.** The rule is `TEST-1`: an assertion compares a value with an expectation that does not
   derive from the same expression, and a changed test is shown to fail. What was missing was enforcement, and
   the reviewer now demands the mutation named — [evidence](docs/history/m2.md#d53)
-- [ ] **D89 — READY; v1 security work, independent of the TUI.** Escape what a root run prints: replace control
-  characters in every mirror-derived string on the four paths B7 names (`docs/threat-model.md:371`), so a mirror
-  cannot write an escape sequence into a terminal root prints to. Acceptance: a unit test per path feeds a string
-  containing `ESC` and asserts the printed line carries no control character; the container matrix gains one case
-  that prints a rejected entry built from a URL with an escape in it and greps the output for the raw byte; the PR
-  states the mutation each test survives (TEST-1). No new dependency is expected: the escape table is a small map.
+- [ ] **D89 — PARTIAL; the escaping ships, its end-to-end case does not.** `escape::control_free` rewrites every
+  control character on the four paths B7 names (`docs/threat-model.md:415`), and four unit tests cover them: the
+  helper, the closing line, the rejected note and the rejected section.
+  What is missing is the container half of the acceptance: reaching a mirror string end to end needs a list source
+  that can be injected, and none exists — the tool fetches Launchpad and `mirrors.ubuntu.com` and nothing else. That
+  seam is **D90**; until it lands the escaping is proven by unit tests and by the record, not by a container run.
   [SPEC: docs/spec/output.md, docs/threat-model.md] — [brief](docs/tasks/D89.md)
+- [ ] **D90 — READY; the seam D89's container case needs.** Let a test choose the mirror list the run reads, without
+  adding a product flag: an injected `Fetch` in unit tests already exists, so the container case needs the binary to
+  accept one source at run time. Decide whether that is a `#[cfg(apt_scout_write_harness)]` subcommand beside the
+  write harness or a test-only environment read, and rule it in `docs/spec/` first, because a fourth environment read
+  contradicts the record's inventory.
+  [SPEC: docs/spec/testing.md, docs/spec/non-functional.md]
 - [x] **D12 — DONE.** — [evidence](docs/history/m2.md#d12)
 
 - [x] **D57 — DONE.** — [evidence](docs/history/m2.md#d57)
