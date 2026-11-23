@@ -56,7 +56,7 @@ const SECURITY_SOURCES: &[u8] =
     b"Types: deb\nURIs: http://archive.ubuntu.com/ubuntu\nSuites: noble-security\nComponents: main universe\n";
 
 /// Every case this build implements; the dispatch in `main` has one arm per entry.
-const CASES: [&str; 9] = [
+const CASES: [&str; 10] = [
     "selftest",
     "apply",
     "apply-pop",
@@ -66,6 +66,7 @@ const CASES: [&str; 9] = [
     "stale",
     "digest-mismatch",
     "prefixed",
+    "escaped-list",
 ];
 
 /// The names `hostile-names` hands the real parsers: the last one must be accepted, the rest not.
@@ -108,6 +109,52 @@ const PAUSE_FAILED: u8 = 97;
 /// Set by the `apply-pause` case only, before `apply::apply` runs.
 static PAUSE_ENABLED: AtomicBool = AtomicBool::new(false);
 
+/// The list the escaping case serves: a Launchpad-style page whose only mirror URL carries a control
+/// character, the text the run did not author and must not print raw.
+///
+/// The entry fails `mirrors::validate_url`, so nothing is probed and nothing is written: the URL reaches
+/// the rejection note, which is a print site, and the case asserts no raw control byte follows it.
+const ESCAPED_LIST: &str = "<table><tr><th colspan=\"2\">Lithuania</th></tr><tr>\n<td><a href=\"/ubuntu/+mirror/m.example-archive\">m.example</a></td>\n<td><a href=\"http://m.example/ubuntu/\x1b[2J\">http</a></td></tr></table>";
+
+/// The list source for the escaping case: one page, served from the constant above.
+struct EscapedList;
+
+impl crate::http::Fetch for EscapedList {
+    fn get(
+        &self,
+        url: &str,
+        _max: u64,
+        _range: Option<(u64, u64)>,
+    ) -> Result<crate::http::Fetched, crate::http::HttpError> {
+        if url != crate::LAUNCHPAD {
+            return Err(crate::http::HttpError::Transport(
+                "no canned answer".into(),
+                url.into(),
+            ));
+        }
+        Ok(crate::http::Fetched {
+            body: ESCAPED_LIST.as_bytes().to_vec(),
+            elapsed: Duration::from_millis(1),
+            ttfb: Duration::from_millis(1),
+            final_url: url.into(),
+        })
+    }
+}
+
+/// Print what the run says about a list whose URL carries a control character, and nothing else.
+fn escaped_list() -> Result<String, Fault> {
+    let mut notes = Vec::new();
+    let loaded = crate::load_candidates(&EscapedList, None, false, false, &mut notes);
+    let mut out = notes.join("\n");
+    if let Ok(loaded) = loaded {
+        out.push_str(&format!(
+            "\nsource: {} ({} candidates)",
+            loaded.source,
+            loaded.found.len()
+        ));
+    }
+    Ok(out)
+}
 /// Run one case, or return `None` when this is not a harness invocation.
 ///
 /// `None` is what keeps a plain build honest: there `__write-harness` is an ordinary argument and
@@ -128,6 +175,7 @@ pub fn main(args: Vec<String>) -> Option<ExitCode> {
         "stale" => write_case(Case::Stale),
         "digest-mismatch" => digest_mismatch(),
         "prefixed" => prefixed(),
+        "escaped-list" => escaped_list(),
         _ => {
             eprintln!(
                 "error: unknown write-harness case '{name}'; cases are {}",

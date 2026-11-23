@@ -344,6 +344,22 @@ else
   fail "man page -> missing from the page: $(echo $missing); documented but unplanned: $(echo $unplanned)"
 fi
 
+
+# 17. The escaping case (docs/spec/testing.md TEST-9, docs/threat-model.md B7): a mirror URL carrying a
+# control character, served from the list source the harness build compiles in, must reach the rejection
+# note as visible text and never as a raw byte. The plain build answers `__write-harness` with the
+# unknown-option error, so this case is what proves the text is escaped where the run prints it, not that
+# the URL is rejected: `mirrors::validate_url` does that first, and its own test covers it.
+got=$(wrun ubuntu:24.04 /apt-scout __write-harness escaped-list 2>&1) || true
+if printf '%s' "$got" | LC_ALL=C grep -q "$(printf '\033')"; then
+  fail "escaping -> a raw control byte reached the output: $(printf '%s' "$got" | cat -v | head -2)"
+elif [ -z "$got" ]; then
+  fail "escaping -> the harness printed nothing, so the case proves nothing"
+elif printf '%s' "$got" | grep -q 'cannot make an apt source rewritable'; then
+  pass "escaping -> a control character in a mirror URL prints as text, never as a raw byte"
+else
+  fail "escaping -> the note the case expects is missing: $(printf '%s' "$got" | head -3)"
+fi
 fi # end of the read-only cases: skipped only by --write-only
 
 # --- Write cases ------------------------------------------------------------------------------
