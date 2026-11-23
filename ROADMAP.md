@@ -309,17 +309,18 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
   derive from the same expression, and a changed test is shown to fail. What was missing was enforcement, and
   the reviewer now demands the mutation named — [evidence](docs/history/m2.md#d53)
 - [x] **D89 — DONE.** `escape::control_free` rewrites every control character on the four paths B7 names
-  (`docs/threat-model.md:418`) and on the sites the audit found beyond them, and covers every Unicode 
-  `Cc` character, not ASCII alone. Tests pin the helper and every print site, and the escaping case proves it
-  end to end: a served list whose URL carries `ESC` reaches the rejection note as text,
-  with zero raw control bytes in the output. Merged as #121 (`e55a426`) and #125 (PLACEHOLDER).
-  — [evidence](docs/history/backlog.md#d89)
+  (`docs/threat-model.md:418`) and on the sites the audit found beyond them, and covers every Unicode `Cc`
+  character, not ASCII alone. Tests pin the helper, the four paths and the sites D91 added; six other call sites are
+  escaped and unpinned, which is **D92**. The escaping case proves it end to end: a served list whose URL carries
+  `ESC` reaches the rejection note as text, with zero raw control bytes in the output. Merged as #121 (`e55a426`)
+  and #125 (#TBD). — [evidence](docs/history/backlog.md#d89)
 - [x] **D90 — DONE.** The seam is a second `#[cfg(apt_scout_write_harness)]` case, `__write-harness escaped-list`:
-  it serves a Launchpad page from an `include`-style constant, runs the real `load_candidates` against it and prints
-  what the run says. No environment read and no path, which is the harness doctrine already in `src/harness.rs` and
-  S16 of the record, so no fourth environment read was needed. Case 17 of `scripts/docker-test.sh` runs it in
-  `ubuntu:24.04` offline and fails on one raw control byte; with the escape removed it finds exactly one.
-  `TEST-10` states it. Merged as #125 (PLACEHOLDER). — [evidence](docs/history/backlog.md#d90)
+  it serves a Launchpad page from a constant compiled into the binary, runs the real `load_candidates` against
+  it and prints what the run says. No environment read and no path, which is the harness doctrine already in
+  `src/harness.rs` and S16 of the record, so no fourth environment read was needed. Case 17 of
+  `scripts/docker-test.sh` runs it in `ubuntu:24.04` offline and fails on a raw control byte or on the
+  character being absent; two mutations were run to prove both halves. `TEST-10` states it. Merged as #125 (#TBD).
+  — [evidence](docs/history/backlog.md#d90)
 - [x] **D91 — DONE.** Five tests pin the four sites the reviewer named on #121: the geolocation note, the
   fallback list warning, the `error:` line, and every sources-section row that interpolates a path, a host or a
   reason. The sixth row kind, an empty inventory, interpolates nothing and so carries nothing to pin. Three builders

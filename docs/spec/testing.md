@@ -113,4 +113,3 @@ Network answers in automated tests are otherwise injected from fixtures.
   visible text: a `--cfg apt_scout_write_harness` build MUST serve a list whose URL carries one, print what the run
   says about it, and the case MUST fail on a raw control byte in that output. `mirrors::validate_url` rejects such
   a URL before it is probed, so the case proves the escaping at the print site and not the rejection.
-
