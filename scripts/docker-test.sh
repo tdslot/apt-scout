@@ -295,7 +295,7 @@ for v in 20.04 22.04 24.04 26.04; do
   if [ $# -gt 0 ]; then case " $* " in *" $v "*) ;; *) continue ;; esac; fi
   got=$(docker run --rm --network bridge --platform "$platform" \
     -v "$PWD/man/apt-scout.1":/usr/share/man/man1/apt-scout.1:ro ubuntu:$v \
-    sh -c 'man apt-scout >/tmp/page 2>&1; rc=$?; grep -q SYNOPSIS /tmp/page || { apt-get update -qq >/dev/null 2>&1; apt-get install -y -qq man-db >/dev/null 2>&1; rm -f /usr/bin/man; dpkg-divert --local --rename --remove /usr/bin/man >/dev/null 2>&1; apt-get install -y -qq --reinstall man-db >/dev/null 2>&1; man apt-scout >/tmp/page 2>&1; rc=$?; }; echo; echo rc=$rc' 2>&1) || true
+    sh -c 'man apt-scout >/tmp/page 2>&1; rc=$?; grep -q SYNOPSIS /tmp/page || { apt-get update -qq >/dev/null 2>&1; apt-get install -y -qq man-db >/dev/null 2>&1; rm -f /usr/bin/man; dpkg-divert --local --rename --remove /usr/bin/man >/dev/null 2>&1; apt-get install -y -qq --reinstall man-db >/dev/null 2>&1; man apt-scout >/tmp/page 2>&1; rc=$?; }; cat /tmp/page; echo rc=$rc' 2>&1) || true
   if printf '%s\n' "$got" | grep -qx 'rc=0' && [[ "$got" == *NAME* ]] && [[ "$got" == *SYNOPSIS* ]] \
     && [[ "$got" == *'find a fresh, fast Ubuntu archive mirror'* ]]; then
     pass "ubuntu:$v -> the man page renders with NAME and SYNOPSIS"
@@ -330,7 +330,7 @@ if [ "$rc" != 0 ] || [ -z "$help_flags" ]; then
   fail "man page -> could not read --help from the container (rc=$rc)"
   page_flags=; missing=; unplanned=
 else
-page_flags=$(sed -n '/^\.SH OPTIONS/,/^\.SH /p' man/apt-scout.1 | sed 's/\\-/-/g' | grep -o -- '--[a-z-]\+' | sort -u)
+page_flags=$(sed -n '/^\.SH OPTIONS/,/^\.SH /p' man/apt-scout.1 | sed 's/\\-/-/g' | grep -o -- '--[a-z-]\+' | sort -u) || true
 missing=$(comm -23 <(printf '%s\n' "$help_flags") <(printf '%s\n' "$page_flags"))
 extra=$(comm -13 <(printf '%s\n' "$help_flags") <(printf '%s\n' "$page_flags"))
 planned=$'--refresh\n--tui'

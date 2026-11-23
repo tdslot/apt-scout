@@ -1986,10 +1986,11 @@ fn sources_section(root: &Path, inventory: &sources::Inventory, ink: Painter) ->
         for entry in &file.entries {
             if entry.uris.is_empty() {
                 out.push(format!(
-                    "  {path:<40}  {:<7}  line {}  {}",
+                    "  {:<40}  {:<7}  line {}  {}",
+                    escape::control_free(&path),
                     "skip",
                     entry.line,
-                    entry.issue.as_deref().unwrap_or("no URI")
+                    escape::control_free(entry.issue.as_deref().unwrap_or("no URI"))
                 ));
                 continue;
             }
