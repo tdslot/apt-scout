@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 usage() {
   echo "Usage: scripts/docker-test.sh [--build-only | --write-only] [ubuntu-version ...]"
   echo
-  echo "  (no mode)           build both binaries, run the sixteen read-only cases, then the write cases"
+  echo "  (no mode)           build both binaries, run the seventeen read-only cases, then the write cases"
   echo "  --build-only        build both binaries, print their digests, run no case"
   echo "  --write-only        build both binaries, then run only the write cases"
   echo "  ubuntu-version ...  limit the Ubuntu loops to these versions (default: all four)"
@@ -84,7 +84,7 @@ echo "HARNESS $(sha256sum target/docker/apt-scout-harness | cut -d' ' -f1)"
 if [ "$mode" = build ]; then exit 0; fi
 # The cfg build leaves its own artifact in the build directory, so the plain copy is what every
 # read-only case below mounts: pointing `bin` at the build directory would silently run the harness
-# in all sixteen of them.
+# in all seventeen of them.
 bin=target/docker/apt-scout-plain
 
 # Pull every image first so `docker run` prints only the program's output (a fresh runner would
@@ -164,7 +164,7 @@ if [ -e /var/backups/apt-scout ]; then echo backups=yes; else echo backups=no; f
 cat /tmp/out"
 }
 
-# --write-only skips the sixteen read-only cases below, which read and never write: the write
+# --write-only skips the seventeen read-only cases below, which read and never write: the write
 # cases run in both modes, so a write case's result never depends on which mode started it.
 if [ "$mode" != write ]; then
 # 1. Offline: the release codename is detected on every supported Ubuntu, and geolocation fails
@@ -345,20 +345,23 @@ else
 fi
 
 
-# 17. The escaping case (docs/spec/testing.md TEST-9, docs/threat-model.md B7): a mirror URL carrying a
+# 17. The escaping case (docs/spec/testing.md TEST-10, docs/threat-model.md B7): a mirror URL carrying a
 # control character, served from the list source the harness build compiles in, must reach the rejection
-# note as visible text and never as a raw byte. The plain build answers `__write-harness` with the
-# unknown-option error, so this case is what proves the text is escaped where the run prints it, not that
-# the URL is rejected: `mirrors::validate_url` does that first, and its own test covers it.
+# note as visible text and never as a raw byte. It proves the escaping, not the rejection: `mirrors::
+# validate_url` rejects such a URL before anything is probed, and its own test covers that.
 got=$(wrun ubuntu:24.04 /apt-scout __write-harness escaped-list 2>&1) || true
 if printf '%s' "$got" | LC_ALL=C grep -q "$(printf '\033')"; then
   fail "escaping -> a raw control byte reached the output: $(printf '%s' "$got" | cat -v | head -2)"
 elif [ -z "$got" ]; then
   fail "escaping -> the harness printed nothing, so the case proves nothing"
-elif printf '%s' "$got" | grep -q 'cannot make an apt source rewritable'; then
-  pass "escaping -> a control character in a mirror URL prints as text, never as a raw byte"
-else
+elif ! printf '%s' "$got" | grep -q 'cannot make an apt source rewritable'; then
   fail "escaping -> the note the case expects is missing: $(printf '%s' "$got" | head -3)"
+elif ! printf '%s' "$got" | grep -qF '\x1b[2J'; then
+  # A run that dropped the control character would also print no raw byte, so the spelling is the check
+  # that the character reached the output as text rather than vanishing.
+  fail "escaping -> the control character is not in the output at all: $(printf '%s' "$got" | head -3)"
+else
+  pass "escaping -> a control character in a mirror URL prints as \\x1b[2J, never as a raw byte"
 fi
 fi # end of the read-only cases: skipped only by --write-only
 
