@@ -1957,6 +1957,31 @@ fn utc_stamp(secs: i64) -> String {
 /// skip, with the reason (docs/spec/apply.md: report each inspected file and each skipped entry). One
 /// line per file and per URI, so the section is a list, not a paragraph. Paths are relative to the
 /// apt root named in the title, which keeps the list narrow and unambiguous.
+/// The note a failed Team Cymru lookup prints: the resolver answer, escaped.
+fn as_lookup_note(text: &str) -> String {
+    format!(
+        "note: server AS lookup via Team Cymru DNS failed: {}",
+        escape::control_free(text)
+    )
+}
+
+/// The warning a run prints when the reference release cannot be read, escaped at the boundary.
+fn reference_warning(text: &str) -> String {
+    format!(
+        "warning: cannot read the reference release from {REFERENCE}: {}. Using the newest mirror date as the 
+baseline instead, so lag is relative to the best candidate.",
+        escape::control_free(text)
+    )
+}
+
+/// The line a run prints when the apt sources already point at the best mirror, escaped.
+fn nothing_to_change_line(url: &str) -> String {
+    format!(
+        "  nothing to change: the apt sources already point at {}",
+        escape::control_free(url)
+    )
+}
+
 /// The geolocation note, with the source's answer escaped at the boundary that owns the string.
 fn geolocation_note(text: &str) -> String {
     format!("note: geolocation: {}", escape::control_free(text))
@@ -2055,6 +2080,16 @@ fn skip_reason(entry: &sources::Entry) -> String {
         .unwrap_or_else(|| "not an official Ubuntu archive mirror host".to_string())
 }
 
+/// One line of the planned diff, escaped where it is built: the bytes of a new file and the URIs of a
+/// rewrite both carry text this run did not author.
+fn added_line(text: &str, ink: Painter) -> String {
+    ink.green(&format!("    + {}", escape::control_free(text)))
+}
+
+fn removed_line(text: &str, ink: Painter) -> String {
+    ink.red(&format!("    - {}", escape::control_free(text)))
+}
+
 /// The change a write would make, per target: the old URI and the new one. URI pairs rather than
 /// file lines, because the one thing that changes is the URI, and a long `sources.list` diff buries
 /// it (docs/spec/apply.md: the old URI and the new one, the files it will change).
@@ -2070,7 +2105,7 @@ fn plan_changes(
         if write.effect == plan::Effect::Create {
             out.push(format!("  {relative}  (new file, mode 0600)"));
             for line in String::from_utf8_lossy(&write.new_bytes).lines() {
-                out.push(ink.green(&format!("    + {}", escape::control_free(line))));
+                out.push(added_line(line, ink));
             }
             continue;
         }
@@ -2081,12 +2116,10 @@ fn plan_changes(
                 for (uri, rewritable) in entry.uris.iter().zip(&entry.rewritable) {
                     if *rewritable {
                         out.push(format!("  {relative}:{}", entry.line));
-                        out.push(ink.red(&format!("    - {}", escape::control_free(uri))));
+                        out.push(removed_line(uri, ink));
                         match plan.authority() {
                             plan::Authority::Mirror { uri, .. } => {
-                                out.push(
-                                    ink.green(&format!("    + {}", escape::control_free(uri))),
-                                );
+                                out.push(added_line(uri, ink));
                             }
                             // A restore plan carries bytes and no mirror URI: `run_restore` prints
                             // its own block, and a restore never reaches this diff.
@@ -2180,10 +2213,7 @@ fn run() -> Result<u8, (u8, String)> {
         if let (None, Some(ip)) = (&geo.asn, geo.ip.as_deref().and_then(|i| i.parse().ok())) {
             match cymru::lookup(ip) {
                 Ok(asn) => geo.asn = Some(asn),
-                Err(e) => eprintln!(
-                    "note: server AS lookup via Team Cymru DNS failed: {}",
-                    escape::control_free(&e.to_string())
-                ),
+                Err(e) => eprintln!("{}", as_lookup_note(&e.to_string())),
             }
         }
     }
@@ -2314,10 +2344,7 @@ fn run() -> Result<u8, (u8, String)> {
             // A warning keeps its own line: the live progress line is erased first, so the two never
             // share one (docs/spec/output.md).
             progress.clear();
-            eprintln!(
-                "warning: cannot read the reference release from {REFERENCE}: {}. Using the newest mirror date as the baseline instead, so lag is relative to the best candidate.",
-                escape::control_free(&e.to_string())
-            );
+            eprintln!("{}", reference_warning(&e.to_string()));
             None
         }
     };
@@ -2539,10 +2566,7 @@ fn run() -> Result<u8, (u8, String)> {
                     ));
                     pending = Some(plan);
                 }
-                None => planned.push(format!(
-                    "  nothing to change: the apt sources already point at {}",
-                    escape::control_free(&best.url)
-                )),
+                None => planned.push(nothing_to_change_line(&best.url)),
             },
             // A refused plan names the entries it refused, so there is nothing left to list; a
             // `--list` run reports it and still exits 0 (docs/spec/cli.md table).
@@ -8659,7 +8683,7 @@ mod tests {
     /// A new print site bumps the number and, with it, this test: the developer either pins the new site
     /// with a test or records why it carries no foreign text. The number is the check, not a claim in prose:
     /// `rg -o 'escape::control_free\(' src/main.rs | wc -l` prints it.
-    const ESCAPE_SITES: usize = 37;
+    const ESCAPE_SITES: usize = 36;
 
     /// The tests that pin those sites, by name, so a rename or a deletion is caught here.
     const PINNING_TESTS: &[&str] = &[
@@ -8676,6 +8700,8 @@ mod tests {
         "the_rejected_section_escapes_a_stale_host_as_well",
         "the_verbose_rejection_line_escapes_the_reason_it_quotes",
         "the_as_note_escapes_the_reason_it_quotes",
+        "the_planned_diff_escapes_the_bytes_and_both_uris_it_prints",
+        "the_as_lookup_note_reference_warning_and_nothing_to_change_line_escape",
     ];
 
     #[test]
@@ -8752,6 +8778,33 @@ mod tests {
         assert_no_control(std::slice::from_ref(&line));
         assert!(line.starts_with("error: "), "{line}");
     }
+    #[test]
+    fn the_planned_diff_escapes_the_bytes_and_both_uris_it_prints() {
+        let line = added_line(
+            "deb http://m.example/ubuntu/\u{1b}[2J noble main",
+            Painter::plain(),
+        );
+        let old = removed_line("http://m.example/ubuntu/\u{1b}[2J", Painter::plain());
+        let new = added_line("http://m.example/ubuntu/\u{1b}[2J", Painter::plain());
+        assert_no_control(&[line.clone(), old.clone(), new.clone()]);
+        assert!(line.starts_with("    + "), "{line}");
+        assert!(old.starts_with("    - "), "{old}");
+    }
+
+    #[test]
+    fn the_as_lookup_note_reference_warning_and_nothing_to_change_line_escape() {
+        let note = as_lookup_note("cannot resolve m.example\u{1b}[2J");
+        let warning = reference_warning("connection reset\u{9b}2J");
+        let line = nothing_to_change_line("http://m.example/ubuntu/\u{1b}[2J");
+        assert_no_control(&[note.clone(), warning.clone(), line.clone()]);
+        assert!(note.starts_with("note: server AS lookup"), "{note}");
+        assert!(
+            warning.starts_with("warning: cannot read the reference"),
+            "{warning}"
+        );
+        assert!(line.contains("nothing to change"), "{line}");
+    }
+
     #[test]
     fn the_as_note_escapes_the_reason_it_quotes() {
         let row = Row {

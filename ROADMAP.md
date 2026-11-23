@@ -330,11 +330,12 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
   suite, including the count-preserving one the review used to find the row this fixture had missed. Six sites
   elsewhere in `src/main.rs` are escaped and still unpinned, which is **D92**. Merged as #123 (`1f02289`).
   — [evidence](docs/history/backlog.md#d91)
-- [ ] **D92 — READY; six escapes no test pins.** `plan_changes` prints the new file bytes and both
-  URIs, `run` prints the Team Cymru failure, the reference-read warning and the `nothing to change` line
-  with the best URL. Each escape is correct and each can be undone with the suite green, which is the half of
-  `TEST-9` that the counting test cannot see. Merge the first two through a builder so a fixture can reach them, then
-  move `TEST-9` from `partial:` to implemented. [SPEC: docs/spec/testing.md] — [brief](docs/tasks/D92.md)
+- [x] **D92 — DONE.** The six sites the review of #123 found are pinned. Three builders came first, because a
+  print inside `run` cannot be called from a test: `as_lookup_note`, `reference_warning` and
+  `nothing_to_change_line`; and two for the planned diff, `added_line` and `removed_line`, which carry
+  the new file bytes and both URIs. Five mutations were run, each failing the test that covers it, and `ESCAPE_SITES`
+  moved from 37 to 36 because two call sites became one builder each. `TEST-9` and `OUT-12` are implemented now
+  that nothing is escaped and unpinned. Merged as #127 (PLACEHOLDER). — [evidence](docs/history/backlog.md#d92)
 - [x] **D12 — DONE.** — [evidence](docs/history/m2.md#d12)
 
 - [x] **D57 — DONE.** — [evidence](docs/history/m2.md#d57)
