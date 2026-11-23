@@ -1968,11 +1968,19 @@ fn sources_section(root: &Path, inventory: &sources::Inventory, ink: Painter) ->
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| file.path.display().to_string());
         if let Some(issue) = &file.issue {
-            out.push(format!("  {path:<40}  {:<7}  {issue}", "skip"));
+            out.push(format!(
+                "  {:<40}  {:<7}  {}",
+                escape::control_free(&path),
+                "skip",
+                escape::control_free(issue)
+            ));
             continue;
         }
         if file.entries.is_empty() {
-            out.push(format!("  {path:<40}  no active entries"));
+            out.push(format!(
+                "  {:<40}  no active entries",
+                escape::control_free(&path)
+            ));
             continue;
         }
         for entry in &file.entries {
@@ -2146,7 +2154,10 @@ fn run() -> Result<u8, (u8, String)> {
         if let (None, Some(ip)) = (&geo.asn, geo.ip.as_deref().and_then(|i| i.parse().ok())) {
             match cymru::lookup(ip) {
                 Ok(asn) => geo.asn = Some(asn),
-                Err(e) => eprintln!("note: server AS lookup via Team Cymru DNS failed: {e}"),
+                Err(e) => eprintln!(
+                    "note: server AS lookup via Team Cymru DNS failed: {}",
+                    escape::control_free(&e.to_string())
+                ),
             }
         }
     }
