@@ -306,7 +306,7 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
   derive from the same expression, and a changed test is shown to fail. What was missing was enforcement, and
   the reviewer now demands the mutation named — [evidence](docs/history/m2.md#d53)
 - [ ] **D89 — READY; v1 security work, independent of the TUI.** Escape what a root run prints: replace control
-  characters in every mirror-derived string on the four paths B7 names (`docs/threat-model.md:370`), so a mirror
+  characters in every mirror-derived string on the four paths B7 names (`docs/threat-model.md:371`), so a mirror
   cannot write an escape sequence into a terminal root prints to. Acceptance: a unit test per path feeds a string
   containing `ESC` and asserts the printed line carries no control character; the container matrix gains one case
   that prints a rejected entry built from a URL with an escape in it and greps the output for the raw byte; the PR

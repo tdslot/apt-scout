@@ -1224,7 +1224,7 @@ Recorded so nothing here is dropped silently; none of these is an open decision.
   Owner: D9, with no SPEC delta.
 - Root printing an unescaped mirror URL or error string into a terminal (B7) is only a hazard once root prints
   anything.
-The mitigation belongs to D89, not D9.
+  The mitigation belongs to D89, not D9.
 - `reader.join()` is unbounded after the timeout kill in the verifier (`src/verify.rs:294–313`), and the
   oversized-body case reports `Unavailable` rather than `Invalid`.
   Both stay in D6f's P2 list; neither changes what a write may trust.
