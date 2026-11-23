@@ -1968,8 +1968,7 @@ fn as_lookup_note(text: &str) -> String {
 /// The warning a run prints when the reference release cannot be read, escaped at the boundary.
 fn reference_warning(text: &str) -> String {
     format!(
-        "warning: cannot read the reference release from {REFERENCE}: {}. Using the newest mirror date as the 
-baseline instead, so lag is relative to the best candidate.",
+        "warning: cannot read the reference release from {REFERENCE}: {}. Using the newest mirror date as the baseline instead, so lag is relative to the best candidate.",
         escape::control_free(text)
     )
 }
@@ -8795,6 +8794,11 @@ mod tests {
     fn the_as_lookup_note_reference_warning_and_nothing_to_change_line_escape() {
         let note = as_lookup_note("cannot resolve m.example\u{1b}[2J");
         let warning = reference_warning("connection reset\u{9b}2J");
+        assert!(
+            !warning.contains("\n"),
+            "the warning is one line: a reflowed literal would print two",
+        );
+        assert!(warning.contains("as the baseline instead"),);
         let line = nothing_to_change_line("http://m.example/ubuntu/\u{1b}[2J");
         assert_no_control(&[note.clone(), warning.clone(), line.clone()]);
         assert!(note.starts_with("note: server AS lookup"), "{note}");
