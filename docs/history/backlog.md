@@ -33,3 +33,26 @@ The brief, kept from `docs/tasks/D89.md` before D85's rule deleted it, and what 
 PR #121, squash `e55a426`. Gates at the final head `4ad5413`: `cargo fmt --check`, `cargo clippy -D warnings`,
 `cargo test --locked` 320 + 3, `cargo deny check`, six green checks on that head, a reviewer verdict of OK and a
 security verdict of CLEAR, both naming that head.
+
+### D91
+
+The brief, kept from `docs/tasks/D91.md` before D85's rule deleted it, and what the work found.
+
+- Four sites escaped correctly and no test pinned them: the sources inventory section, the geolocation note, the
+  fallback list warning and `main`'s `error:` line. Deleting any escape left the suite green.
+- Three of them printed from inside `eprintln!` in a function that also did other work, so the escape could not be
+  called from a test at all. Each became a builder returning the line: `geolocation_note`, `fallback_warning`,
+  `error_line`. That is the durable part of this task: not the assertions, but moving the print text into a function
+  a test can reach.
+- The sources-section test needed a fixture whose *path* and whose per-entry reason carry a control character, which
+  is what makes each of its six rows fail when its own escape is removed. The first version of the fixture put the
+  control character only in the file-level issue, so three of the four escape calls could be deleted with the suite
+  still green — found by mutating each one, not by reading the test.
+- `TEST-9` states the guard: a test counts the `escape::control_free` call sites in `src/main.rs` and fails when the
+  count moves, so a new site is red until someone covers it or records why it carries no foreign text. The needle is
+  built with `concat!` so the test does not count its own source line.
+- Eight mutations were run and each failed the suite: the four builders' escapes, the file-level issue row, the
+  empty-uri row, the rewrite row's path and host, and the skip row's reason.
+
+PR #123. Gates at the head: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test --locked` 325 + 3,
+`cargo deny check`.

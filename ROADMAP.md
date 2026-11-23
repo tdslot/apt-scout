@@ -323,11 +323,12 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
   write harness or a test-only environment read, and rule it in `docs/spec/` first, because a fourth environment read
   contradicts the record's inventory.
   [SPEC: docs/spec/testing.md, docs/spec/non-functional.md] — [brief](docs/tasks/D90.md)
-- [ ] **D91 — READY; the escapes that no test pins.** Four sites escape correctly and would stay correct only
-  while nobody edited them: the inventory section, the geolocation note, the fallback list warning and the `error:`
-  line. Deleting the `control_free` call at any of them leaves the suite green, which is what `TEST-1` exists
-  to prevent. One test per site, each shown to fail without the escape, and a script that fails when a new call
-  site has none. [SPEC: docs/spec/testing.md] — [brief](docs/tasks/D91.md)
+- [x] **D91 — DONE.** Five tests pin the four sites the reviewer named: the geolocation note, the
+  fallback list warning, the `error:` line and every row kind in the sources section. Three builders were
+  extracted (`geolocation_note`, `fallback_warning`, `error_line`) so each prints through a function a test
+  can call. `TEST-9` states the rule that keeps it: the count of `escape::control_free` sites is asserted by a
+  test, so a new site fails the suite until it is covered. Every one of the eight sites was shown to fail with
+  its escape removed. Merged as #123 (`PLACEHOLDER`). — [evidence](docs/history/backlog.md#d91)
 - [x] **D12 — DONE.** — [evidence](docs/history/m2.md#d12)
 
 - [x] **D57 — DONE.** — [evidence](docs/history/m2.md#d57)
