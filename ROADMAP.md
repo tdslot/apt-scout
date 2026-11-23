@@ -484,7 +484,8 @@ the terminal row said escaping is D13 (`:152`), which is `:366` now.
   says so, which is what turns an omission into a decision.
   [SPEC: docs/spec/localization.md]
 - [x] D80. Rule the TUI and `--refresh` scope: **the TUI stays in v1**, which the Goal already says, so D13 keeps
-  it and D14–D19 and D21 stay queued behind it. `--refresh` is not in v1 (D81), and `CLI-3` and `CLI-7` keep it
+  it and D14–D19 stay queued behind it; D21 is deferred with the
+  translations (D79). `--refresh` is not in v1 (D81), and `CLI-3` and `CLI-7` keep it
   failing as an unknown option, which is the normative state today and not a gap.
   The part that could not wait is what this entry came with: B7 deferred terminal escaping to D13, and the
   exposure it names is a plain root CLI run printing a mirror URL or a rejected entry verbatim — today, with no
