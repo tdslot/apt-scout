@@ -324,7 +324,8 @@ Merged PRs: #13, #14, #15, #16, D6a PR #18, D6b PR #19, D7 PR #21, D8 PR #23, D6
   contradicts the record's inventory.
   [SPEC: docs/spec/testing.md, docs/spec/non-functional.md] — [brief](docs/tasks/D90.md)
 - [x] **D91 — DONE.** Five tests pin the four sites the reviewer named on #121: the geolocation note, the
-  fallback list warning, the `error:` line, and every row kind the sources section can print. Three builders
+  fallback list warning, the `error:` line, and every sources-section row that interpolates a path, a host or a
+  reason. The sixth row kind, an empty inventory, interpolates nothing and so carries nothing to pin. Three builders
   were extracted (`geolocation_note`, `fallback_warning`, `error_line`) so each prints through a
   function a test can call. `TEST-9` states the rule that keeps it: the count of `escape::control_free` sites
   is asserted by a test, so a new site fails the suite until it is covered. Nine mutations were run, each failing the

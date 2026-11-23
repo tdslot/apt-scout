@@ -45,9 +45,10 @@ The brief, kept from `docs/tasks/D91.md` before D85's rule deleted it, and what 
   `error_line`. That is the durable part of this task: not the assertions, but moving the print text into a function
   a test can reach.
 - The sources-section test needed a fixture whose *path* and whose per-entry reason carry a control character, which
-  is what makes each of its six rows fail when its own escape is removed. The first version of the fixture put the
-  control character only in the file-level issue, so three of the four escape calls could be deleted with the suite
-  still green — found by mutating each one, not by reading the test.
+  is what makes each of its five escaping rows fail when its own escape is removed; the sixth row, an empty
+  inventory, interpolates nothing. The first version of the fixture put the control character only in the
+  file-level issue, so three of the four escape calls could be deleted with the suite still green — found by
+  mutating each one, not by reading the test.
 - `TEST-9` states the guard: a test counts the `escape::control_free` call sites in `src/main.rs` and fails when the
   count moves, so a new site is red until someone covers it or records why it carries no foreign text. The needle is
   built with `concat!` so the test does not count its own source line.
