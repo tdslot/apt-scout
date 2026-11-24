@@ -186,3 +186,23 @@ The ledger row carries the claim and the state; this records the third slice of 
 
 What remains for D83: `cli.md`, `localization.md`, `testing.md`,
   `non-functional.md`, `platform.md` and `tui.md`.
+
+### D83 — fourth slice
+
+The ledger row carries the claim and the state; this records the fourth slice of D83 and what it settled.
+
+- `docs/spec/platform.md` carried the oldest evidence in the corpus: what the real
+  `pop-default-settings` package ships, that `apt.pop-os.org/ubuntu` is a true Ubuntu mirror, what repolib
+  2.2.2 does to two stanzas in one file, and what `postinst` does on upgrade. That is what
+  `docs/decisions/0001-pop-os-security-suite-split.md` decides, so it moved there and the chapter keeps the rules:
+  which suites move, which file is created, which fields the new stanza copies, and that System76's own
+  repositories are never touched.
+- `PLAT-1`-s observation about Linux Mint (`VERSION_CODENAME=wilma` while apt uses `noble`) moved to
+  `docs/decisions/0008-where-self-healing-stops.md`, which already decides that the distribution is read rather than
+  asked for; the chapter states the order and cites the record.
+- `PLAT-3`-s explanation of the cleared environment now cites `docs/threat-model.md`, which rules on that
+  inheritance, instead of restating the ruling. The architecture rule and the arm64 explanation stay in the
+  chapter: they are requirements, not reasons.
+
+What remains for D83: `cli.md`, `localization.md`, `testing.md`, `non-functional.md` and
+  `tui.md`.

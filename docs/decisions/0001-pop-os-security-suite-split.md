@@ -19,4 +19,20 @@ the backup manifest and removed by `--restore`.
 **Considered options**: a second stanza in `system.sources` — rejected, repolib merges it back; leaving `-security` on
 the new mirror — rejected, it would move a pocket the mirror list does not vouch for.
 
+## What the Pop!_OS package set was verified to do
+
+Read from the real `pop-default-settings` package (`/etc/pop-os/os-release`, its `postinst`): the
+active source is `/etc/apt/sources.list.d/system.sources`, carrying
+`URIs: http://apt.pop-os.org/ubuntu`, the four suites of the base release and
+`X-Repolib-Default-Mirror: http://apt.pop-os.org/ubuntu`. That host is a true Ubuntu mirror: it reports
+`Origin: Ubuntu` and the same `InRelease` `Date` as `archive.ubuntu.com`, which is why it is treated as an
+official archive URI for Pop!_OS and for nothing else.
+
+The vendor default stays in `X-Repolib-Default-Mirror` untouched, because that is the value restore needs and the
+value `apt-manage` itself keeps. `repolib` may add `X-Repolib-ID: system` on save, which is harmless.
+
+Two things make the split safe to leave behind: `pop-upgrade` and `apt-manage` can reset the URIs to the
+vendor default at any time, which simply undoes the rewrite, and the package `postinst` only creates
+`system.sources` when it is missing, so a package upgrade does not overwrite the rewritten file.
+
 **Spec**: `docs/spec/platform.md`. **Aliases**: D8.
