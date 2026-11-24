@@ -126,7 +126,7 @@ The ledger row carries the claim and the state; this records the first slice of 
   They were the only files in the tree that broke that rule.
 
 What remains for D83: `apply.md` and `output.md`, then `cli.md`, `errors.md`,
-  `localization.md`, `non-functional.md` and `platform.md`.
+  `localization.md`, `testing.md`, `non-functional.md` and `platform.md`; `tui.md` carries nothing to move.
 
 
 - The chapter's reworded PIPE-9 sentence and the SPEC.md index cell drifted apart, which a traceability

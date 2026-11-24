@@ -164,7 +164,7 @@ Invalid response counts as failure.
    `<codename>-updates`
    decides: a mirror is stale if its `Date` is older than the reference by more than `MAX_LAG` (24
    hours). `<codename>-security` lag is shown for information only: `security.ubuntu.com` is
-   left untouched (decision 0001).
+   never rewritten (`apply.md`, the refusal list), so its lag decides nothing.
    A missing `-updates` pocket or unparsable `Date` rejects.
    A `Date:` is trusted only when it is inside the cleartext-signed region: nothing but
    whitespace-only lines may precede `-----BEGIN PGP SIGNED MESSAGE-----`, which MUST itself start
