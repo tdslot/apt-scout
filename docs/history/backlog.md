@@ -116,24 +116,23 @@ The ledger row carries the claim and the state; this records the first slice of 
   `mirrors.ubuntu.com` file shape, the `InRelease` size that rules out a throughput sample, and the
   2026-11-11 freshness measurement that decided `MAX_LAG` are now
   `docs/decisions/0005-mirror-list-and-freshness-measurements.md`, each with its date.
-- Each requirement that rested on one cites the record or the decision that owns the rule: step 3 and 7 cite
-  0005, steps 6 and 8 cite 0003, the `-security` note cites 0001.
-- The 20% same-AS band turned out not to be a measurement at all, and the earlier phrasing said it was; it is a
-  chosen tolerance, and the requirement now says so instead of pointing at a record that would not have
-  supported it.
-- The four existing decision records and `docs/decisions/README.md` were reflowed to one sentence per line under
-  120 bytes; a whitespace-insensitive comparison against the previous text is identical word for word.
+- Each requirement that rested on one now cites the record or the decision that owns the rule: steps 3 and 7
+  cite 0005, steps 6 and 8 cite 0003, and the `-security` note points at the refusal list in `apply.md`
+  rather than at a decision record, because that list is what keeps the host unwritten.
+- The 20% same-AS band was described in the chapter as measured. It is not: it is a chosen tolerance in
+  `src/fresh.rs`. Writing the citation forced the check, and the requirement now says it is a choice
+  instead of pointing at a record that could not have supported it.
+- The chapter's reworded PIPE-9 sentence and the `SPEC.md` index cell drifted apart, which a traceability
+  loop published in `docs/spec/AGENTS.md` caught: the cell must carry the chapter's first sentence
+  verbatim. The same loop showed two older cells (TEST-9, TEST-10) had been written as truncated sentences,
+  so both were completed here rather than left as known failures.
+- The four older decision records and `docs/decisions/README.md` were reflowed to one sentence per line
+  under 120 bytes; a whitespace-insensitive comparison against the previous text is identical word for word.
   They were the only files in the tree that broke that rule.
+- Two things this branch broke and then repaired, both caught by review: replacing the D83 row swallowed the
+  ledger's last section, so the `## Change log` pointer is restored; and the remaining-chapter list left
+  out `testing.md`, which carries five dated observations of its own.
 
 What remains for D83: `apply.md` and `output.md`, then `cli.md`, `errors.md`,
-  `localization.md`, `testing.md`, `non-functional.md` and `platform.md`; `tui.md` carries nothing to move.
-
-
-- The chapter's reworded PIPE-9 sentence and the SPEC.md index cell drifted apart, which a traceability
-  loop published in `docs/spec/AGENTS.md` caught: the cell must carry the chapter's first sentence
-  verbatim. The same loop showed two older cells (TEST-9, TEST-10) had been written as truncated
-  sentences, so both were completed here rather than left as known failures.
-
-- Two things this branch broke and then repaired, both caught by review: replacing the D83 row swallowed
-  the ledger's last section, so the `## Change log` pointer is restored; and the row listed seven of the
-  eight chapters still to move, leaving out `testing.md`, which carries five dated observations of its own.
+  `localization.md`, `testing.md`, `non-functional.md` and `platform.md`;
+  `tui.md` carries nothing to move.
