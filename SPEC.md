@@ -82,7 +82,7 @@ and `partial:` with what is missing where it implements only part of it.
 | `ERR-1` | `docs/spec/errors.md` | Every error message MUST state what failed, which path/URL/value, why (the underlying OS or HTTP error, kept verbatim), and how to fix it. | implemented |
 | `ERR-2` | `docs/spec/errors.md` | Error types MUST carry context at the failure point (path, URL, step name) and MUST never discard the source error. | implemented |
 | `ERR-3` | `docs/spec/errors.md` | The program MUST self-heal automatically where that is safe, and tell the user in one line what was done. | implemented |
-| `ERR-4` | `docs/spec/errors.md` | The program MUST NOT keep a cache in v1, so there is none to heal: no cache directory and no cache file exist, and the mirror list, the geo answers and the AS lookups are fetched afresh on every run, so no stale copy is ever served. | implemented |
+| `ERR-4` | `docs/spec/errors.md` | The program MUST NOT keep a cache in v1: no cache directory and no cache file exist, and the mirror list, the geo answers and the AS lookups are fetched afresh on every run (ADR-0008). | implemented |
 | `ERR-5` | `docs/spec/errors.md` | The program MUST NOT self-heal when it is unsafe: it MUST never guess which apt file to overwrite, MUST never continue after a failed backup, and self-healing MUST never create a file in `/etc/apt`. | implemented |
 | `ERR-6` | `docs/spec/errors.md` | The run MUST NOT fall back to another data source silently: whenever a fallback is used, it MUST print which one and why. | implemented |
 | `ERR-7` | `docs/spec/errors.md` | Every exit code MUST accompany a message that explains the cause (see Non-functional). | implemented |

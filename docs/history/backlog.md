@@ -172,3 +172,17 @@ The ledger row carries the claim and the state; this records the second slice of
 
 What remains for D83: `cli.md`, `errors.md`, `localization.md`, `testing.md`,
   `non-functional.md`, `platform.md` and `tui.md`.
+
+### D83 — third slice
+
+The ledger row carries the claim and the state; this records the third slice of D83 and what it settled.
+
+- The `errors.md` slice moved four reasons into
+  `docs/decisions/0008-where-self-healing-stops.md`: why v1 keeps no cache, why the distribution is read
+  rather than asked for, why the codename is never guessed, and where self-healing stops. The mirror-list order in
+  `ERR-3` was already recorded in `docs/decisions/0002-mirror-list-source-order.md` and now cites it instead of
+  restating it. The first sentence of `ERR-4` lost its "so there is none to heal", so its `SPEC.md` cell moved
+  with it: the character-exact comparison is what catches a stale cell, not the loop.
+
+What remains for D83: `cli.md`, `localization.md`, `testing.md`,
+  `non-functional.md`, `platform.md` and `tui.md`.
