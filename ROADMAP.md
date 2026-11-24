@@ -586,10 +586,13 @@ constructed environment to any child.
   evidence out of the requirement bodies in `docs/spec/`, because `docs/AGENTS.md` sends `why` to an ADR and evidence
   to `ROADMAP.md`. D76b left both in place deliberately, because three measured claims are what the
   parsers are tested against.
-  Done: `pipeline.md` (measurements in [ADR-0005](docs/decisions/0005-mirror-list-and-freshness-measurements.md)),
-  `apply.md` ([ADR-0006](docs/decisions/0006-what-the-writer-refuses.md)) and `output.md` (
-  [ADR-0007](docs/decisions/0007-the-reports-two-faces.md)). The reasons moved out of those two chapters are cited back
-  from ten requirements: `APPLY-1`, `APPLY-3`, `APPLY-7`, `APPLY-14`, `RESTORE-1`, `OUT-2`, `OUT-5`,
+  Done: `pipeline.md` (measurements in [ADR-0005](docs/decisions/0005-mirror-list-and-freshness-measurements.md),
+  merged as [#129](https://github.com/tdslot/apt-scout/pull/129) in `7fd0bdf`), and
+  `apply.md` ([ADR-0006](docs/decisions/0006-what-the-writer-refuses.md)) with
+  `output.md` ([ADR-0007](docs/decisions/0007-the-reports-two-faces.md)), both merged as
+  [#130](https://github.com/tdslot/apt-scout/pull/130) in `5efd20c`. The reasons moved out of those two chapters
+  are cited back from ten requirements:
+  `APPLY-1`, `APPLY-3`, `APPLY-7`, `APPLY-14`, `RESTORE-1`, `OUT-2`, `OUT-5`,
   `OUT-6`, `OUT-7` and `OUT-8`.
   Remaining, seven chapters: `cli.md`, `errors.md`, `localization.md`, `testing.md`,
   `non-functional.md`, `platform.md` and `tui.md`, the last of which carries nothing to move but is
