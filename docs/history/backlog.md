@@ -112,26 +112,30 @@ PR #127. Gates at the head: `cargo fmt --check`, `cargo clippy -D warnings` in b
 
 The ledger row carries the claim and the state; this records the first slice of D83 and what it settled.
 
-- `docs/spec/pipeline.md` no longer carries its measurements: the Launchpad page shape and counts, the
-  `mirrors.ubuntu.com` file shape, the `InRelease` size that rules out a throughput sample, and the
-  2026-11-11 freshness measurement that decided `MAX_LAG` are now
-  `docs/decisions/0005-mirror-list-and-freshness-measurements.md`, each with its date.
-- Each requirement that rested on one now cites the record or the decision that owns the rule: steps 3 and 7
-  cite 0005, steps 6 and 8 cite 0003, and the `-security` note points at the refusal list in `apply.md`
-  rather than at a decision record, because that list is what keeps the host unwritten.
-- The 20% same-AS band was described in the chapter as measured. It is not: it is a chosen tolerance in
+- `docs/spec/pipeline.md` no longer carries its measurements. Four moved to
+  `docs/decisions/0005-mirror-list-and-freshness-measurements.md`: the Launchpad page shape and counts,
+  measured 2026-11-13; the `mirrors.ubuntu.com` country file, measured 2026-11-13; the `InRelease` size of
+  about 130 KB, which is an approximation and is labelled one; and the 2026-11-11 freshness measurement across
+  10 Lithuanian and Norwegian mirrors that decided `MAX_LAG`.
+- Each requirement that rested on one now points at the record or at the rule that owns it: steps 3 and 7 cite
+  0005, steps 6 and 8 cite 0003, and the `-security` note points at the refusal list in `apply.md`,
+  which is what actually keeps that host unwritten.
+- The 20% same-AS band was described in the chapter as measured. It is not: it is a chosen constant in
   `src/fresh.rs`. Writing the citation forced the check, and the requirement now says it is a choice
   instead of pointing at a record that could not have supported it.
-- The chapter's reworded PIPE-9 sentence and the `SPEC.md` index cell drifted apart, which a traceability
-  loop published in `docs/spec/AGENTS.md` caught: the cell must carry the chapter's first sentence
-  verbatim. The same loop showed two older cells (TEST-9, TEST-10) had been written as truncated sentences,
-  so both were completed here rather than left as known failures.
-- The four older decision records and `docs/decisions/README.md` were reflowed to one sentence per line
-  under 120 bytes; a whitespace-insensitive comparison against the previous text is identical word for word.
-  They were the only files in the tree that broke that rule.
+- The chapter's reworded PIPE-9 sentence and the `SPEC.md` index cell drifted apart, which one of the
+  traceability loops published in `docs/spec/AGENTS.md` caught: the cell must carry the chapter's first
+  sentence verbatim. Replaying that loop against `origin/develop` also showed two older cells (TEST-9,
+  TEST-10) written as truncated sentences that ended on a full stop the chapter does not have, so both were
+  completed in this pass rather than left as known failures.
+- The four older decision records were reflowed to one sentence per line under 120 bytes and are word for word
+  identical to the text before, checked whitespace-insensitively. `docs/decisions/README.md` was reflowed
+  too, but it also gained the 0005 row, so it is the one file whose words changed. The rule in `docs/AGENTS.md`
+  governs new text and grandfathers old, so that reflow was tidying rather than compliance, and plenty of other
+  tracked files still carry long lines.
 - Two things this branch broke and then repaired, both caught by review: replacing the D83 row swallowed the
-  ledger's last section, so the `## Change log` pointer is restored; and the remaining-chapter list left
-  out `testing.md`, which carries five dated observations of its own.
+  ledger's last section, so the `## Change log` pointer is restored; and the list of chapters left to move
+  omitted `testing.md`, which carries two dated observations and five rationale markers of its own.
 
 What remains for D83: `apply.md` and `output.md`, then `cli.md`, `errors.md`,
   `localization.md`, `testing.md`, `non-functional.md` and `platform.md`;
