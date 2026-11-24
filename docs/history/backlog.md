@@ -133,3 +133,7 @@ What remains for D83: `apply.md` and `output.md`, then `cli.md`, `errors.md`,
   loop published in `docs/spec/AGENTS.md` caught: the cell must carry the chapter's first sentence
   verbatim. The same loop showed two older cells (TEST-9, TEST-10) had been written as truncated
   sentences, so both were completed here rather than left as known failures.
+
+- Two things this branch broke and then repaired, both caught by review: replacing the D83 row swallowed
+  the ledger's last section, so the `## Change log` pointer is restored; and the row listed seven of the
+  eight chapters still to move, leaving out `testing.md`, which carries five dated observations of its own.
