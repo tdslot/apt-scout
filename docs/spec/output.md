@@ -29,7 +29,7 @@
   `no` when the body was readable but unsigned, altered or signed by an unknown key, and `?` when
   verification could not run at all — a missing `gpgv` or keyring, an oversized body, or a timeout.
   Only `yes` MAY authorize a write; `no` and `?` never do, and neither is a reason to reject or
-  reorder a row, because read-only ranking keeps its tolerance (Freshness trust boundary).
+  reorder a row: read-only ranking keeps its tolerance (decision 0003).
   The legend printed with the `Ranked` title states one clause per column that needs one —
   `behind = -updates age vs freshest · latency = round trip · verified = InRelease signature` — and
   the recommendation uses these same words, never a second spelling of the same fact.
@@ -67,18 +67,18 @@
   `#E95420`, **bold in the same escape** — `1;38;2;233;84;32` or `1;38;5;166` — and the Braille
   frame of the progress line is the same accent at plain weight, while the phase text beside it is
   not painted.
-  The weight is part of the structure ink and not decoration: in the 256-colour form the accent's
-  `166` sits close to the red a rejection reason and a `-` diff line carry, so two colours alone
-  left structure and "this is wrong" looking alike on a dark terminal, and bold is most terminals'
-  bright variant, which pulls the accent away from that dark-red end; the spinner keeps the plain
-  weight because no red sits beside it and the accent was asked for there as it is.
+  The weight is part of the structure ink: the accent is bold wherever a rejection reason or a `-` diff
+  line in red sits beside it, and plain where it does not. The reasoning is
+  ADR-0007.
   In the table `yes` is green and `no` and `?` are yellow; a rejection reason and a `-` diff line
   are red, a `+` diff line is green; the `behind`, `speed` and `latency` column headings are dim;
   the recommended mirror and the confirmation prompt are bold.
   Nothing else is styled, and the `sudo apt-scout …` line a non-root run prints is never styled,
-  because a user copies it.
+  because a user pastes it somewhere that would keep the escape sequences
+  (ADR-0007).
 - `OUT-6` The accent MUST have two forms, `COLORTERM` MUST pick between them, and the fallback MUST be
-  named because a terminal will not complain.
+  named, not inferred, because a terminal drops an unsupported sequence without a word
+  (ADR-0007).
   `#E95420` is a 24-bit colour, so it is written as `38;2;233;84;32` — `1;38;2;233;84;32` where the
   site is bold — only when `COLORTERM` reads `truecolor` or `24bit`, in any case; every other value,
   and an unset `COLORTERM`, takes the 256-colour cube's `38;5;166` (`1;38;5;166` where the site is
@@ -112,7 +112,9 @@
   carries a progress line, and the animation is stopped while a warning is on screen and resumes
   with the next phase.
   The ticker advances a frame and redraws the line it is given and does nothing else: no probe's
-  timeout, request, measurement, rejection or join order changes because a frame was drawn.
+  timeout, request, measurement, rejection or join order changes because a frame was drawn: the
+  animation is a view of finished work, never a participant in it
+  (ADR-0007).
 - `OUT-9` The animation MUST be testable without a terminal, and it MUST add no dependency.
   The frame is a pure
   function of the time a phase has been active, and the ticker's loop is driven through the existing

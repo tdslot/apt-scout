@@ -13,8 +13,8 @@
   reference when that reference has a verified `-updates` `Date` read inside the signed region,
   otherwise from the newest candidate in this run that carries one, after the clock-skew sanity
   guard of `pipeline.md` step 8, and the writer holds the selected mirror's proof against it before the first
-  byte, refusing outright when no verified baseline was supplied, because a writer that may not
-  fetch cannot establish one.
+  byte, refusing outright when no verified baseline was supplied: the writer makes no network
+  request and cannot establish one itself (ADR-0006).
   The write aborts, before its first byte, on any missing field, any mismatch with the file on disk,
   any digest it cannot recompute to the same value, any target that is not a regular file after
   resolution, and any plan it did not fully validate.
@@ -78,17 +78,16 @@
   reported as skipped rather than rewritten.
   The set therefore fails closed in the only direction open to it, shrinking and never widening, and
   when no URI is eligible the run stops under the no-eligible-URI rule and touches nothing.
-  A path prefix is a recognition rule and its cost is stated here rather than discovered later: when
-  a host is listed at a path other than the one an on-disk URI carries — a listing that changed its
-  layout, or an entry since delisted — that URI is reported as skipped with its reason and left
-  unchanged, not forced through.
+  A path prefix is a recognition rule: when a host is listed at a path other than the one an on-disk
+  URI carries, that URI is reported as skipped with its reason and left unchanged, not forced through
+  (ADR-0006).
   Never rewrite `security.ubuntu.com`, `ports.ubuntu.com`, `ppa.launchpad.net`,
   `ppa.launchpadcontent.net`, or any host under `launchpad.net` or `launchpadcontent.net`: that
   refusal list is explicit and is checked before any membership test, whatever a list names.
-  Naming those hosts is the point: before this rule a PPA was safe only because no list happened to
-  name a PPA host, which is not a control.
+  Naming those hosts is deliberate: the refusal is a decision the code makes, not one the data makes
+  for it (ADR-0006).
   A line or stanza whose suites include a `-security` suite is never rewritten to a probed mirror,
-  even when its host is `archive.ubuntu.com`, because `-security` freshness is not checked; report
+  even when its host is `archive.ubuntu.com`: `-security` freshness is never checked (decision 0003). Report
   each skipped entry and why.
   The only exception is the Pop!_OS split above, which keeps `-security` on the original mirror.
   On Ubuntu 24.04 and later security already lives in its own stanza (`security.ubuntu.com`), so no
@@ -147,9 +146,8 @@
   A restore is itself a write and backs up every file it replaces or removes under its own id,
   exactly as an apply does, so after one restore the newest backup is that restore's; the file it
   removed is one of them, recorded there as a file to put back with the bytes it held and with a
-  copy beside it, so what refuses a second restore from that backup is the disk rather than the
-  manifest — the record says replace and the target is gone — which is the record-versus-disk rule
-  above rather than a guess.
+  copy beside it. What refuses a second restore from that backup is therefore the record-versus-disk
+  check: the record says replace and the target is gone (ADR-0006).
 - `APPLY-12` A custom URL (`Insert`) MUST use the scheme `http` or `https` only, and the run MUST reject
   userinfo, whitespace, `file:`, and loopback/private/link-local addresses; it MUST probe the URL
   like any candidate and MUST show a warning before apt is pointed at a user-supplied host.
@@ -160,8 +158,8 @@
   was going to write exits 1.
   The run MUST NOT probe 30 mirrors for nothing.
 - `APPLY-14` Candidate hygiene: every candidate from any list source MUST be `http`/`https`, have no
-  userinfo, and not resolve to a private, loopback or link-local address, because mirror lists are
-  partly fetched over plain HTTP.
+  userinfo, and not resolve to a private, loopback or link-local address: the list is untrusted data
+  fetched over plain HTTP (ADR-0006).
   Results from the `mirrors.ubuntu.com` fallback MUST be marked unverified in the output.
 - `APPLY-15` After an apply the run MUST suggest `sudo apt update` and MUST NOT run it.
   The run that wrote was a root run under `sudo` and has exited by the time the sentence is read, so
