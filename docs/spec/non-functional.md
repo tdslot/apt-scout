@@ -18,8 +18,8 @@
   write and this uid may not, and 4 no usable distro, architecture or release —
   an unsupported distro or architecture, or a release that left `archive.ubuntu.com` for
   `old-releases.ubuntu.com` because the reference `<codename>-updates` answered 404.
-  Exit 3 is every non-root run other than `--list` that reaches the write, which prints the command to
-  run instead; a usage error (2) and a failure earlier in the run (1) keep their own code.
+  Exit 3 is every non-root run other than `--list` that reaches the write; a usage error (2) and a failure
+  earlier in the run (1) keep their own code (ADR-0009).
   A root run that found no eligible or no rewritable source MUST write nothing and exit 1, as Apply
   states; `--list` MUST exit 0 whatever the uid and a non-root run MUST exit 3.
 - `NFR-5` The delivery sequence MUST live in `ROADMAP.md` alone: the task order, task states,
@@ -47,8 +47,8 @@
   Canonical's lookup is plain HTTP; AS data comes from DNS.
   The run MUST NOT write anything derived from them into apt sources.
 - `NFR-10` Freshness trust boundary: ranking MAY display and use an `InRelease` `Date` even when signature
-  verification is `invalid` or `unavailable`; that can mis-rank a mirror but can never authorize
-  package installation.
+  verification is `invalid` or `unavailable` (ADR-0009); it can never authorize an
+  installation.
   Every `-updates` `InRelease` used by probing is verified with
   `/usr/bin/gpgv --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg`, using no shell, no
   `PATH` lookup, a cleared environment, a private 0700 temporary directory that is also `gpgv`'s

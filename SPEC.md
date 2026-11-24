@@ -111,7 +111,7 @@ and `partial:` with what is missing where it implements only part of it.
 | `NFR-7` | `docs/spec/non-functional.md` | The test suite MUST include these fixtures: Ubuntu 22.04 `sources.list`, 24.04 `ubuntu.sources`, multi-URI stanza, `Enabled: no`, comments, `deb-src`, arm64 ports, `InRelease`, mirror list HTML and text. | planned |
 | `NFR-8` | `docs/spec/non-functional.md` | Parsing and ranking MUST be pure functions, unit-tested on fixtures, and a test MUST NOT use the live network. | implemented |
 | `NFR-9` | `docs/spec/non-functional.md` | The run MUST treat every geolocation and AS answer as untrusted input: it MUST validate it, and it MAY influence ranking only. | implemented |
-| `NFR-10` | `docs/spec/non-functional.md` | Freshness trust boundary: ranking MAY display and use an `InRelease` `Date` even when signature verification is `invalid` or `unavailable`; that can mis-rank a mirror but can never authorize package installation. | implemented |
+| `NFR-10` | `docs/spec/non-functional.md` | Freshness trust boundary: ranking MAY display and use an `InRelease` `Date` even when signature verification is `invalid` or `unavailable` (ADR-0009); it can never authorize an installation. | implemented |
 | `OUT-1` | `docs/spec/output.md` | The default report MUST be the decision, and `--verbose` MUST be the proof. | implemented |
 | `OUT-2` | `docs/spec/output.md` | The ranked table's columns MUST be named for what they measure. | implemented |
 | `OUT-3` | `docs/spec/output.md` | The trailing `notes` cell MUST carry exactly one fact, and a column that would be empty MUST be dropped. | implemented |
