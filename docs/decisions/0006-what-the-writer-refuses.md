@@ -20,6 +20,13 @@ bytes and a copy beside it. What therefore refuses a second restore from that ba
 check: the manifest says replace, and the target is gone. No second authority, no ledger of "already restored",
 and no state the tool has to keep between runs.
 
+## The newest backup is the greatest id
+
+Backup ids are zero-padded UTC timestamps, so their string order is their age and the newest backup is the
+greatest id under the backup root, without reading any manifest to compare dates. A restore considers only that
+one: falling back to an older backup would put back bytes the user did not ask for, so a refused newest backup
+fails the whole restore instead.
+
 ## The refusal list names hosts on purpose
 
 The list (`security.ubuntu.com`, `ports.ubuntu.com`, `ppa.launchpad.net`, `ppa.launchpadcontent.net`, and
@@ -39,14 +46,15 @@ recognized at any path, and it is the one place where a bare listing widens rath
 
 ## Alternatives are comments, not config
 
-The checked mirrors beyond the first are written as `# alternative: <uri>` above the changed line, so
-the user can switch by uncommenting one. apt has no failover across URIs, so that list is documentation: the
-tool cannot hand apt a second source to fall back on by itself.
+`APPLY-7` is planned and belongs to the TUI: the mirrors a user checks beyond the first will be
+written as `# alternative: <uri>` comments above the changed line, so the user can switch by
+uncommenting one. apt has no failover across URIs, so such a list is documentation: the tool cannot hand apt a
+second source to fall back on by itself.
 
 ## Candidate hygiene follows the transport
 
 Every candidate must be `http`/`https`, carry no userinfo, and not resolve to a private, loopback or link-local
-address. The input is a list fetched over plain HTTP from a host that can be wrong or hostile, so the answer is
+address. The input is a list partly fetched over plain HTTP from a host that can be wrong or hostile, so the answer is
 validated as untrusted data rather than as a URL the tool chose.
 
 **Spec**: `docs/spec/apply.md`, `APPLY-1` (the baseline), `APPLY-3` (the refusal list and the path prefix),

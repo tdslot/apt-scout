@@ -56,10 +56,8 @@
   A mirror host usually carries several trees, and the tool may replace only the Ubuntu tree:
   `deb http://ftp.uni-stuttgart.de/debian trixie main` is left alone even when that host is
   listed as an Ubuntu mirror at `/pub/linux/debian/ubuntu/`.
-  A listed entry whose path is `/` admits every path on that host, because the list names no
-  narrower tree there and the tool cannot tell the trees apart; that is acknowledged rather than
-  hidden, and it is why the canonical archive and its `*.archive.ubuntu.com` names stay recognized
-  at any path.
+  A listed entry whose path is `/` admits every path on that host, which is the one place where a
+  bare listing widens rather than narrows (ADR-0006).
   A dot segment is never eligible and never enters the set: a token whose path carries `.`, `..`, or
   the `%2e` spelling of either is left unchanged with a reason naming the segment, and a listed
   entry whose path carries one is dropped and reported, so neither the any-path rule above nor a
@@ -137,8 +135,8 @@
   It is executed by that same writer, through the one entry point the writer has: the restore engine
   re-derives the plan and hands it over with no baseline, so a restore adds no second write path and
   no write code of its own.
-  The newest backup is the greatest id under `/var/backups/apt-scout/`, because the ids are
-  zero-padded UTC timestamps and their string order is their age; it is the only backup a run
+  The newest backup is the greatest id under `/var/backups/apt-scout/` (ADR-0006), and it is the
+  only backup a run
   considers, so a restore whose newest manifest or copy is refused fails as a whole and never falls
   back to an older backup, and a backup root that holds no id, or an id whose directory is not a
   plain directory, is a failure that writes nothing and exits 1.
@@ -158,7 +156,7 @@
   The run MUST NOT probe 30 mirrors for nothing.
 - `APPLY-14` Candidate hygiene: every candidate from any list source MUST be `http`/`https`, have no
   userinfo, and not resolve to a private, loopback or link-local address: the list is untrusted data
-  fetched over plain HTTP (ADR-0006).
+  partly fetched over plain HTTP (ADR-0006).
   Results from the `mirrors.ubuntu.com` fallback MUST be marked unverified in the output.
 - `APPLY-15` After an apply the run MUST suggest `sudo apt update` and MUST NOT run it.
   The run that wrote was a root run under `sudo` and has exited by the time the sentence is read, so

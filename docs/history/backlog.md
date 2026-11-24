@@ -156,9 +156,11 @@ The ledger row carries the claim and the state; this records the second slice of
   record because none is a decision.
 - The D83 row first claimed that every requirement in the two chapters points at a record; ten of twenty-eight do.
   The row now names those ten instead, because a set a script prints survives review and a universal does not.
-  Two of them carried a reason no record held, so the reason moved with the citation: the note in `APPLY-7` that
-  apt has no failover across URIs is now a section of ADR-0006, and the harness argument in `OUT-7` was already in
-  ADR-0007.
+  Three of them carried a reason no record held, so the reason moved with the citation: the note about a listed
+  entry whose path is `/` and the ordering of backup ids are sections of ADR-0006, and the harness
+  argument in `OUT-7` was already in ADR-0007.
+  A fourth claim was false the other way: ADR-0006 described the alternatives mechanism as shipped when
+  `APPLY-7` is still planned, and the record now says so in its first words.
 - Rewording two first sentences broke their `SPEC.md` cells: `APPLY-14` and `OUT-6` lost the code spans their
   chapters carry. The documented traceability loop did NOT catch it and cannot: it strips backticks on both
   sides, so a cell missing a span still matches. A character-exact comparison over all 120 rows found both, and
