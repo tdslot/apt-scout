@@ -591,8 +591,8 @@ constructed environment to any child.
   [ADR-0006](docs/decisions/0006-what-the-writer-refuses.md) and
   [ADR-0007](docs/decisions/0007-the-reports-two-faces.md)), both merged as
   [#130](https://github.com/tdslot/apt-scout/pull/130) in `5efd20c`, and `errors.md` (
-  [ADR-0008](docs/decisions/0008-where-self-healing-stops.md)), merged as
-  [#132](https://github.com/tdslot/apt-scout/pull/132) in `f1da477`.
+  [ADR-0008](docs/decisions/0008-where-self-healing-stops.md), merged as
+  [#132](https://github.com/tdslot/apt-scout/pull/132) in `f1da477`).
   The reasons moved out of those three chapters are cited back from thirteen requirements:
   `APPLY-1`, `APPLY-3`, `APPLY-7`, `APPLY-14`, `RESTORE-1`, `OUT-2`, `OUT-5`,
   `OUT-6`, `OUT-7`, `OUT-8`, `ERR-3`, `ERR-4` and `ERR-5`.
