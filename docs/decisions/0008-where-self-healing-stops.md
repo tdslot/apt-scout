@@ -18,6 +18,13 @@ The codename comes from `os-release`, `/etc/os-release` first and `/usr/lib/os-r
 there is no `--codename` or `--distro` flag, because a flag is a second source of truth that can disagree with the
 system the run is about to write to, and the disagreement would be silent.
 
+## Why `UBUNTU_CODENAME` wins over `VERSION_CODENAME`
+
+A derivative sets `VERSION_CODENAME` to its own release name: Linux Mint reports `wilma`, while its apt
+sources use Ubuntu's `noble` suites, so a run that trusted the version codename would plan suites that do
+not exist on the mirror. `UBUNTU_CODENAME` is the field the derivative itself publishes as its Ubuntu base, so it
+is read first and the fallback is only for a file that omits it.
+
 ## Why the codename is never guessed
 
 The apt sources name suites, and a suite usually contains a codename, so guessing is possible and was rejected: a
@@ -31,5 +38,5 @@ unfamiliar apt layout is to report it. The one file apt-scout creates there is n
 `sources.list.d/system-security.sources` on Pop!_OS, which comes from the validated plan and is opened with
 `create_new`, so it can neither overwrite nor be overwritten.
 
-**Spec**: `docs/spec/errors.md`, `ERR-3` (what is repaired), `ERR-4` (no cache) and `ERR-5` (where it stops).
-  **Aliases**: none.
+**Spec**: `docs/spec/errors.md`, `ERR-3` (what is repaired), `ERR-4` (no cache) and `ERR-5` (where it
+  stops), and `docs/spec/platform.md`, `PLAT-1` (which codename wins). **Aliases**: none.

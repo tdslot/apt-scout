@@ -582,7 +582,7 @@ constructed environment to any child.
   review rather than by a gate, and the stdin half of the requirement is untested for the same reason: a builder that
   cleared the environment and inherited stdin would pass.
   [docs/spec/platform.md, docs/threat-model.md]
-- [ ] **D83 — READY; four of the ten chapters are moved.** Move the rationale and the measurement
+- [ ] **D83 — READY; five of the ten chapters are moved.** Move the rationale and the measurement
   evidence out of the requirement bodies in `docs/spec/`, because `docs/AGENTS.md` sends `why` to an ADR and evidence
   to `ROADMAP.md`. D76b left both in place deliberately, because three measured claims are what the
   parsers are tested against.
@@ -593,12 +593,16 @@ constructed environment to any child.
   [#130](https://github.com/tdslot/apt-scout/pull/130) in `5efd20c`, and `errors.md` (
   [ADR-0008](docs/decisions/0008-where-self-healing-stops.md), merged as
   [#132](https://github.com/tdslot/apt-scout/pull/132) in `f1da477`).
-  The reasons moved out of those three chapters are cited back from thirteen requirements:
+  The reasons moved out of those four chapters are cited back from fifteen requirements:
   `APPLY-1`, `APPLY-3`, `APPLY-7`, `APPLY-14`, `RESTORE-1`, `OUT-2`, `OUT-5`,
-  `OUT-6`, `OUT-7`, `OUT-8`, `ERR-3`, `ERR-4` and `ERR-5`.
-  Remaining, six chapters: `cli.md`, `localization.md`, `testing.md`,
-  `non-functional.md`, `platform.md` and `tui.md`, the last of which carries nothing
-  to move but is listed so the count stays the ten the index records.
+  `OUT-6`, `OUT-7`, `OUT-8`, `ERR-3`, `ERR-4`, `ERR-5`, `PLAT-1` and
+  `PLAT-2`.
+  `platform.md` carries the Pop!_OS rewrite in
+  [ADR-0001](docs/decisions/0001-pop-os-security-suite-split.md) and the codename order in
+  [ADR-0008](docs/decisions/0008-where-self-healing-stops.md), in this pull request.
+  Remaining, five chapters: `cli.md`, `localization.md`, `testing.md`, `non-functional.md` and
+  `tui.md`, the last of which carries nothing to move but is listed so the count stays the ten the
+  index records.
   Acceptance: every `because`, `so that`, `Verified from`, `Measured` and dated observation inside a requirement
   is either cited as `ADR-####` or moved to a ledger entry, and no requirement is left without the fact it needs to
   be testable. No behavior change. [docs/AGENTS.md, SPEC: docs/spec/AGENTS.md]
