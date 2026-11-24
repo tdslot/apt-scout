@@ -588,8 +588,8 @@ constructed environment to any child.
   parsers are tested against.
   Done: `pipeline.md` (measurements in [ADR-0005](docs/decisions/0005-mirror-list-and-freshness-measurements.md)),
   `apply.md` ([ADR-0006](docs/decisions/0006-what-the-writer-refuses.md)) and `output.md` (
-  [ADR-0007](docs/decisions/0007-the-reports-two-faces.md)), each requirement now pointing at the record or at the rule
-  that owns it.
+  [ADR-0007](docs/decisions/0007-the-reports-two-faces.md)), and every requirement whose body rested on a reason
+  now points at the record or the rule that owns it.
   Remaining, seven chapters: `cli.md`, `errors.md`, `localization.md`, `testing.md`,
   `non-functional.md`, `platform.md` and `tui.md`, the last of which carries nothing to move but is
   listed so the count stays the ten the index records.

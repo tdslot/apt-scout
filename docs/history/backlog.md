@@ -154,8 +154,11 @@ The ledger row carries the claim and the state; this records the second slice of
 - The clauses left in place are consequences of another requirement rather than rationale: a creation needs a
   platform, an id sorts by age because it is a timestamp, a skip is reported rather than forced. None points at a
   record because none is a decision.
-- Rewording two first sentences broke their `SPEC.md` cells, which the documented traceability loop caught again:
-  `APPLY-14` and `OUT-6`. The cells followed the chapters.
+- Rewording two first sentences broke their `SPEC.md` cells: `APPLY-14` and `OUT-6` lost the code spans their
+  chapters carry. The documented traceability loop did NOT catch it and cannot: it strips backticks on both
+  sides, so a cell missing a span still matches. A character-exact comparison over all 120 rows found both, and
+  the review of the first attempt is what prompted that comparison.
+  `docs/spec/AGENTS.md` now states that limit next to the loop, so the next reader does not trust it for more.
 - The chapter citations read `(ADR-0006)` and `(ADR-0007)` rather than relative links, matching how the
   chapters already cite `decision 0003`, and because a link written for `docs/spec/` cannot also appear
   verbatim in a `SPEC.md` cell without breaking one of the two paths.
