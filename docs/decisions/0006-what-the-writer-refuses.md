@@ -43,4 +43,5 @@ Every candidate must be `http`/`https`, carry no userinfo, and not resolve to a 
 address. The input is a list fetched over plain HTTP from a host that can be wrong or hostile, so the answer is
 validated as untrusted data rather than as a URL the tool chose.
 
-**Spec**: `docs/spec/apply.md`, `APPLY-1`, `APPLY-8`, `APPLY-11`, `APPLY-14`. **Aliases**: none.
+**Spec**: `docs/spec/apply.md`, `APPLY-1` (the baseline), `APPLY-3` (the refusal list and the path prefix),
+  `RESTORE-1` (the second restore) and `APPLY-14` (candidate hygiene). **Aliases**: none.

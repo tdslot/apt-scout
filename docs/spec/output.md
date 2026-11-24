@@ -66,10 +66,7 @@
   Where it is on: the identity line and every section heading are the accent, Ubuntu orange
   `#E95420`, **bold in the same escape** — `1;38;2;233;84;32` or `1;38;5;166` — and the Braille
   frame of the progress line is the same accent at plain weight, while the phase text beside it is
-  not painted.
-  The weight is part of the structure ink: the accent is bold wherever a rejection reason or a `-` diff
-  line in red sits beside it, and plain where it does not. The reasoning is
-  ADR-0007.
+  not painted. Why the split falls there is ADR-0007.
   In the table `yes` is green and `no` and `?` are yellow; a rejection reason and a `-` diff line
   are red, a `+` diff line is green; the `behind`, `speed` and `latency` column headings are dim;
   the recommended mirror and the confirmation prompt are bold.

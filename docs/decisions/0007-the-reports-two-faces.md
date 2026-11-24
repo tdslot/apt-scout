@@ -31,4 +31,6 @@ That is why no timeout, request, measurement, rejection or join order may change
 why a write that fails is dropped as before rather than turned into an error for the reader's benefit: the two
 faces show the same facts, and only the escapes differ.
 
-**Spec**: `docs/spec/output.md`, `OUT-4` to `OUT-9`. **Aliases**: none.
+**Spec**: `docs/spec/output.md`, where the sites are named and the split between bold and plain is set:
+  the identity line and every heading, the spinner frame, the copied line, the two accent forms and the plain
+  output as the contract. **Aliases**: none.
