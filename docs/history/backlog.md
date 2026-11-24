@@ -128,3 +128,8 @@ The ledger row carries the claim and the state; this records the first slice of 
 What remains for D83: `apply.md` and `output.md`, then `cli.md`, `errors.md`,
   `localization.md`, `non-functional.md` and `platform.md`.
 
+
+- The chapter's reworded PIPE-9 sentence and the SPEC.md index cell drifted apart, which a traceability
+  loop published in `docs/spec/AGENTS.md` caught: the cell must carry the chapter's first sentence
+  verbatim. The same loop showed two older cells (TEST-9, TEST-10) had been written as truncated
+  sentences, so both were completed here rather than left as known failures.
