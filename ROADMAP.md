@@ -602,7 +602,8 @@ constructed environment to any child.
   [ADR-0008](docs/decisions/0008-where-self-healing-stops.md), merged as
   [#134](https://github.com/tdslot/apt-scout/pull/134) in `6493348`).
   `non-functional.md` (the exit-code vocabulary and the date boundary,
-  [ADR-0009](docs/decisions/0009-exit-codes-and-the-date-boundary.md)), in this pull request.
+  [ADR-0009](docs/decisions/0009-exit-codes-and-the-date-boundary.md), merged as
+  [#136](https://github.com/tdslot/apt-scout/pull/136) in `e5086af`).
   Remaining, four chapters: `cli.md`, `localization.md`, `testing.md` and `tui.md`,
   the last of which carries nothing to move but is listed so the count stays the ten the index records.
   Acceptance: every `because`, `so that`, `Verified from`, `Measured` and dated observation inside a requirement
