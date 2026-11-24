@@ -107,3 +107,36 @@ The brief, kept from `docs/tasks/D92.md` before D85's rule deleted it, and what 
 
 PR #127. Gates at the head: `cargo fmt --check`, `cargo clippy -D warnings` in both builds, `cargo test --locked`
 327 + 3, `cargo deny check`.
+
+### D83 — first slice
+
+The ledger row carries the claim and the state; this records the first slice of D83 and what it settled.
+
+- `docs/spec/pipeline.md` no longer carries its measurements. Four moved to
+  `docs/decisions/0005-mirror-list-and-freshness-measurements.md`: the Launchpad page shape and counts,
+  measured 2026-11-13; the `mirrors.ubuntu.com` country file, measured 2026-11-13; the `InRelease` size of
+  about 130 KB, which is an approximation and is labelled one; and the 2026-11-11 freshness measurement across
+  10 Lithuanian and Norwegian mirrors that decided `MAX_LAG`.
+- Each requirement that rested on one now points at the record or at the rule that owns it: steps 3 and 7 cite
+  0005, steps 6 and 8 cite 0003, and the `-security` note points at the refusal list in `apply.md`,
+  which is what actually keeps that host unwritten.
+- The 20% same-AS band was described in the chapter as measured. It is not: it is a chosen constant in
+  `src/fresh.rs`. Writing the citation forced the check, and the requirement now says it is a choice
+  instead of pointing at a record that could not have supported it.
+- The chapter's reworded PIPE-9 sentence and the `SPEC.md` index cell drifted apart, which one of the
+  traceability loops published in `docs/spec/AGENTS.md` caught: the cell must carry the chapter's first
+  sentence verbatim. Replaying that loop against `origin/develop` also showed two older cells (TEST-9,
+  TEST-10) written as truncated sentences that ended on a full stop the chapter does not have, so both were
+  completed in this pass rather than left as known failures.
+- The four older decision records were reflowed to one sentence per line under 120 bytes and are word for word
+  identical to the text before, checked whitespace-insensitively. `docs/decisions/README.md` was reflowed
+  too, but it also gained the 0005 row, so it is the one file whose words changed. The rule in `docs/AGENTS.md`
+  governs new text and grandfathers old, so that reflow was tidying rather than compliance, and plenty of other
+  tracked files still carry long lines.
+- Two things this branch broke and then repaired, both caught by review: replacing the D83 row swallowed the
+  ledger's last section, so the `## Change log` pointer is restored; and the list of chapters left to move
+  omitted `testing.md`, which carries two dated observations and five rationale markers of its own.
+
+What remains for D83: `apply.md` and `output.md`, then `cli.md`, `errors.md`,
+  `localization.md`, `testing.md`, `non-functional.md` and `platform.md`;
+  `tui.md` carries nothing to move.

@@ -55,21 +55,20 @@ Resolve this before invoking geo or mirror-list sources.
 
 3. `PIPE-3` The run MUST load the mirror list, the first success wins, and the source it used MUST be
    shown in the output. The sources are tried in this order:
-   1. Launchpad `https://launchpad.net/ubuntu/+archivemirrors` (HTML, ~316 KB, ~560 mirrors in ~80
-      countries). Measured structure: a `<tr class="head">` row with `<th colspan="2">Country</th>`
-      starts each country; each mirror row has a `/ubuntu/+mirror/<id>` link, one `<a href>` per
-      protocol (`https`, `http`, `ftp`, `rsync`; only `http(s)` are used), a speed (`10 Gbps`), and
-      a status `<span class="distromirrorstatus{UP|UNKNOWN|...}">`. Launchpad's own status (`UP` =
-      up to date) is used as a hint, never as proof of freshness. Measured: 82 country sections, 562
-      mirror rows, only `UP` and `UNKNOWN` statuses seen, speeds from `128 Kbps` to `100 Gbps`, and
-      2 rows with only `ftp`/`rsync` links (skip them, they cannot be probed over HTTP). The parser
-      MUST tolerate missing protocols and unknown statuses, and is tested against a saved fixture of
-      this page.
+   1. Launchpad `https://launchpad.net/ubuntu/+archivemirrors` (HTML). Each mirror row carries a
+      `/ubuntu/+mirror/<id>` link, one `<a href>` per protocol, a declared speed and a status; only
+      `http(s)` URLs are used, and a row with neither is skipped: it cannot be probed.
+      Launchpad's own status (UP = up to date) is a hint, never proof of freshness.
+      The parser MUST tolerate a missing protocol and an unknown status, and MUST be tested against a
+      saved fixture of this page. The page's measured shape, counts and date are recorded in
+      [ADR-0005](../decisions/0005-mirror-list-and-freshness-measurements.md), which is what the fixture
+      and the tolerance rules follow from.
    2. `http://mirrors.ubuntu.com/<CC>.txt` (plain text, one URL per line, already ordered by
-      geographic proximity, ~6 URLs, no speed or status).
+      geographic proximity, no speed and no status field).
       Used when Launchpad fails or returns no mirror for the country.
-      One country's file per run: `mirrors.txt` holds one line, `http://archive.ubuntu.com/ubuntu/`
-      (measured 2026-11-13), so it is not a wider source, and no run fetches another country's file.
+      One country's file per run, and no run fetches another country's file: the file
+      cannot widen a country's set, which is why it is a fallback and not a source of its own
+      ([ADR-0005](../decisions/0005-mirror-list-and-freshness-measurements.md)).
    3. Planned, not implemented (D28): disk cache `~/.cache/apt-scout/mirrors.json` (valid 24 h;
       stale cache used only if all else fails, with a warning)
    4. Planned, not implemented: snapshot compiled into the binary (dated; warn when older than 90 days)
@@ -143,10 +142,10 @@ Invalid response counts as failure.
    `http://archive.ubuntu.com/ubuntu/dists/<codename>-updates/InRelease` and
    `<codename>-security/InRelease` get the `Date:` of each pocket.
    The `<codename>-updates` reference is downloaded in full under the 512 KiB download/verification
-   cap and its OpenPGP signature is verified, and both its `Date` and its signature status are kept,
-   because it is the freshness baseline a write may trust.
-   The `<codename>-security` reference is a ranged 4 KiB head and is never verified, because nothing
-   may consume its signature.
+   cap and its OpenPGP signature is verified, and both its `Date` and its signature status are kept:
+   it is the freshness baseline a write may trust (decision 0003).
+   The `<codename>-security` reference is a ranged 4 KiB head and is never verified: nothing may
+   consume its signature (decision 0003).
    This is the freshness baseline.
    The `<codename>` release pocket is not compared: its `Date` is the release date (for example
    `noble` shows April 2024) and never changes, so it says nothing about freshness.
@@ -157,32 +156,31 @@ Invalid response counts as failure.
    Measure time to first byte (DNS, TCP, TLS and one round trip) on the `-updates` request, never
    the body download time.
    Measure throughput on a larger sample (`Range: bytes=0-1048575` of
-   `main/binary-<arch>/Packages.xz`), because the ~130 KB `InRelease` is too small and too variable
-   to measure throughput.
+   `main/binary-<arch>/Packages.xz`): the `InRelease` is too small and too variable to measure
+   throughput ([ADR-0005](../decisions/0005-mirror-list-and-freshness-measurements.md)).
    Redirects: follow at most 3, re-validate the final host and scheme; report mirrors that redirect
    to another host.
 8. `PIPE-8` The run MUST reject unreachable mirrors, non-200 responses, and stale mirrors.
    `<codename>-updates`
    decides: a mirror is stale if its `Date` is older than the reference by more than `MAX_LAG` (24
-   hours). `<codename>-security` lag is shown for information only, because `security.ubuntu.com` is
-   left untouched.
+   hours). `<codename>-security` lag is shown for information only: `security.ubuntu.com` is
+   never rewritten (`apply.md`, the refusal list), so its lag decides nothing.
    A missing `-updates` pocket or unparsable `Date` rejects.
    A `Date:` is trusted only when it is inside the cleartext-signed region: nothing but
    whitespace-only lines may precede `-----BEGIN PGP SIGNED MESSAGE-----`, which MUST itself start
    its line (`gpgv` refuses a space-prefixed armour header), the armour headers that follow it are
    skipped up to the first blank line, and the search stops at `-----BEGIN PGP SIGNATURE-----`.
    A body with any other content before the armour header, or with its only `Date:` after the
-   signature header, still has a good signature: `gpgv` accepts such a prefix, so its signature
-   status is `verified` and is displayed as such, and naming it `invalid` would change what the
-   status means.
+   signature header, still has a good signature: `gpgv` accepts such a prefix, so the status stays
+   `verified` and is displayed as such.
    What such a body cannot supply is a trusted `Date`: a `Date` read outside the region is never a
-   verified date, never a write baseline and never authorizes a write, because a write takes only a
-   date parsed inside the region, so the parser, not the verifier, separates a signed `Date` from a
+   verified date, never a write baseline and never authorizes a write: a write takes only a date
+   parsed inside the region, so the parser, not the verifier, separates a signed `Date` from a
    displayed one.
    Read-only ranking keeps its tolerance: a `Date` read outside the signed region is still used for
    lag, ranking and the table, so a mirror that serves one is ranked, not rejected.
-   An `InRelease` larger than the 512 KiB download/verification cap is rejected at download, because
-   the verifier would refuse it anyway.
+   An `InRelease` larger than the 512 KiB download/verification cap is rejected at download: the
+   verifier would refuse it anyway.
    That oversized rejection applies in read-only mode too: the promise that read-only ranking still
    works covers a missing or unusable `gpgv`, not a mirror that sends more than the cap. `Date` is
    the signing time, not the sync time.
@@ -194,17 +192,18 @@ Invalid response counts as failure.
    If the reference answers 404 for the codename, the release is no longer on `archive.ubuntu.com`
    (it moved to `old-releases.ubuntu.com`, which has no mirrors): exit 4 with a message that names
    the codename and explains this; never use the newest-candidate baseline in that case.
-   Measured on 2026-11-11 (`noble-updates`): of 10 Lithuanian and Norwegian mirrors, 6 matched the
-   reference exactly and 4 were identical to each other but one signing generation behind (about 6
-   hours), so a 1-hour limit would reject 40% of good mirrors.
+   `MAX_LAG` is 24 hours because of a measurement, not a preference: it is recorded with its
+   date in [ADR-0005](../decisions/0005-mirror-list-and-freshness-measurements.md), and the comparison
+   against the reference stays exact (decision 0003).
    Freshness also guards against replay of old indexes; apt still verifies signatures.
 9. `PIPE-9` The run MUST rank by comparing the `-updates` `Date` exactly (no tolerance); lag is the
    reference `Date` minus
-   the mirror `Date`, clamped to 0 because the reference is fetched first and a mirror may be newer.
+   the mirror `Date`, clamped to 0: the reference is fetched first, and a mirror may be newer.
    Primary key: lag ascending (mirrors with equal `Date` form one group).
    Within a group: throughput descending, then latency ascending; a mirror in the same AS as the
-   server wins when its throughput is within 20% of the group's fastest mirror (band measured
-   against that top speed, so it is not chained).
+   server wins when its throughput is within 20% of the group's fastest mirror; the band is
+   computed against that top speed and is not chained. The 20% is a chosen tolerance, not a
+   measurement: it decides only which mirrors count as equally fast, never what counts as fresh.
    A lagging but not stale mirror stays selectable and shows a warning.
    Accepted trade-off: a slow mirror with the exact reference `Date` ranks above a much faster one
    that is one signing generation (about 6 hours) behind. `--verbose` MUST show the actual mirror AS
