@@ -52,7 +52,7 @@ and `partial:` with what is missing where it implements only part of it.
 | `APPLY-11` | `docs/spec/apply.md` | The write MUST be atomic: temp file in the same directory, fsync, rename. | implemented |
 | `APPLY-12` | `docs/spec/apply.md` | A custom URL (`Insert`) MUST use the scheme `http` or `https` only, and the run MUST reject userinfo, whitespace, `file:`, and loopback/private/link-local addresses; it MUST probe the URL like any candidate and MUST show a warning before apt is pointed at a user-supplied host. | implemented |
 | `APPLY-13` | `docs/spec/apply.md` | The run MUST say so before any probing when no URI is rewritable (for example arm64, or a system already using a third-party mirror): scan the sources first, print every file inspected and why each entry was skipped. | implemented |
-| `APPLY-14` | `docs/spec/apply.md` | Candidate hygiene: every candidate from any list source MUST be `http`/`https`, have no userinfo, and not resolve to a private, loopback or link-local address, because mirror lists are partly fetched over plain HTTP. | implemented |
+| `APPLY-14` | `docs/spec/apply.md` | Candidate hygiene: every candidate from any list source MUST be `http`/`https`, have no userinfo, and not resolve to a private, loopback or link-local address: the list is untrusted data partly fetched over plain HTTP (ADR-0006). | implemented |
 | `APPLY-15` | `docs/spec/apply.md` | After an apply the run MUST suggest `sudo apt update` and MUST NOT run it. | implemented |
 | `CLI-1` | `docs/spec/cli.md` | The run MUST accept `-c`, `--country <CC>` as an ISO 3166 alpha-2 override, which always wins over detection. | implemented |
 | `CLI-2` | `docs/spec/cli.md` | `-a`, `--any` MUST make the run ignore the detected and the given country: it considers the mirrors the list names for every country and ranks them together. | implemented |
@@ -117,7 +117,7 @@ and `partial:` with what is missing where it implements only part of it.
 | `OUT-3` | `docs/spec/output.md` | The trailing `notes` cell MUST carry exactly one fact, and a column that would be empty MUST be dropped. | implemented |
 | `OUT-4` | `docs/spec/output.md` | A run MUST write its report once, on stdout, once probing and ranking are done: the identity line, `Sources`, the ranked section with its title, `Detail` in a `--verbose` run, `Recommendation`, `Planned change` when the mode plans one, in that order, and `Rejected` only when something was rejected. | implemented |
 | `OUT-5` | `docs/spec/output.md` | Colour MUST be display-only. | implemented |
-| `OUT-6` | `docs/spec/output.md` | The accent MUST have two forms, `COLORTERM` MUST pick between them, and the fallback MUST be named because a terminal will not complain. | implemented |
+| `OUT-6` | `docs/spec/output.md` | The accent MUST have two forms, `COLORTERM` MUST pick between them, and the fallback MUST be named, not inferred, because a terminal drops an unsupported sequence without a word (ADR-0007). | implemented |
 | `OUT-7` | `docs/spec/output.md` | The plain output MUST be the contract, and colour MUST reach no decision. | implemented |
 | `OUT-8` | `docs/spec/output.md` | Progress MUST be transient, animated, and only for a person. | implemented |
 | `OUT-9` | `docs/spec/output.md` | The animation MUST be testable without a terminal, and it MUST add no dependency. | implemented |

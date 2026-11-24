@@ -140,3 +140,35 @@ The ledger row carries the claim and the state; this records the first slice of 
 What remains for D83: `apply.md` and `output.md`, then `cli.md`, `errors.md`,
   `localization.md`, `testing.md`, `non-functional.md` and `platform.md`;
   `tui.md` carries nothing to move.
+
+### D83 — second slice
+
+The ledger row carries the claim and the state; this records the second slice of D83 and what it settled.
+
+- `docs/spec/apply.md` and `docs/spec/output.md` no longer carry their design reasoning. Two records hold it:
+  `docs/decisions/0006-what-the-writer-refuses.md` and `docs/decisions/0007-the-reports-two-faces.md`.
+  The first keeps the baseline the writer cannot fetch for itself, the second restore refused by the disk, the
+  explicit refusal list, the accepted cost of a path prefix and candidate hygiene; the second keeps why the accent
+  carries weight, why the copied line is never styled, why the fallback is named and why the plain output is the
+  contract.
+- The clauses left in place are consequences of another requirement rather than rationale: a creation needs a
+  platform, an id sorts by age because it is a timestamp, a skip is reported rather than forced. None points at a
+  record because none is a decision.
+- The D83 row first claimed that every requirement in the two chapters points at a record; ten of twenty-eight do.
+  The row now names those ten instead, because a set a script prints survives review and a universal does not.
+  Three of them carried a reason no record held, so the reason moved with the citation: the note about a listed
+  entry whose path is `/` and the ordering of backup ids are sections of ADR-0006, and the harness
+  argument in `OUT-7` was already in ADR-0007.
+  A fourth claim was false the other way: ADR-0006 described the alternatives mechanism as shipped when
+  `APPLY-7` is still planned, and the record now says so in its first words.
+- Rewording two first sentences broke their `SPEC.md` cells: `APPLY-14` and `OUT-6` lost the code spans their
+  chapters carry. The documented traceability loop did NOT catch it and cannot: it strips backticks on both
+  sides, so a cell missing a span still matches. A character-exact comparison over all 120 rows found both, and
+  the review of the first attempt is what prompted that comparison.
+  `docs/spec/AGENTS.md` now states that limit next to the loop, so the next reader does not trust it for more.
+- The chapter citations read `(ADR-0006)` and `(ADR-0007)` rather than relative links, matching how the
+  chapters already cite `decision 0003`, and because a link written for `docs/spec/` cannot also appear
+  verbatim in a `SPEC.md` cell without breaking one of the two paths.
+
+What remains for D83: `cli.md`, `errors.md`, `localization.md`, `testing.md`,
+  `non-functional.md`, `platform.md` and `tui.md`.

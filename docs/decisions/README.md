@@ -15,6 +15,8 @@ Evidence about the current code may be cited as `path:line` and is allowed to ag
 | [0003](0003-freshness-and-ranking-policy.md) | Freshness is the `-updates` `Date`, compared exactly, with a 24-hour lag limit |
 | [0004](0004-reference-unreachable-baseline.md) | When the reference host is unreachable, use the newest candidate `Date` as the baseline |
 | [0005](0005-mirror-list-and-freshness-measurements.md) | The measurements the mirror-list parsers and `MAX_LAG` rest on, with their dates |
+| [0006](0006-what-the-writer-refuses.md) | What the writer refuses, and why each refusal is explicit |
+| [0007](0007-the-reports-two-faces.md) | The report serves a person and a harness, and why the styling rules follow |
 
 ## Recorded elsewhere
 
