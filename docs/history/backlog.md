@@ -107,3 +107,24 @@ The brief, kept from `docs/tasks/D92.md` before D85's rule deleted it, and what 
 
 PR #127. Gates at the head: `cargo fmt --check`, `cargo clippy -D warnings` in both builds, `cargo test --locked`
 327 + 3, `cargo deny check`.
+
+### D83 — first slice
+
+The ledger row carries the claim and the state; this records the first slice of D83 and what it settled.
+
+- `docs/spec/pipeline.md` no longer carries its measurements: the Launchpad page shape and counts, the
+  `mirrors.ubuntu.com` file shape, the `InRelease` size that rules out a throughput sample, and the
+  2026-11-11 freshness measurement that decided `MAX_LAG` are now
+  `docs/decisions/0005-mirror-list-and-freshness-measurements.md`, each with its date.
+- Each requirement that rested on one cites the record or the decision that owns the rule: step 3 and 7 cite
+  0005, steps 6 and 8 cite 0003, the `-security` note cites 0001.
+- The 20% same-AS band turned out not to be a measurement at all, and the earlier phrasing said it was; it is a
+  chosen tolerance, and the requirement now says so instead of pointing at a record that would not have
+  supported it.
+- The four existing decision records and `docs/decisions/README.md` were reflowed to one sentence per line under
+  120 bytes; a whitespace-insensitive comparison against the previous text is identical word for word.
+  They were the only files in the tree that broke that rule.
+
+What remains for D83: `apply.md` and `output.md`, then `cli.md`, `errors.md`,
+  `localization.md`, `non-functional.md` and `platform.md`.
+

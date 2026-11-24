@@ -582,16 +582,12 @@ constructed environment to any child.
   review rather than by a gate, and the stdin half of the requirement is untested for the same reason: a builder that
   cleared the environment and inherited stdin would pass.
   [docs/spec/platform.md, docs/threat-model.md]
-- [ ] D83.
-  Move the rationale and the measurement evidence out of the requirement bodies in `docs/spec/`: `docs/AGENTS.md`
-  sends `why` to an ADR and evidence to `ROADMAP.md`, and D76b deliberately left both in place because deleting a
-  measured claim (the Launchpad page structure in `pipeline.md` step 3, the 2026-11-11 freshness measurement in step
-  8, the `pop-default-settings` verification in `platform.md`) would drop input the parsers are tested against.
-  Acceptance: every `because`, `so that`, `Verified from`, `Measured` and dated observation inside a requirement is
-  either cited as `ADR-####` or moved to a ledger entry, and no requirement is left without the fact it needs to be
-  testable.
-  No behavior change. [docs/AGENTS.md, SPEC: docs/spec/AGENTS.md]
-
-## Change log
-
-Historical log: [docs/history/change-log.md](docs/history/change-log.md).
+- [ ] **D83 — PARTIAL; one chapter done, five remain.** Move the rationale and the measurement evidence out of
+  the requirement bodies in `docs/spec/`, because `docs/AGENTS.md` sends `why` to an ADR and evidence to
+  `ROADMAP.md`. D76b left both in place deliberately, because three measured claims are what the parsers are
+  tested against. `pipeline.md` is moved: its measurements, with their dates, are now
+  [ADR-0005](docs/decisions/0005-mirror-list-and-freshness-measurements.md), and each requirement that rested on
+  one cites it or the decision that owns the rule. What remains: `apply.md` and `output.md` (14 lines,
+  mostly explanations rather than measurements), then `cli.md`, `errors.md`, `localization.md`,
+  `non-functional.md` and `platform.md`. No behavior change.
+  [docs/AGENTS.md, SPEC: docs/spec/AGENTS.md]
