@@ -200,9 +200,14 @@ The ledger row carries the claim and the state; this records the fourth slice of
 - `PLAT-1`-s observation about Linux Mint (`VERSION_CODENAME=wilma` while apt uses `noble`) moved to
   `docs/decisions/0008-where-self-healing-stops.md`, which already decides that the distribution is read rather than
   asked for; the chapter states the order and cites the record.
-- `PLAT-3`-s explanation of the cleared environment now cites `docs/threat-model.md`, which rules on that
-  inheritance, instead of restating the ruling. The architecture rule and the arm64 explanation stay in the
-  chapter: they are requirements, not reasons.
+- `PLAT-3`-s explanation of the cleared environment now cites `docs/threat-model.md` (A2), which rules on
+  that inheritance, instead of restating the ruling; the MUST stays in the chapter, because the threat model records
+  the control and does not own the requirement. The architecture rule and the arm64 explanation stay as well: they
+  are requirements, not reasons.
+- The first attempt at this slice dropped two obligations while moving evidence: `PLAT-3`-s `MUST run with the
+  environment cleared` became a present-tense claim, and the sentence requiring the plan to show the split
+  before anything is written had no successor. Both are back in the chapter; the review asked for an inventory of
+  every old obligation, which is what caught them.
 
 What remains for D83: `cli.md`, `localization.md`, `testing.md`, `non-functional.md` and
   `tui.md`.
