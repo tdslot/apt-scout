@@ -17,6 +17,7 @@ Evidence about the current code may be cited as `path:line` and is allowed to ag
 | [0005](0005-mirror-list-and-freshness-measurements.md) | The measurements the mirror-list parsers and `MAX_LAG` rest on, with their dates |
 | [0006](0006-what-the-writer-refuses.md) | What the writer refuses, and why each refusal is explicit |
 | [0007](0007-the-reports-two-faces.md) | The report serves a person and a harness, and why the styling rules follow |
+| [0008](0008-where-self-healing-stops.md) | The run heals what it can, and knows where to stop |
 
 ## Recorded elsewhere
 
