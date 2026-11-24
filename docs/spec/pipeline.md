@@ -1,8 +1,7 @@
 # Pipeline
 
 1. `PIPE-1` The run MUST detect the distro from `/etc/os-release`.
-   It MUST read the codename: `UBUNTU_CODENAME` when present, otherwise `VERSION_CODENAME` (Linux Mint
-   reports `VERSION_CODENAME=wilma`, but apt uses `noble`) (ADR-0008).
+   It MUST read the codename: `UBUNTU_CODENAME` when present, otherwise `VERSION_CODENAME` (ADR-0008).
 2. `PIPE-2` The run MUST detect the location of the server (country, then AS), skipped with `--no-geo`.
    Every source is optional: if all fail, the program asks for `--country`, or for `--any` where no
    country is needed; it does not guess a worldwide list.
