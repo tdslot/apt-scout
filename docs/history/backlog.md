@@ -221,9 +221,10 @@ The ledger row carries the claim and the state; this records the fifth slice of 
   `docs/decisions/0009-exit-codes-and-the-date-boundary.md`: `3` is the expected outcome of an unprivileged
   run rather than a failure, `4` is a platform verdict rather than a fault, and a date can move a mirror up
   the table while `apt` still checks archive signatures for every package it installs, which
-  `docs/threat-model.md` records as A5/A6. Exit `1` is the failure a rerun does not fix, which the first
-  draft got wrong by calling it transient: the code exits `1` on the deterministic no-op of a run that would
-  change nothing.
+  `docs/threat-model.md` records as A5/A6. The record makes no claim about whether repeating a run helps,
+  because the code cannot: `1` covers a plan that raced a changed file (its message says to re-run), a missing
+  mirror list (check the network) and a broken invariant (the run is at fault) alike. Two drafts got that wrong in
+  opposite directions before the code was read.
 - The two-type design that keeps ranking and writing apart moved with it: `VerifiedDate` for the date half and
   `SignatureStatus::Verified` for the status half, so a caller can neither forge the status nor pair a date
   it read with a proof it did not earn. The chapter keeps every rule: the five codes, the root and `--list`

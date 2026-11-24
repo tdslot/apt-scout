@@ -12,8 +12,10 @@ script, and how far a freshness date can reach.
   not tell "run me again privileged" from "this failed".
 - `4` says there is nothing here to rank: an unsupported distribution or architecture, or a release that has left
   `archive.ubuntu.com`. That is a platform verdict rather than a runtime fault, so a caller can decide to give up
-  instead of retrying. `1` is the failure a rerun does not fix: the input has to change, or the run has
-  to be repaired.
+  instead of retrying. `1` is the runtime failure, and the code is not made to say whether repeating the
+  run will help, because it cannot know: the message carries that instead. A plan that raced a changed file says
+  to re-run, a missing mirror list says to check the network, and a broken invariant says the run is at fault.
+  What the code distinguishes is where the run stopped, not whether the next attempt differs from this one.
 
 A usage error is `2` and keeps that code wherever it is noticed, because the fix is the same: change the command.
 
