@@ -154,6 +154,11 @@ The ledger row carries the claim and the state; this records the second slice of
 - The clauses left in place are consequences of another requirement rather than rationale: a creation needs a
   platform, an id sorts by age because it is a timestamp, a skip is reported rather than forced. None points at a
   record because none is a decision.
+- The D83 row first claimed that every requirement in the two chapters points at a record; ten of twenty-eight do.
+  The row now names those ten instead, because a set a script prints survives review and a universal does not.
+  Two of them carried a reason no record held, so the reason moved with the citation: the note in `APPLY-7` that
+  apt has no failover across URIs is now a section of ADR-0006, and the harness argument in `OUT-7` was already in
+  ADR-0007.
 - Rewording two first sentences broke their `SPEC.md` cells: `APPLY-14` and `OUT-6` lost the code spans their
   chapters carry. The documented traceability loop did NOT catch it and cannot: it strips backticks on both
   sides, so a cell missing a span still matches. A character-exact comparison over all 120 rows found both, and

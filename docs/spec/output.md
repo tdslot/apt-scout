@@ -89,8 +89,7 @@
 - `OUT-7` The plain output MUST be the contract, and colour MUST reach no decision.
   With colour off the report
   carries the same words, the same columns and the same section headings a colour run prints, minus
-  the escapes, so a harness that captures stdout matches the same lines either way: the container
-  matrix runs with stdout a pipe, therefore colour off, and asserts that text.
+  the escapes (ADR-0007).
   Colour is never an input to a decision, a comparison, an ordering, a path, the plan, the bytes
   written or an exit code, so two runs that differ only in colour write the same bytes under
   `/etc/apt` and exit with the same code.

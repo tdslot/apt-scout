@@ -108,8 +108,7 @@
   with an explanation.
 - `APPLY-7` (planned) In the TUI the first checked mirror in rank order MUST become the active URI.
   Other checked mirrors MUST be written as commented lines `# alternative: <uri>` above the changed
-  line, so the user can switch quickly. apt has no failover across URIs, so alternatives are
-  documentation only.
+  line (ADR-0006).
 - `APPLY-8` Before writing, the run MUST check that the target is a regular file (do not follow
   symlinks), MUST keep mode and owner, and MUST leave no half-written file.
 - `APPLY-9` File creation MUST be planned, never incidental: the planned

@@ -37,6 +37,12 @@ A listed entry whose path is `/` admits every path on that host: the list names 
 cannot tell the trees apart. That is why the canonical archive and its `*.archive.ubuntu.com` names stay
 recognized at any path, and it is the one place where a bare listing widens rather than narrows.
 
+## Alternatives are comments, not config
+
+The checked mirrors beyond the first are written as `# alternative: <uri>` above the changed line, so
+the user can switch by uncommenting one. apt has no failover across URIs, so that list is documentation: the
+tool cannot hand apt a second source to fall back on by itself.
+
 ## Candidate hygiene follows the transport
 
 Every candidate must be `http`/`https`, carry no userinfo, and not resolve to a private, loopback or link-local
@@ -44,4 +50,4 @@ address. The input is a list fetched over plain HTTP from a host that can be wro
 validated as untrusted data rather than as a URL the tool chose.
 
 **Spec**: `docs/spec/apply.md`, `APPLY-1` (the baseline), `APPLY-3` (the refusal list and the path prefix),
-  `RESTORE-1` (the second restore) and `APPLY-14` (candidate hygiene). **Aliases**: none.
+  `RESTORE-1` (the second restore), `APPLY-14` (candidate hygiene) and `APPLY-7` (the alternatives). **Aliases**: none.
