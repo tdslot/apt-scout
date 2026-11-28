@@ -130,9 +130,11 @@ jobs:
       - name: Documentation checks (spec rows, width, links, balance, append-only history)
         run: |
           # Each check is a defect that reached a merged pull request before it existed.
-          # Two of them need a base: fetch develop, and treat a failed fetch as a failure of the
-          # check rather than as a pass (the English-only guard does the same).
-          git fetch --no-tags --depth=1 origin develop:refs/remotes/origin/develop
+          # Two of them compare against develop, which needs real history: the checkout is a
+          # shallow clone of the merge ref, and a shallow clone has no merge base. Unshallow
+          # first, so the append-only rule can actually see anything.
+          git fetch --no-tags --unshallow origin
+          git fetch --no-tags origin develop:refs/remotes/origin/develop
           python3 scripts/check-docs.py origin/develop
       - name: Non-English text guard (project text must be English)
         run: |
