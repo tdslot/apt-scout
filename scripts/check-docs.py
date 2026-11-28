@@ -5,10 +5,10 @@ Five checks, each one a defect that reached a merged pull request:
 
 1. every row of the one table `SPEC.md` may hold, walked by position from the header to the blank
    line that ends it: it starts with a pipe, is five pipes wide (four cells: id, file, requirement,
-   state), every cell is one space of padding per side, the id and file cells are code spans, and
-   the Requirement cell occurs in its chapter with whitespace collapsed on both sides. A row above
-   the header or below the blank line, a second header, a header without its --- separator, or an
-   empty table is a failure; fenced blocks are skipped;
+   state), every cell is one space of padding per side, the id and file cells are code spans, the
+   Requirement cell is not empty, and it occurs in its chapter with whitespace collapsed on both
+   sides. A row above the header or below the blank line, a second header, a header without its
+   --- separator, or an empty table is a failure; fenced blocks are skipped;
 2. no line in `SPEC.md`, `docs/spec/` or `docs/decisions/` is longer than 120 characters or 120
    bytes, outside tables and fenced blocks, with a line that is one code span exempt because a
    quoted message cannot be wrapped;
@@ -59,7 +59,7 @@ def prose_lines(path):
     fenced = False
     kept = []
     for line in read(path).split(NL):
-        if line.startswith(FENCE):
+        if line.strip().startswith(FENCE):
             fenced = not fenced
             continue
         if not fenced:
@@ -82,7 +82,7 @@ def spec_rows():
     fenced = set()
     inside = False
     for number, line in enumerate(lines):
-        if line.startswith(BT * 3):
+        if line.strip().startswith(FENCE):
             inside = not inside
             fenced.add(number)
             continue
@@ -119,6 +119,9 @@ def spec_rows():
             continue
         path = cells[1].strip().strip(BT)
         cell = cells[2].strip()
+        if not cell:
+            failures.append('row states no requirement: ' + line[:70])
+            continue
         if not os.path.exists(path):
             failures.append('SPEC.md names a chapter that does not exist: ' + path)
             continue
@@ -145,7 +148,7 @@ def width(files):
             continue
         fenced = False
         for number, line in enumerate(read(path).split(NL), 1):
-            stripped = line.rstrip()
+            stripped = line.strip()
             if stripped.startswith(FENCE):
                 fenced = not fenced
                 continue
@@ -161,6 +164,7 @@ def balance(files):
     failures = []
     for path in files:
         if not os.path.exists(path):
+            failures.append(path + ' is tracked but missing')
             continue
         net = 0
         for line in prose_lines(path):
@@ -190,7 +194,7 @@ def links(files):
 
 
 def changed(base):
-    """Files this branch touches, committed or not, so the check also runs before a commit."""
+    """Files this branch touches, committed or staged: an untracked file is invisible to git diff."""
     names = set()
     for revision in (base + '...HEAD', base):
         for line in git('diff', '--name-only', revision).split(NL):
@@ -199,18 +203,14 @@ def changed(base):
     return sorted(names)
 
 
-def append_only(base):
-    """docs/history/ may grow at its end, and nowhere else.
+def append_only(merge_base):
+    """docs/history/ only grows at its end, and nowhere else.
 
     The comparison is against the merge base, so a develop that moved under the branch cannot make an
     innocent pull request fail, and a file the branch adds is allowed: a new history entry is an
     append. A file counted by lines would let a bullet be inserted into a frozen entry, which is the
     defect this rule exists for, so the test is a prefix test on the text.
     """
-    merge_base = git('merge-base', base, 'HEAD').strip()
-    if not merge_base:
-        raise CheckError('no merge base with ' + base + ', so the append-only check cannot run; '
-                         'a shallow clone needs git fetch --unshallow')
     failures = []
     touched = set()
     for revision in (merge_base, 'HEAD'):
@@ -221,7 +221,7 @@ def append_only(base):
         if not os.path.exists(path):
             failures.append(path + ' is history and was deleted')
             continue
-        known = subprocess.run(['git', 'cat-file', '-e', merge_base + ':' + path])
+        known = subprocess.run(['git', 'cat-file', '-e', merge_base + ':' + path], capture_output=True)
         if known.returncode != 0:
             continue  # a file the branch adds is an append by definition
         base_text = git('show', merge_base + ':' + path)
@@ -241,10 +241,19 @@ def run(base):
     failures += width(scope)
     failures += links(files)
     if base:
-        touched = changed(base)
-        failures += balance([p for p in touched if p.endswith('.md')])
-        failures += append_only(base)
-        print('base', base, 'files', len(touched))
+        merge_base = ''
+        try:
+            merge_base = git('merge-base', base, 'HEAD').strip()
+        except CheckError:
+            pass
+        if not merge_base:
+            failures.append('no merge base with ' + base + ', so the parenthesis and history checks'
+                            ' cannot run; a shallow clone needs git fetch --unshallow')
+        else:
+            touched = changed(merge_base)
+            failures += balance([p for p in touched if p.endswith('.md')])
+            failures += append_only(merge_base)
+            print('base', base, 'files', len(touched))
     else:
         print('no base revision given: parenthesis balance and append-only are skipped')
     for failure in failures:

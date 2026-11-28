@@ -72,8 +72,9 @@ for f in docs/spec/*.md; do
 done
 ```
 
-No line outside a table or a code block exceeds 120 characters, except a line that is one inline
-code span:
+No line outside a table or a code block exceeds 120 characters or 120 bytes, except a line that is one
+inline code span; `scripts/check-docs.py` checks both, because a line of 120 characters can carry
+more than 120 bytes:
 
 ```
 awk '!/^[|]/ && length($0)>120 && $0 !~ /^ *`[^`]*`$/ {print FILENAME": "FNR}' SPEC.md docs/spec/*.md
@@ -116,7 +117,8 @@ sides, so a cell that lost a code span fails. `SPEC.md` holds one table, and the
 position: a row that does not start with a pipe, is not five pipes wide (four cells), pads a cell
 by anything but one space per side, or keeps anything but a code span in its id and file cells
 fails, and so does a row above the header or below the blank line that ends the table, a second
-header, a header without its --- separator, and an empty table. Fenced blocks are skipped, and
+header, a header without its --- separator, an empty table, and a row whose Requirement cell is
+empty, because an empty string occurs in every chapter. Fenced blocks are skipped, and
 the width rule, link resolution, parenthesis balance in changed files and the append-only rule
 for `docs/history/` run beside it: that one compares against the merge base and requires the
 text a file had to still be a prefix of it now, so an insertion into a frozen entry fails as a
