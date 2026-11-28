@@ -235,3 +235,21 @@ The ledger row carries the claim and the state; this records the fifth slice of 
   name is the step that caught it.
 
 What remains for D83: `cli.md`, `localization.md`, `testing.md` and `tui.md`.
+
+### D83 — sixth slice
+
+The ledger row carries the claim and the state; this records the sixth slice of D83 and what it settled.
+
+- `docs/spec/localization.md` is planned work written as design argument: what a message id may be, how a
+  locale is chosen, why the catalogs are compiled in, why the dependency enters by decision, and why the
+  manual page follows its catalog. Those reasons are now sections of
+  `docs/decisions/0010-why-the-locale-layer-is-shaped-this-way.md`, and the chapter states the rules alone.
+- Three passages became citations instead of restatements: `LOC-1`-s inventory of the four environment
+  reads, which `docs/threat-model.md` already rules on as A2; `LOC-7`-s licence survey, which is now
+  the decision's evidence; and `LOC-14`-s note that man-db resolves a locale name rather than a
+  script tag.
+- The rules the chapter keeps are the ones a translator or a caller acts on: the id grammar, the lookup
+  order, the script table for Chinese, the completeness and parse gates, the untranslatable list, display
+  columns, ordering, and the page-per-catalog rule.
+
+What remains for D83: `cli.md`, `testing.md` and `tui.md`.
