@@ -111,6 +111,19 @@ done
 ```
 
 A row whose statement was reworded in the chapter and not in `SPEC.md` prints `untraceable`.
+The loop above normalises backticks away; `scripts/check-docs.py` keeps them and collapses whitespace on both
+sides, so a cell that lost a code span fails. `SPEC.md` holds one table, and the script walks it by
+position: a row that does not start with a pipe, is not five pipes wide (four cells), pads a cell
+by anything but one space per side, or keeps anything but a code span in its id and file cells
+fails, and so does a row above the header or below the blank line that ends the table, a second
+header, a header without its --- separator, and an empty table. Fenced blocks are skipped, and
+the width rule, link resolution, parenthesis balance in changed files and the append-only rule
+for `docs/history/` run beside it: that one compares against the merge base and requires the
+text a file had to still be a prefix of it now, so an insertion into a frozen entry fails as a
+deletion would. It runs in CI:
+```
+python3 scripts/check-docs.py origin/develop
+```
 The loop strips backticks on both sides, so a cell that lost a code span still matches: the loop answers
 whether the text exists, not whether it is the same text. For the same-text question, compare the cell with
 the chapter character for character (no normalisation) before claiming a row follows its requirement.
