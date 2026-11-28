@@ -144,11 +144,11 @@ When the user requests a durable behavior change, record it here or in the relev
 - Repo files are authoritative: `AGENTS.md` for workflow rules, `.github/workflows/ci.yml` for required checks, `.github/workflows/pr-title.yml` for the Conventional Commit PR title, `ROADMAP.md` for task order and status.
 - Verification: `cargo fmt --all -- --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, `scripts/docker-test.sh` (needs Docker). Run the full set before PRs that change Rust/build behavior and record results in ROADMAP.
   Any change under `SPEC.md`, `docs/spec/`, `docs/decisions/` or `docs/history/` also runs
-  `python3 scripts/check-docs.py origin/develop`: the `SPEC.md` table by position — row shape, cells,
-  and each Requirement cell against its chapter; the 120-column width rule; link resolution;
-  parenthesis balance in changed files; and that `docs/history/` still starts with the text it had at the
-  base. CI runs the same script in `docs-and-conventions`, so a local miss fails the pull request
-  instead of a review round.
+  `python3 scripts/check-docs.py origin/develop`: `SPEC.md`'s one table walked row by row,
+  each Requirement cell against its chapter; the 120-character width rule; link resolution;
+  parenthesis balance in changed files; and that `docs/history/` still starts with the text it had
+  at the merge base, so an insertion fails as a deletion would. CI runs the same script in
+  `docs-and-conventions`, so a local miss fails the pull request instead of a review round.
 
 ## Child DOX Index
 

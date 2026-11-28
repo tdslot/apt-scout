@@ -3,26 +3,28 @@
 
 Five checks, each one a defect that reached a merged pull request:
 
-1. every row of the `SPEC.md` table, walked by position from the header to the blank line that
-   ends it: it starts with a pipe, is five pipes wide (four cells: id, file, requirement,
-   state), every cell is one space of padding per side, the id and file cells are code spans,
-   and the Requirement cell occurs in its chapter with whitespace collapsed on both sides; a
-   row that strays out of that shape, sits below the blank line, or lacks the separator under
-   the header is a failure;
+1. every row of the one table `SPEC.md` may hold, walked by position from the header to the blank
+   line that ends it: it starts with a pipe, is five pipes wide (four cells: id, file, requirement,
+   state), every cell is one space of padding per side, the id and file cells are code spans, and
+   the Requirement cell occurs in its chapter with whitespace collapsed on both sides. A row above
+   the header or below the blank line, a second header, a header without its --- separator, or an
+   empty table is a failure; fenced blocks are skipped;
 2. no line in `SPEC.md`, `docs/spec/` or `docs/decisions/` is longer than 120 characters or 120
    bytes, outside tables and fenced blocks, with a line that is one code span exempt because a
    quoted message cannot be wrapped;
 3. parentheses balance in every changed Markdown file, outside fenced blocks;
 4. every relative link resolves from the directory of the file that contains it, outside fenced
    blocks, with percent-encoding decoded;
-5. `docs/history/` is append-only: the text a file has at the base must still be a prefix of it
-   now, so a bullet inserted into a frozen entry fails as surely as a deletion.
+5. `docs/history/` only grows at its end: against the merge base, the text a file had must still
+   be a prefix of it now, so a bullet inserted into a frozen entry fails as surely as a
+   deletion, and a file the branch adds is allowed.
 
 Usage: python3 scripts/check-docs.py [BASE]
 
-A BASE revision (for example origin/develop) is what checks 3 and 5 compare against. Without one
-they are skipped and the script says so. A check that cannot run is a failure, not a pass: a base
-with no merge base (a shallow clone) fails rather than reporting nothing.
+A BASE revision (for example origin/develop) is what the parenthesis and history checks compare
+against; without one they are skipped and the script says so. A check that cannot run is a
+failure, not a pass: a base with no merge base (a shallow clone) fails rather than reporting
+nothing.
 """
 
 import os
@@ -70,19 +72,34 @@ def markdown_files():
 
 
 def spec_rows():
-    """Every row of the SPEC.md table: shape, cells, and the requirement it states."""
+    """The one table SPEC.md is allowed to hold: its rows, their shape, and what they state.
+
+    SPEC.md holds exactly one table, and the walk covers the whole file: a row above the header or
+    below the blank line that ends the table is a failure, and a fenced block is skipped the way the
+    other checks skip it.
+    """
     lines = read('SPEC.md').split(NL)
-    headers = [i for i, line in enumerate(lines) if line.startswith('| ID |')]
+    fenced = set()
+    inside = False
+    for number, line in enumerate(lines):
+        if line.startswith(BT * 3):
+            inside = not inside
+            fenced.add(number)
+            continue
+        if inside:
+            fenced.add(number)
+    headers = [i for i, line in enumerate(lines) if line.startswith('| ID |') and i not in fenced]
     if len(headers) != 1:
-        return 0, ['SPEC.md must have exactly one | ID | header, found ' + str(len(headers))]
+        return 0, ['SPEC.md must hold exactly one | ID | header outside a fenced block, found ' + str(len(headers))]
     header = headers[0]
-    separator = r'^\|\s*-{3}'
-    if header + 1 >= len(lines) or not re.match(separator, lines[header + 1]):
+    if header + 1 >= len(lines) or not re.match(r'^\|\s*-{3}', lines[header + 1]):
         return 0, ['the | ID | header is not followed by a --- separator row']
     failures = []
     rows = 0
     body = header + 2
+    table = set(range(header, body))
     while body < len(lines) and lines[body].strip():
+        table.add(body)
         line = lines[body]
         body += 1
         if not line.startswith('|'):
@@ -108,9 +125,13 @@ def spec_rows():
         rows += 1
         if cell not in ' '.join(read(path).split()):
             failures.append('row not in its chapter: ' + path + ': ' + cell[:70])
-    for number, line in enumerate(lines[body:], body + 1):
-        if re.match(r'^\s*\|', line) and not line.startswith('| --- |'):
-            failures.append('table row outside the table: SPEC.md:' + str(number))
+    if not rows:
+        failures.append('the SPEC.md table holds no rows')
+    for number, line in enumerate(lines):
+        if number in table or number in fenced:
+            continue
+        if re.match(r'^\s*\|', line):
+            failures.append('table row outside the table: SPEC.md:' + str(number + 1))
     return rows, failures
 
 
@@ -181,25 +202,30 @@ def changed(base):
 def append_only(base):
     """docs/history/ may grow at its end, and nowhere else.
 
-    A file counted by lines would let a bullet be inserted into a frozen entry, which is the defect
-    this rule exists for: the file as it stands at the base must still be a prefix of the file now.
+    The comparison is against the merge base, so a develop that moved under the branch cannot make an
+    innocent pull request fail, and a file the branch adds is allowed: a new history entry is an
+    append. A file counted by lines would let a bullet be inserted into a frozen entry, which is the
+    defect this rule exists for, so the test is a prefix test on the text.
     """
-    if not git('merge-base', base, 'HEAD').strip():
+    merge_base = git('merge-base', base, 'HEAD').strip()
+    if not merge_base:
         raise CheckError('no merge base with ' + base + ', so the append-only check cannot run; '
                          'a shallow clone needs git fetch --unshallow')
     failures = []
     touched = set()
-    for revision in (base + '...HEAD', 'HEAD'):
+    for revision in (merge_base, 'HEAD'):
         for line in git('diff', '--name-only', revision, '--', 'docs/history/').split(NL):
             if line.strip():
                 touched.add(line.strip())
     for path in sorted(touched):
-        base_text = git('show', base + ':' + path)
         if not os.path.exists(path):
             failures.append(path + ' is history and was deleted')
             continue
-        head_text = read(path)
-        if not head_text.startswith(base_text):
+        known = subprocess.run(['git', 'cat-file', '-e', merge_base + ':' + path])
+        if known.returncode != 0:
+            continue  # a file the branch adds is an append by definition
+        base_text = git('show', merge_base + ':' + path)
+        if not read(path).startswith(base_text):
             failures.append(path + ' is history and an edit was written above its end')
     return failures
 
