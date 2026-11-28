@@ -582,7 +582,7 @@ constructed environment to any child.
   review rather than by a gate, and the stdin half of the requirement is untested for the same reason: a builder that
   cleared the environment and inherited stdin would pass.
   [docs/spec/platform.md, docs/threat-model.md]
-- [ ] **D83 — READY; six of the ten chapters are moved.** Move the rationale and the measurement
+- [ ] **D83 — READY; seven of the ten chapters are moved.** Move the rationale and the measurement
   evidence out of the requirement bodies in `docs/spec/`, because `docs/AGENTS.md` sends `why` to an ADR and evidence
   to `ROADMAP.md`. D76b left both in place deliberately, because three measured claims are what the
   parsers are tested against.
@@ -604,11 +604,13 @@ constructed environment to any child.
   `non-functional.md` (the exit-code vocabulary and the date boundary,
   [ADR-0009](docs/decisions/0009-exit-codes-and-the-date-boundary.md), merged as
   [#136](https://github.com/tdslot/apt-scout/pull/136) in `e5086af`).
-  Remaining, four chapters: `cli.md`, `localization.md`, `testing.md` and `tui.md`,
-  the last of which carries nothing to move but is listed so the count stays the ten the index records.
-  Acceptance: every `because`, `so that`, `Verified from`, `Measured` and dated observation inside a requirement
-  is either cited as `ADR-####` or moved to a ledger entry, and no requirement is left without the fact it needs to
-  be testable. No behavior change. [docs/AGENTS.md, SPEC: docs/spec/AGENTS.md]
+  `localization.md` ([ADR-0010](docs/decisions/0010-why-the-locale-layer-is-shaped-this-way.md)), in this pull
+  request.
+  Remaining, three chapters: `cli.md`, `testing.md` and `tui.md`, the last of which carries
+  nothing to move but is listed so the count stays the ten the index records.
+  Acceptance: every `because`, `so that`, `Verified from`, `Measured` and dated observation inside a
+  requirement is either cited as `ADR-####` or moved to a ledger entry, and no requirement is left
+  without the fact it needs to be testable. No behavior change. [docs/AGENTS.md, SPEC: docs/spec/AGENTS.md]
 ## Change log
 
 Historical log: [docs/history/change-log.md](docs/history/change-log.md).

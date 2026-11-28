@@ -19,6 +19,7 @@ Evidence about the current code may be cited as `path:line` and is allowed to ag
 | [0007](0007-the-reports-two-faces.md) | The report serves a person and a harness, and why the styling rules follow |
 | [0008](0008-where-self-healing-stops.md) | The run heals what it can, and knows where to stop |
 | [0009](0009-exit-codes-and-the-date-boundary.md) | Why the exit codes are five, and why a date can rank but never install |
+| [0010](0010-why-the-locale-layer-is-shaped-this-way.md) | Why the locale layer is shaped this way |
 
 ## Recorded elsewhere
 
