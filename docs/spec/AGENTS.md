@@ -114,12 +114,12 @@ A row whose statement was reworded in the chapter and not in `SPEC.md` prints `u
 The loop above normalises backticks away; `scripts/check-docs.py` keeps them and collapses whitespace on both
 sides, so a cell that lost a code span fails. It walks the table by position, from the header to the
 blank line that ends it, and fails a row that does not start with a pipe, is not five pipes wide
-(four cells), pads any cell with anything but one space per side, or keeps anything but a code
-span in its id and file cells: a row that strays out of that shape is a failure, never a row that
-was not seen.
-The script also checks the width rule, link resolution from each file's own directory,
-parenthesis balance in changed files and the append-only rule in `docs/history/` — committed and
-uncommitted. It runs in CI:
+(four cells), pads a cell by anything but one space per side, or keeps anything but a code span
+in its id and file cells; it also fails a row below the blank line and a header without its
+--- separator, so a row that strays out of the table is a failure rather than a row not seen.
+It also checks the width rule, link resolution from each file's own directory,
+parenthesis balance in changed files, and that `docs/history/` still starts with the text it had
+at the base — so a bullet inserted into a frozen entry fails as a deletion would. It runs in CI:
 ```
 python3 scripts/check-docs.py origin/develop
 ```

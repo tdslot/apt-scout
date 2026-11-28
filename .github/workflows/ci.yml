@@ -133,7 +133,9 @@ jobs:
           # Two of them compare against develop, which needs real history: the checkout is a
           # shallow clone of the merge ref, and a shallow clone has no merge base. Unshallow
           # first, so the append-only rule can actually see anything.
-          git fetch --no-tags --unshallow origin
+          if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+            git fetch --no-tags --unshallow origin
+          fi
           git fetch --no-tags origin develop:refs/remotes/origin/develop
           python3 scripts/check-docs.py origin/develop
       - name: Non-English text guard (project text must be English)

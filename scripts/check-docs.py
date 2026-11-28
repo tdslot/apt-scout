@@ -5,17 +5,18 @@ Five checks, each one a defect that reached a merged pull request:
 
 1. every row of the `SPEC.md` table, walked by position from the header to the blank line that
    ends it: it starts with a pipe, is five pipes wide (four cells: id, file, requirement,
-   state), every cell is padded with exactly one space per side, the id and file cells are code
-   spans, and the Requirement cell occurs in its chapter with whitespace collapsed on both
-   sides; a row that strays out of that shape is a failure, never a row that was not seen;
+   state), every cell is one space of padding per side, the id and file cells are code spans,
+   and the Requirement cell occurs in its chapter with whitespace collapsed on both sides; a
+   row that strays out of that shape, sits below the blank line, or lacks the separator under
+   the header is a failure;
 2. no line in `SPEC.md`, `docs/spec/` or `docs/decisions/` is longer than 120 characters or 120
    bytes, outside tables and fenced blocks, with a line that is one code span exempt because a
    quoted message cannot be wrapped;
 3. parentheses balance in every changed Markdown file, outside fenced blocks;
 4. every relative link resolves from the directory of the file that contains it, outside fenced
    blocks, with percent-encoding decoded;
-5. `docs/history/` is append-only against a base revision and against the working tree, so an
-   uncommitted deletion is caught too.
+5. `docs/history/` is append-only: the text a file has at the base must still be a prefix of it
+   now, so a bullet inserted into a frozen entry fails as surely as a deletion.
 
 Usage: python3 scripts/check-docs.py [BASE]
 
@@ -71,19 +72,22 @@ def markdown_files():
 def spec_rows():
     """Every row of the SPEC.md table: shape, cells, and the requirement it states."""
     lines = read('SPEC.md').split(NL)
-    header = next((i for i, line in enumerate(lines) if line.startswith('| ID |')), None)
-    if header is None:
-        return 0, ['SPEC.md has no | ID | File | Requirement | State | header row']
-    body = header + 2  # header, then the --- separator
+    headers = [i for i, line in enumerate(lines) if line.startswith('| ID |')]
+    if len(headers) != 1:
+        return 0, ['SPEC.md must have exactly one | ID | header, found ' + str(len(headers))]
+    header = headers[0]
+    separator = r'^\|\s*-{3}'
+    if header + 1 >= len(lines) or not re.match(separator, lines[header + 1]):
+        return 0, ['the | ID | header is not followed by a --- separator row']
     failures = []
     rows = 0
+    body = header + 2
     while body < len(lines) and lines[body].strip():
         line = lines[body]
         body += 1
         if not line.startswith('|'):
             failures.append('table row does not start with a pipe: ' + line[:70])
             continue
-        # A row is | id | file | requirement | state | : five pipes, four cells.
         if line.rstrip().count('|') != 5:
             failures.append('table row does not have five pipes (four cells): ' + line[:70])
             continue
@@ -91,7 +95,7 @@ def spec_rows():
         cells = parts[1:5]
         padded = [c for c in cells if c != ' ' + ' '.join(c.split()) + ' ']
         if padded:
-            failures.append('row padding is not a single space per side: ' + padded[0][:40])
+            failures.append('row cell is not one space of padding per side: ' + padded[0][:40])
             continue
         if not all(c.strip().startswith(BT) and c.strip().endswith(BT) for c in cells[:2]):
             failures.append('row id or file cell is not a code span: ' + line[:70])
@@ -104,6 +108,9 @@ def spec_rows():
         rows += 1
         if cell not in ' '.join(read(path).split()):
             failures.append('row not in its chapter: ' + path + ': ' + cell[:70])
+    for number, line in enumerate(lines[body:], body + 1):
+        if re.match(r'^\s*\|', line) and not line.startswith('| --- |'):
+            failures.append('table row outside the table: SPEC.md:' + str(number))
     return rows, failures
 
 
@@ -112,6 +119,9 @@ def width(files):
     failures = []
     single_span = re.compile(r'^\s*' + BT + r'[^' + BT + r']*' + BT + r'\s*$')
     for path in files:
+        if not os.path.exists(path):
+            failures.append(path + ' is tracked but missing')
+            continue
         fenced = False
         for number, line in enumerate(read(path).split(NL), 1):
             stripped = line.rstrip()
@@ -143,6 +153,9 @@ def links(files):
     """Relative links resolve from the directory of the file that contains them."""
     failures = []
     for path in files:
+        if not os.path.exists(path):
+            failures.append(path + ' is tracked but missing')
+            continue
         for match in re.finditer(r'\]\(([^)]+)\)', NL.join(prose_lines(path))):
             # A Markdown link may carry a title: [text](path "title").
             raw_target = match.group(1).split(' "')[0]
@@ -166,20 +179,28 @@ def changed(base):
 
 
 def append_only(base):
-    """docs/history/ may grow, never change."""
+    """docs/history/ may grow at its end, and nowhere else.
+
+    A file counted by lines would let a bullet be inserted into a frozen entry, which is the defect
+    this rule exists for: the file as it stands at the base must still be a prefix of the file now.
+    """
     if not git('merge-base', base, 'HEAD').strip():
         raise CheckError('no merge base with ' + base + ', so the append-only check cannot run; '
                          'a shallow clone needs git fetch --unshallow')
     failures = []
-    # The branch against its base, and the working tree against HEAD, so an uncommitted edit is
-    # caught as well as a committed one.
+    touched = set()
     for revision in (base + '...HEAD', 'HEAD'):
-        for line in git('diff', '--numstat', revision, '--', 'docs/history/').split(NL):
-            if not line.strip():
-                continue
-            _, deleted, path = line.split(chr(9))
-            if deleted != '0':
-                failures.append(path + ' is history and lost ' + deleted + ' lines (' + revision + ')')
+        for line in git('diff', '--name-only', revision, '--', 'docs/history/').split(NL):
+            if line.strip():
+                touched.add(line.strip())
+    for path in sorted(touched):
+        base_text = git('show', base + ':' + path)
+        if not os.path.exists(path):
+            failures.append(path + ' is history and was deleted')
+            continue
+        head_text = read(path)
+        if not head_text.startswith(base_text):
+            failures.append(path + ' is history and an edit was written above its end')
     return failures
 
 
