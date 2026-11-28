@@ -3,10 +3,11 @@
 
 Five checks, each one a defect that reached a merged pull request:
 
-1. every data row of `SPEC.md` is five pipes wide (four cells: id, file, requirement, state),
-   starts in column one, is padded with exactly one space per side, keeps the id and file cells
-   as code spans, and states a Requirement cell that occurs in its chapter with whitespace
-   collapsed on both sides; an indented row is a failure rather than a skip;
+1. every row of the `SPEC.md` table, walked by position from the header to the blank line that
+   ends it: it starts with a pipe, is five pipes wide (four cells: id, file, requirement,
+   state), every cell is padded with exactly one space per side, the id and file cells are code
+   spans, and the Requirement cell occurs in its chapter with whitespace collapsed on both
+   sides; a row that strays out of that shape is a failure, never a row that was not seen;
 2. no line in `SPEC.md`, `docs/spec/` or `docs/decisions/` is longer than 120 characters or 120
    bytes, outside tables and fenced blocks, with a line that is one code span exempt because a
    quoted message cannot be wrapped;
@@ -68,18 +69,23 @@ def markdown_files():
 
 
 def spec_rows():
-    """Every SPEC.md row's Requirement cell occurs in its chapter, wrapping ignored."""
+    """Every row of the SPEC.md table: shape, cells, and the requirement it states."""
+    lines = read('SPEC.md').split(NL)
+    header = next((i for i, line in enumerate(lines) if line.startswith('| ID |')), None)
+    if header is None:
+        return 0, ['SPEC.md has no | ID | File | Requirement | State | header row']
+    body = header + 2  # header, then the --- separator
     failures = []
     rows = 0
-    for line in read('SPEC.md').split(NL):
-        if line.lstrip().startswith('|') and not line.startswith('|'):
-            failures.append('row is indented and cannot be read as a row: ' + line[:70])
-            continue
-        if not line.startswith('| ') or line.startswith('| ID |') or line.startswith('| --- |'):
+    while body < len(lines) and lines[body].strip():
+        line = lines[body]
+        body += 1
+        if not line.startswith('|'):
+            failures.append('table row does not start with a pipe: ' + line[:70])
             continue
         # A row is | id | file | requirement | state | : five pipes, four cells.
         if line.rstrip().count('|') != 5:
-            failures.append('row does not have five pipes (four cells): ' + line[:70])
+            failures.append('table row does not have five pipes (four cells): ' + line[:70])
             continue
         parts = line.rstrip().split('|')
         cells = parts[1:5]
@@ -90,15 +96,13 @@ def spec_rows():
         if not all(c.strip().startswith(BT) and c.strip().endswith(BT) for c in cells[:2]):
             failures.append('row id or file cell is not a code span: ' + line[:70])
             continue
-        raw = parts[3]
-        path = parts[2].strip().strip(BT)
-        cell = raw.strip()
+        path = cells[1].strip().strip(BT)
+        cell = cells[2].strip()
         if not os.path.exists(path):
             failures.append('SPEC.md names a chapter that does not exist: ' + path)
             continue
         rows += 1
-        flat = ' '.join(cell.split())
-        if flat not in ' '.join(read(path).split()):
+        if cell not in ' '.join(read(path).split()):
             failures.append('row not in its chapter: ' + path + ': ' + cell[:70])
     return rows, failures
 
