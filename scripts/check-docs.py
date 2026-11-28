@@ -148,7 +148,7 @@ def width(files):
             continue
         fenced = False
         for number, line in enumerate(read(path).split(NL), 1):
-            stripped = line.rstrip()
+            stripped = line.strip()
             if stripped.startswith(FENCE):
                 fenced = not fenced
                 continue
@@ -203,21 +203,14 @@ def changed(base):
     return sorted(names)
 
 
-def append_only(base):
-    """docs/history/ may grow at its end, and nowhere else.
+def append_only(merge_base):
+    """docs/history/ only grows at its end, and nowhere else.
 
     The comparison is against the merge base, so a develop that moved under the branch cannot make an
     innocent pull request fail, and a file the branch adds is allowed: a new history entry is an
     append. A file counted by lines would let a bullet be inserted into a frozen entry, which is the
     defect this rule exists for, so the test is a prefix test on the text.
     """
-    try:
-        merge_base = git('merge-base', base, 'HEAD').strip()
-    except CheckError:
-        raise CheckError('no merge base with ' + base + ', so the append-only check cannot run; '
-                         'a shallow clone needs git fetch --unshallow') from None
-    if not merge_base:
-        raise CheckError('no merge base with ' + base + ', so the append-only check cannot run')
     failures = []
     touched = set()
     for revision in (merge_base, 'HEAD'):
@@ -248,10 +241,19 @@ def run(base):
     failures += width(scope)
     failures += links(files)
     if base:
-        touched = changed(base)
-        failures += balance([p for p in touched if p.endswith('.md')])
-        failures += append_only(base)
-        print('base', base, 'files', len(touched))
+        merge_base = ''
+        try:
+            merge_base = git('merge-base', base, 'HEAD').strip()
+        except CheckError:
+            pass
+        if not merge_base:
+            failures.append('no merge base with ' + base + ', so the parenthesis and history checks'
+                            ' cannot run; a shallow clone needs git fetch --unshallow')
+        else:
+            touched = changed(merge_base)
+            failures += balance([p for p in touched if p.endswith('.md')])
+            failures += append_only(merge_base)
+            print('base', base, 'files', len(touched))
     else:
         print('no base revision given: parenthesis balance and append-only are skipped')
     for failure in failures:
