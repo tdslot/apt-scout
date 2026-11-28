@@ -3,15 +3,14 @@
 
 Five checks, each one a defect that reached a merged pull request:
 
-1. every `SPEC.md` row is five pipes wide (four cells: id, file, requirement, state), its
-   Requirement cell carries no doubled, tabbed or trailing spaces, and the cell occurs in its
-   chapter with whitespace collapsed on both sides; backticks are kept, so a cell that lost a
-   code span fails;
+1. every `SPEC.md` row is five pipes wide (four cells: id, file, requirement, state), every
+   cell is padded with exactly one space per side, the id and file cells are code spans, and
+   the Requirement cell occurs in its chapter with whitespace collapsed on both sides;
+   backticks are kept, so a cell that lost a code span fails;
 2. no line in `SPEC.md`, `docs/spec/` or `docs/decisions/` is longer than 120 characters or 120
    bytes, outside tables and fenced blocks, with a line that is one code span exempt because a
    quoted message cannot be wrapped;
-3. parentheses balance in every changed Markdown file, outside fenced blocks; AGENTS.md files
-   are exempt because their shell loops carry process substitution, which never balances;
+3. parentheses balance in every changed Markdown file, outside fenced blocks;
 4. every relative link resolves from the directory of the file that contains it, outside fenced
    blocks, with percent-encoding decoded;
 5. `docs/history/` is append-only against a base revision and against the working tree, so an
@@ -80,6 +79,14 @@ def spec_rows():
             failures.append('row does not have five pipes (four cells): ' + line[:70])
             continue
         parts = line.rstrip().split('|')
+        cells = parts[1:5]
+        padded = [c for c in cells if c != ' ' + ' '.join(c.split()) + ' ']
+        if padded:
+            failures.append('row padding is not a single space per side: ' + padded[0][:40])
+            continue
+        if not all(c.strip().startswith(BT) and c.strip().endswith(BT) for c in cells[:2]):
+            failures.append('row id or file cell is not a code span: ' + line[:70])
+            continue
         raw = parts[3]
         path = parts[2].strip().strip(BT)
         cell = raw.strip()
@@ -88,11 +95,7 @@ def spec_rows():
             continue
         rows += 1
         flat = ' '.join(cell.split())
-        # The table format pads each cell with exactly one space on either side, so anything
-        # else in the raw cell is a doubled, tabbed or trailing space the reader will not see.
-        if raw != ' ' + flat + ' ':
-            failures.append('row padding is not a single space on each side: ' + cell[:70])
-        elif flat not in ' '.join(read(path).split()):
+        if flat not in ' '.join(read(path).split()):
             failures.append('row not in its chapter: ' + path + ': ' + cell[:70])
     return rows, failures
 
@@ -116,14 +119,10 @@ def width(files):
 
 
 def balance(files):
-    """Parentheses balance, so a rewritten list cannot lose half a clause.
-
-    AGENTS.md files are exempt: their shell loops carry process substitution, which never
-    balances and is not prose.
-    """
+    """Parentheses balance, so a rewritten list cannot lose half a clause."""
     failures = []
     for path in files:
-        if os.path.basename(path) == 'AGENTS.md' or not os.path.exists(path):
+        if not os.path.exists(path):
             continue
         net = 0
         for line in prose_lines(path):
