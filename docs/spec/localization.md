@@ -27,8 +27,7 @@
   `-`, `lt_LT.UTF-8` becomes `lt-LT` — and then matched against the shipped tags by lookup: the
   exact tag, else the language alone, else English.
   So `lt_LT.UTF-8` selects the `lt` catalog, and `de_AT.UTF-8` and `de_CH.UTF-8` both select `de`.
-  A value that is not a language tag (`C`, `POSIX`, empty, unset) selects English without an error
-  (ADR-0010),
+  A value that is not a language tag (`C`, `POSIX`, empty, unset) selects English without an error,
   and the program prints UTF-8 whatever the charset suffix claims.
 - `LOC-5` (planned) Chinese MUST be selected by script, before the lookup, and a script MUST never be
   substituted.

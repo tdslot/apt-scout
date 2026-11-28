@@ -44,6 +44,21 @@ a disjunction containing one of those, MIT alone, `Unlicense OR MIT`, `Apache-2.
 for the ICU crates, or `(MIT OR Apache-2.0) AND Unicode-3.0` for `unicode-ident`; `deny.toml`'s allow-list already
 covers every one of them and does not change, and `cargo deny check` is what approves the change.
 
+The resolved set, at `fluent-templates` 0.15.1, is `fluent-templates` itself plus
+`fluent-bundle`, `fluent-syntax`, `fluent-langneg`, `unic-langid`, `intl-memoizer`,
+`intl_pluralrules`, `self_cell`, `rustc-hash`, `type-map`, `smallvec`, `displaydoc`, `thiserror`,
+the ICU crates `tinystr`, `zerovec` and `zerofrom`, and the proc-macro crates
+`fluent-template-macros`, `syn`, `quote`, `proc-macro2`, `proc-macro-hack` and
+`unicode-ident`, which build the loader and never link into the binary.
+
+## Every message carries a comment because the catalog is a translator's only briefing
+
+A message is a key and placeholders; what a placeholder holds is not visible in the string. The comment above
+each message names when it is printed and what each placeholder carries, so a translator works from the file
+rather than from a conversation, and a bare placeholder whose meaning is written nowhere is a defect the test
+suite refuses. The English catalog is the source of truth the others are translated from, so a comment missing
+there is missing everywhere.
+
 ## The locale never reaches a decision, a path or a byte
 
 Three environment reads can influence printed text — the locale, `NO_COLOR` and `COLORTERM` — and one more,
@@ -58,5 +73,5 @@ carry. The installed name is the one man-db resolves — `lt`, and `zh_CN` for t
 looks up a locale name and not a script tag.
 
 **Spec**: `docs/spec/localization.md`, `LOC-1` (the boundary), `LOC-3` (the id pattern), `LOC-4` and `LOC-5`
-  (selection), `LOC-6` (compiled catalogs), `LOC-7` (the dependency) and `LOC-14` (the page). **Aliases**: D30a,
-  D31a, D32, D33.
+  (selection), `LOC-6` (compiled catalogs), `LOC-7` (the dependency), `LOC-8` (the comment) and `LOC-14` (the
+  page). **Aliases**: D30a, D31a, D32, D33.
