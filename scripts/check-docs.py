@@ -11,7 +11,8 @@ Five checks, each one a defect that reached a merged pull request:
 3. parentheses balance in every Markdown file the diff touches, outside fenced blocks;
 4. every relative link resolves from the directory of the file that contains it, outside fenced
    blocks, with percent-encoding decoded;
-5. `docs/history/` is append-only against a base revision.
+5. `docs/history/` is append-only against a base revision and against the working tree, so an
+   uncommitted deletion is caught too.
 
 Usage: python3 scripts/check-docs.py [BASE]
 
@@ -154,12 +155,15 @@ def append_only(base):
         raise CheckError('no merge base with ' + base + ', so the append-only check cannot run; '
                          'a shallow clone needs git fetch --unshallow')
     failures = []
-    for line in git('diff', '--numstat', base + '...HEAD', '--', 'docs/history/').split(NL):
-        if not line.strip():
-            continue
-        _, deleted, path = line.split(chr(9))
-        if deleted != '0':
-            failures.append(path + ' is history and lost ' + deleted + ' lines')
+    # The branch against its base, and the working tree against HEAD, so an uncommitted edit is
+    # caught as well as a committed one.
+    for revision in (base + '...HEAD', 'HEAD'):
+        for line in git('diff', '--numstat', revision, '--', 'docs/history/').split(NL):
+            if not line.strip():
+                continue
+            _, deleted, path = line.split(chr(9))
+            if deleted != '0':
+                failures.append(path + ' is history and lost ' + deleted + ' lines (' + revision + ')')
     return failures
 
 

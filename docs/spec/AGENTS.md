@@ -111,9 +111,10 @@ done
 ```
 
 A row whose statement was reworded in the chapter and not in `SPEC.md` prints `untraceable`.
-The loop above normalises backticks away; `scripts/check-docs.py` compares each cell with its chapter
-character for character as well, and checks the width rule, link resolution, parenthesis balance in
-changed files and the append-only rule in `docs/history/`. It runs in CI:
+The loop above normalises backticks away; `scripts/check-docs.py` keeps them and ignores only line wrapping,
+so a cell that lost a code span or doubled a space fails. It also checks the width rule, link
+resolution from each file's own directory, parenthesis balance in changed files and the
+append-only rule in `docs/history/` — committed and uncommitted. It runs in CI:
 
 ```
 python3 scripts/check-docs.py origin/develop
