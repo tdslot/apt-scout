@@ -3,12 +3,14 @@
 
 Five checks, each one a defect that reached a merged pull request:
 
-1. every `SPEC.md` row's Requirement cell occurs in its chapter with line wrapping ignored and
-   backticks kept, and the cell itself carries no doubled or trailing spaces;
+1. every `SPEC.md` row has five columns, its Requirement cell carries no doubled, tabbed or
+   trailing spaces, and the cell occurs in its chapter with whitespace collapsed on both sides;
+   backticks are kept, so a cell that lost a code span fails;
 2. no line in `SPEC.md`, `docs/spec/` or `docs/decisions/` is longer than 120 characters or 120
    bytes, outside tables and fenced blocks, with a line that is one code span exempt because a
    quoted message cannot be wrapped;
-3. parentheses balance in every Markdown file the diff touches, outside fenced blocks;
+3. parentheses balance in every changed Markdown file, outside fenced blocks; AGENTS.md files
+   are exempt because their shell loops carry process substitution, which never balances;
 4. every relative link resolves from the directory of the file that contains it, outside fenced
    blocks, with percent-encoding decoded;
 5. `docs/history/` is append-only against a base revision and against the working tree, so an
@@ -72,18 +74,22 @@ def spec_rows():
     for line in read('SPEC.md').split(NL):
         if not line.startswith('| ' + BT):
             continue
-        parts = line.rstrip().split('|')
-        if len(parts) < 6:
+        if line.rstrip().count('|') < 5:
+            failures.append('row has fewer than five columns: ' + line[:70])
             continue
+        parts = line.rstrip().split('|')
+        raw = parts[3]
         path = parts[2].strip().strip(BT)
-        cell = parts[3].strip()
+        cell = raw.strip()
         if not os.path.exists(path):
             failures.append('SPEC.md names a chapter that does not exist: ' + path)
             continue
         rows += 1
         flat = ' '.join(cell.split())
-        if flat != cell:
-            failures.append('row carries doubled or trailing spaces: ' + cell[:70])
+        # The table format pads each cell with exactly one space on either side, so anything
+        # else in the raw cell is a doubled, tabbed or trailing space the reader will not see.
+        if raw != ' ' + flat + ' ':
+            failures.append('row padding is not a single space on each side: ' + cell[:70])
         elif flat not in ' '.join(read(path).split()):
             failures.append('row not in its chapter: ' + path + ': ' + cell[:70])
     return rows, failures
@@ -130,7 +136,9 @@ def links(files):
     failures = []
     for path in files:
         for match in re.finditer(r'\]\(([^)]+)\)', NL.join(prose_lines(path))):
-            target = unquote(match.group(1))
+            # A Markdown link may carry a title: [text](path "title").
+            raw_target = match.group(1).split(' "')[0]
+            target = unquote(raw_target)
             if target.startswith(('http', '#', 'mailto')):
                 continue
             resolved = os.path.normpath(os.path.join(os.path.dirname(path), target.split('#')[0]))
