@@ -604,8 +604,8 @@ constructed environment to any child.
   `non-functional.md` (the exit-code vocabulary and the date boundary,
   [ADR-0009](docs/decisions/0009-exit-codes-and-the-date-boundary.md), merged as
   [#136](https://github.com/tdslot/apt-scout/pull/136) in `e5086af`).
-  `localization.md` ([ADR-0010](docs/decisions/0010-why-the-locale-layer-is-shaped-this-way.md)), in this pull
-  request.
+  `localization.md` ([ADR-0010](docs/decisions/0010-why-the-locale-layer-is-shaped-this-way.md), merged as
+  [#140](https://github.com/tdslot/apt-scout/pull/140) in `0b9c250`).
   Remaining, three chapters: `cli.md`, `testing.md` and `tui.md`, the last of which carries
   nothing to move but is listed so the count stays the ten the index records.
   Acceptance: every `because`, `so that`, `Verified from`, `Measured` and dated observation inside a
