@@ -114,7 +114,7 @@ A row whose statement was reworded in the chapter and not in `SPEC.md` prints `u
 The loop above normalises backticks away; `scripts/check-docs.py` keeps them and collapses whitespace on both
 sides, so a cell that lost a code span fails. It also fails a row that is not five pipes wide
 (four cells), a row with any cell padded by anything but one space per side, and a row whose
-id or file cell is not a code span. It also checks the width rule, link
+id or file cell is not a code span. The script also checks the width rule, link
 resolution from each file's own directory, parenthesis balance in changed files and the
 append-only rule in `docs/history/` — committed and uncommitted. It runs in CI:
 
