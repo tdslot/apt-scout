@@ -3,9 +3,10 @@
 
 Five checks, each one a defect that reached a merged pull request:
 
-1. every `SPEC.md` row has five columns, its Requirement cell carries no doubled, tabbed or
-   trailing spaces, and the cell occurs in its chapter with whitespace collapsed on both sides;
-   backticks are kept, so a cell that lost a code span fails;
+1. every `SPEC.md` row is five pipes wide (four cells: id, file, requirement, state), its
+   Requirement cell carries no doubled, tabbed or trailing spaces, and the cell occurs in its
+   chapter with whitespace collapsed on both sides; backticks are kept, so a cell that lost a
+   code span fails;
 2. no line in `SPEC.md`, `docs/spec/` or `docs/decisions/` is longer than 120 characters or 120
    bytes, outside tables and fenced blocks, with a line that is one code span exempt because a
    quoted message cannot be wrapped;
@@ -74,8 +75,9 @@ def spec_rows():
     for line in read('SPEC.md').split(NL):
         if not line.startswith('| ' + BT):
             continue
-        if line.rstrip().count('|') < 5:
-            failures.append('row has fewer than five columns: ' + line[:70])
+        # A row is | id | file | requirement | state | : five pipes, four cells.
+        if line.rstrip().count('|') != 5:
+            failures.append('row does not have five pipes (four cells): ' + line[:70])
             continue
         parts = line.rstrip().split('|')
         raw = parts[3]

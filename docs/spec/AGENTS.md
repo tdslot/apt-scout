@@ -113,7 +113,7 @@ done
 A row whose statement was reworded in the chapter and not in `SPEC.md` prints `untraceable`.
 The loop above normalises backticks away; `scripts/check-docs.py` keeps them and collapses whitespace on both
 sides, so a cell that lost a code span fails, and it fails a row whose cell is padded with
-anything but one space each side or whose row has fewer than five columns. It also checks the width rule, link
+anything but one space each side, or whose row is not five pipes wide (four cells). It also checks the width rule, link
 resolution from each file's own directory, parenthesis balance in changed files and the
 append-only rule in `docs/history/` — committed and uncommitted. It runs in CI:
 
