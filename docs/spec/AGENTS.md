@@ -111,6 +111,13 @@ done
 ```
 
 A row whose statement was reworded in the chapter and not in `SPEC.md` prints `untraceable`.
+The loop above normalises backticks away; `scripts/check-docs.py` compares each cell with its chapter
+character for character as well, and checks the width rule, link resolution, parenthesis balance in
+changed files and the append-only rule in `docs/history/`. It runs in CI:
+
+```
+python3 scripts/check-docs.py origin/develop
+```
 The loop strips backticks on both sides, so a cell that lost a code span still matches: the loop answers
 whether the text exists, not whether it is the same text. For the same-text question, compare the cell with
 the chapter character for character (no normalisation) before claiming a row follows its requirement.

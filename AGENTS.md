@@ -143,6 +143,10 @@ When the user requests a durable behavior change, record it here or in the relev
 - Commits: Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`, `feat!:` breaking); the changelog is generated from subjects
 - Repo files are authoritative: `AGENTS.md` for workflow rules, `.github/workflows/ci.yml` for required checks, `.github/workflows/pr-title.yml` for the Conventional Commit PR title, `ROADMAP.md` for task order and status.
 - Verification: `cargo fmt --all -- --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, `scripts/docker-test.sh` (needs Docker). Run the full set before PRs that change Rust/build behavior and record results in ROADMAP.
+  Any change under `SPEC.md`, `docs/spec/`, `docs/decisions/` or `docs/history/` also runs
+  `python3 scripts/check-docs.py origin/develop`: spec rows character for character, width, links,
+  parenthesis balance in changed files and the append-only rule. CI runs the same script in
+  `docs-and-conventions`, so a local miss fails the pull request rather than the review.
 
 ## Child DOX Index
 
