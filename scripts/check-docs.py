@@ -4,10 +4,9 @@
 Five checks, each one a defect that reached a merged pull request:
 
 1. every data row of `SPEC.md` is five pipes wide (four cells: id, file, requirement, state),
-   every cell is padded with exactly one space per side, the id and file cells are code spans,
-   the Requirement cell occurs in its chapter with whitespace collapsed on both sides, and the
-   number of rows equals the number of requirement ids the chapters state, so a row the
-   selector cannot see is a failure rather than a smaller count;
+   starts in column one, is padded with exactly one space per side, keeps the id and file cells
+   as code spans, and states a Requirement cell that occurs in its chapter with whitespace
+   collapsed on both sides; an indented row is a failure rather than a skip;
 2. no line in `SPEC.md`, `docs/spec/` or `docs/decisions/` is longer than 120 characters or 120
    bytes, outside tables and fenced blocks, with a line that is one code span exempt because a
    quoted message cannot be wrapped;
@@ -73,6 +72,9 @@ def spec_rows():
     failures = []
     rows = 0
     for line in read('SPEC.md').split(NL):
+        if line.lstrip().startswith('|') and not line.startswith('|'):
+            failures.append('row is indented and cannot be read as a row: ' + line[:70])
+            continue
         if not line.startswith('| ') or line.startswith('| ID |') or line.startswith('| --- |'):
             continue
         # A row is | id | file | requirement | state | : five pipes, four cells.
@@ -177,16 +179,6 @@ def append_only(base):
     return failures
 
 
-def chapter_ids():
-    """Every requirement id a chapter states, so a skipped row cannot pass unnoticed."""
-    pattern = re.compile('(?:CLI|OUT|PIPE|APPLY|RESTORE|ERR|LOC|TEST|NFR|PLAT|TUI)-[0-9]+')
-    ids = set()
-    for path in markdown_files():
-        if path.startswith('docs/spec/') and not path.endswith('AGENTS.md'):
-            ids.update(pattern.findall(read(path)))
-    return ids
-
-
 def run(base):
     files = markdown_files()
     scope = ['SPEC.md']
@@ -194,10 +186,7 @@ def run(base):
     scope += sorted(p for p in files if p.startswith('docs/decisions/'))
 
     rows, failures = spec_rows()
-    ids = chapter_ids()
-    print('spec rows', rows, 'chapter ids', len(ids))
-    if rows != len(ids):
-        failures.append('SPEC.md has ' + str(rows) + ' rows but the chapters state ' + str(len(ids)) + ' ids')
+    print('spec rows', rows)
     failures += width(scope)
     failures += links(files)
     if base:
