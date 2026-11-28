@@ -46,10 +46,11 @@
   is the set of directories under `locales/`.
 - `LOC-7` (planned) The dependency set MUST change once, by decision, and `cargo deny check` MUST be
   what approves it.
-  `fluent-templates` and the crates it resolves to are listed with their licences in
-  ADR-0010, and `deny.toml`'s allow-list covers every one of them and does not change;
-  `cargo deny check` MUST stay green in the pull request that adds the dependency, and that
-  pull request MUST list the resolved set with its licences.
+  `fluent-templates` and the crates the requirement names are listed in ADR-0010 with their
+  licence families, and the full 50-crate resolution is recorded in `docs/history/m5.md`;
+  `deny.toml`'s allow-list covers every one of them and does not change, `cargo deny check` MUST
+  stay green in the pull request that adds the dependency, and that pull request MUST list the
+  resolved set with its licences.
 - `LOC-8` (planned) A catalog MUST be complete or it MUST NOT be shipped.
   For every shipped locale the test suite MUST require every English message id, the same placeholder
   set in every message as its English entry, and every plural category that language's CLDR rule can

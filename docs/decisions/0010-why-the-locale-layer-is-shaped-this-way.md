@@ -44,12 +44,15 @@ a disjunction containing one of those, MIT alone, `Unlicense OR MIT`, `Apache-2.
 for the ICU crates, or `(MIT OR Apache-2.0) AND Unicode-3.0` for `unicode-ident`; `deny.toml`'s allow-list already
 covers every one of them and does not change, and `cargo deny check` is what approves the change.
 
-The resolved set, at `fluent-templates` 0.15.1, is `fluent-templates` itself plus
-`fluent-bundle`, `fluent-syntax`, `fluent-langneg`, `unic-langid`, `intl-memoizer`,
-`intl_pluralrules`, `self_cell`, `rustc-hash`, `type-map`, `smallvec`, `displaydoc`, `thiserror`,
-the ICU crates `tinystr`, `zerovec` and `zerofrom`, and the proc-macro crates
+The full resolution is 50 crates, measured in a scratch crate on 2026-11-13 and recorded in
+`docs/history/m5.md` under D30a. The set the requirement names is the direct dependency and the
+proc-macro crates it builds with: `fluent-templates` 0.15.1, `fluent-bundle`, `fluent-syntax`,
+`fluent-langneg`, `unic-langid`, `intl-memoizer`, `intl_pluralrules`, `self_cell`,
+`rustc-hash`, `type-map`, `smallvec`, `displaydoc`, `thiserror`,
 `fluent-template-macros`, `syn`, `quote`, `proc-macro2`, `proc-macro-hack` and
-`unicode-ident`, which build the loader and never link into the binary.
+`unicode-ident`. The rest of the 50 is the library's own tail, and three of those crates are not
+build-time: `ignore`, `flume` and `log` are the `ignore` feature, which the library uses in its
+run-time directory walk, and the `macros`-only build does not compile at 0.15.1 for that reason.
 
 ## Every message carries a comment because the catalog is a translator's only briefing
 
